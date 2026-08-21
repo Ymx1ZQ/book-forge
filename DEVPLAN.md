@@ -155,24 +155,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase C — Universe and book design
 
-### M12: Design related books and chapter contracts
-
-**Depends on:** M3, M7, M8, M10, M11
-
-**Why:** Each book needs an autonomous arc while honoring only shared history and relations that constrain it.
-
-**Approach:** Add `design book` for premise, cast, entry boundary, arc, outline, and compact chapter contracts. Convert relation imports into addressable obligations and assign POV, beats, plants, reveals, target length, and required canon blocks to stable chapter IDs.
-
-**Tasks:**
-- [ ] Build premise, entry state, arc, and intended exit boundary
-- [ ] Convert relation boundaries and shared events into explicit obligations
-- [ ] Generate schema-valid chapter contracts with deterministic order
-- [ ] Audit pacing, causality, agency, and unresolved dependencies
-- [ ] Test: integration — design sequel, parallel, and unrelated fixtures within budgets
-- [ ] Commit & push
-
-**Done when:** Every fixture chapter packetizes independently and every blocking relation obligation has one assigned target.
-
 ## Phase D — Fast chapter production
 
 ### M13: Draft an ordinary chapter in one provider call

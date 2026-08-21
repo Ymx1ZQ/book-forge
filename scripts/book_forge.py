@@ -395,7 +395,10 @@ def add_book(project: Path | str, title: str, *, continuity: str = "CNT-0001") -
     _write_json(directory / "outline.yaml", {"schema": SCHEMA_VERSION, "chapters": []})
     _write_json(directory / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
     _write_json(directory / "continuity.yaml", {"schema": SCHEMA_VERSION, "imports": [], "obligations": []})
-    (directory / "design.md").write_text(f"# {title}\n\n<!-- bf:block premise -->\n", encoding="utf-8")
+    (directory / "design.md").write_text(
+        f"---\nid: {book_id}\ncontinuity: {continuity}\n---\n\n# {title}\n\n<!-- bf:block premise -->\n",
+        encoding="utf-8",
+    )
     (directory / "reader-state.md").write_text("# Reader State\n", encoding="utf-8")
     (directory / "manuscript" / "chapters").mkdir(parents=True)
     return book
@@ -782,13 +785,14 @@ def claim_task(
         "fence": fence,
         "request_hash": request_hash,
         "state": "running",
+        "run": run["id"],
         "provider_accepted": False,
         "heartbeat_at": current_time,
         "lease_expires_at": current_time + lease_seconds,
     }
     plan["attempts"].append(attempt)
     capsule = {"schema": 1, "task": task, "attempt": attempt_id, "fence": fence, "request_hash": request_hash}
-    attempt_dir = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id
+    attempt_dir = root / ".book-forge" / "runs" / str(run["id"]) / "attempts" / attempt_id
     _write_json(attempt_dir / "capsule.json", capsule)
     _write_json(attempt_dir / "intent.json", {"schema": 1, "accepted": False, **attempt})
     _save_plan(root, plan, control=control)
@@ -808,6 +812,10 @@ def _assert_fence(attempt: dict[str, object], fence: int) -> None:
         raise BookForgeError("Stale fencing token")
 
 
+def _attempt_dir(root: Path, attempt: dict[str, object]) -> Path:
+    return root / ".book-forge" / "runs" / str(attempt.get("run", "RUN-0001")) / "attempts" / str(attempt["id"])
+
+
 def record_execution(project: Path | str, attempt_id: str, fence: int, *, output_hash: str) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -818,7 +826,7 @@ def record_execution(project: Path | str, attempt_id: str, fence: int, *, output
     if not re.fullmatch(r"[0-9a-f]{64}", output_hash):
         raise BookForgeError("output_hash must be a lowercase SHA-256")
     receipt = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "fence": fence, "output_hash": output_hash, "outcome": "observed"}
-    receipt_path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "execution-receipt.json"
+    receipt_path = _attempt_dir(root, attempt) / "execution-receipt.json"
     if receipt_path.exists():
         raise BookForgeError("Execution receipt is immutable")
     _write_json(receipt_path, receipt)
@@ -865,7 +873,7 @@ def stage_outputs(project: Path | str, attempt_id: str, outputs: dict[str, str |
     declared = set(task.get("outputs", []))
     if set(outputs) != declared:
         raise BookForgeError("Staged outputs must exactly match the task's declared outputs")
-    attempt_dir = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id
+    attempt_dir = _attempt_dir(root, attempt)
     rows = []
     for relative in sorted(outputs):
         target = _safe_relative_target(root, relative)
@@ -1000,7 +1008,7 @@ def promote_task(project: Path | str, attempt_id: str, fence: int, *, fault_hook
     _assert_fence(attempt, fence)
     if attempt["state"] != "promotion_pending":
         raise BookForgeError("Attempt is not ready for promotion")
-    receipt_path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "promotion-receipt.json"
+    receipt_path = _attempt_dir(root, attempt) / "promotion-receipt.json"
     if receipt_path.exists():
         raise BookForgeError("Promotion receipt is immutable")
     attempt_dir = receipt_path.parent
@@ -1113,7 +1121,7 @@ def mark_provider_accepted(
     attempt["session_id"] = session_id
     attempt["accepted_at"] = time.time() if now is None else now
     _save_plan(root, plan)
-    intent = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "intent.json"
+    intent = _attempt_dir(root, attempt) / "intent.json"
     value = _read_json(intent)
     value["accepted"] = True
     value["session_id"] = session_id
@@ -1263,7 +1271,7 @@ def record_late_result(project: Path | str, attempt_id: str, output_hash: str) -
         raise BookForgeError("Late result is not associated with an ambiguous accepted attempt")
     attempt["state"] = "orphaned"
     attempt["late_output_hash"] = output_hash
-    path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "orphaned-result.json"
+    path = _attempt_dir(root, attempt) / "orphaned-result.json"
     _write_json(path, {"schema": 1, "attempt": attempt_id, "output_hash": output_hash, "state": "orphaned"})
     _save_plan(root, plan)
     return attempt
@@ -1275,7 +1283,7 @@ def cleanup_attempt(project: Path | str, attempt_id: str) -> None:
     attempt = _attempt(plan, attempt_id)
     if attempt["state"] in {"running", "validating", "promotion_pending", "outcome_unknown", "orphaned"}:
         raise BookForgeError(f"Refusing cleanup for {attempt['state']} attempt")
-    path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "staged"
+    path = _attempt_dir(root, attempt) / "staged"
     if path.exists():
         shutil.rmtree(path)
 
@@ -1726,6 +1734,132 @@ def apply_universe_design(project: Path | str, proposal: dict[str, object]) -> d
     audit = {"schema": 1, "state": "design_clean", "blocking": [], "checked": ["world-rules", "chronology", "identity", "scope", "imports"]}
     _execute_materialized_task(root, "AUDIT-UNI-0001", {"universe/design-audit.json": _json_bytes(audit)})
     rebuild_indexes(root)
+    return audit
+
+
+def schedule_book_design(project: Path | str, book_id: str) -> list[dict[str, object]]:
+    root = _project_root(project)
+    books = {str(book["id"]): book for book in list_books(root)}
+    if book_id not in books:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    design_id = f"DESIGN-{book_id}"
+    audit_id = f"AUDIT-{book_id}"
+    plan = _load_plan(root)
+    existing = {str(task["id"]) for task in plan["tasks"]}
+    if design_id not in existing:
+        add_task(
+            root,
+            design_id,
+            "designer",
+            priority=30,
+            book_order=int(books[book_id].get("order", 0)),
+            inputs=[f"books/{book_id}/book.yaml", "universe/relations.yaml"],
+        )
+    plan = _load_plan(root)
+    existing = {str(task["id"]) for task in plan["tasks"]}
+    if audit_id not in existing:
+        add_task(root, audit_id, "canon-auditor", deps=[design_id], priority=40, book_order=int(books[book_id].get("order", 0)))
+    plan = _load_plan(root)
+    return [next(task for task in plan["tasks"] if task["id"] == task_id) for task_id in (design_id, audit_id)]
+
+
+def _book_obligations(root: Path, book_id: str) -> tuple[dict[str, dict[str, object]], list[str]]:
+    relations = _read_json(root / "universe" / "relations.yaml").get("relations", [])
+    obligations = {}
+    imports = []
+    for relation in relations:
+        if book_id not in relation.get("endpoints", []):
+            continue
+        for obligation in relation.get("obligations", []):
+            obligations[str(obligation["id"])] = obligation
+        imports.extend(str(item["block"]) for item in relation.get("imports", []))
+    return obligations, sorted(set(imports))
+
+
+def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> list[dict[str, object]]:
+    root = _project_root(project)
+    if book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    findings: list[dict[str, object]] = []
+    chapters = proposal.get("chapters")
+    if not isinstance(chapters, list) or not chapters:
+        return [{"code": "chapters.empty", "severity": "blocking"}]
+    ids = [str(chapter.get("id", "")) for chapter in chapters]
+    if len(set(ids)) != len(ids) or any(not re.fullmatch(r"CH-\d{4}", value) for value in ids):
+        findings.append({"code": "chapter.id", "severity": "blocking"})
+    orders = [chapter.get("order") for chapter in chapters]
+    if orders != list(range(1, len(chapters) + 1)):
+        findings.append({"code": "chapter.order", "severity": "blocking"})
+    for chapter in chapters:
+        if not chapter.get("pov") or not chapter.get("beats"):
+            findings.append({"code": "chapter.contract-incomplete", "severity": "blocking", "chapter": chapter.get("id")})
+        if not isinstance(chapter.get("target_words"), int) or not 500 <= int(chapter.get("target_words", 0)) <= 10000:
+            findings.append({"code": "chapter.target-words", "severity": "blocking", "chapter": chapter.get("id")})
+    required, _ = _book_obligations(root, book_id)
+    assigned: dict[str, list[str]] = {obligation_id: [] for obligation_id in required}
+    for chapter in chapters:
+        for obligation_id in chapter.get("obligations", []):
+            if obligation_id not in required:
+                findings.append({"code": "obligation.unknown", "severity": "blocking", "obligation": obligation_id})
+            else:
+                assigned[obligation_id].append(str(chapter.get("id")))
+    for obligation_id, targets in assigned.items():
+        if len(targets) != 1:
+            findings.append({"code": "obligation.target-count", "severity": "blocking", "obligation": obligation_id, "targets": targets})
+    if not proposal.get("premise") or len(proposal.get("arc", [])) < 3 or not proposal.get("entry_state") or not proposal.get("exit_boundary"):
+        findings.append({"code": "book.arc-incomplete", "severity": "blocking"})
+    return findings
+
+
+def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> dict[str, object]:
+    root = _project_root(project)
+    findings = validate_book_design(root, book_id, proposal)
+    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
+    if blocking:
+        raise BookForgeError(f"Book design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
+    schedule_book_design(root, book_id)
+    obligations, relation_imports = _book_obligations(root, book_id)
+    chapters = sorted(proposal["chapters"], key=lambda row: int(row["order"]))
+    outputs: dict[str, str | bytes] = {
+        f"books/{book_id}/design.md": (
+            f"---\nid: {book_id}\ncontinuity: {next(book['continuity'] for book in list_books(root) if book['id'] == book_id)}\n---\n\n"
+            f"# Premise\n\n<!-- bf:block premise -->\n{proposal['premise']}\n\n"
+            f"## Arc\n\n{json.dumps(proposal['arc'], ensure_ascii=False)}\n"
+        ),
+        f"books/{book_id}/outline.yaml": _json_bytes({"schema": 1, "chapters": chapters}),
+        f"books/{book_id}/continuity.yaml": _json_bytes(
+            {
+                "schema": 1,
+                "imports": relation_imports,
+                "obligations": [
+                    {**obligation, "target": next(chapter["id"] for chapter in chapters if obligation_id in chapter.get("obligations", []))}
+                    for obligation_id, obligation in sorted(obligations.items())
+                ],
+            }
+        ),
+        f"books/{book_id}/reader-state.md": (
+            "# Reader State\n\n"
+            f"Entry: {json.dumps(proposal['entry_state'], ensure_ascii=False, sort_keys=True)}\n\n"
+            f"Intended exit: {json.dumps(proposal['exit_boundary'], ensure_ascii=False, sort_keys=True)}\n"
+        ),
+    }
+    for chapter in chapters:
+        contract = {
+            "schema": 1,
+            "book": book_id,
+            **chapter,
+            "imports": sorted(set(chapter.get("imports", []) + relation_imports)),
+        }
+        outputs[f"books/{book_id}/chapters/{chapter['id']}.json"] = _json_bytes(contract)
+    _execute_materialized_task(root, f"DESIGN-{book_id}", outputs)
+    audit = {
+        "schema": 1,
+        "book": book_id,
+        "state": "design_clean",
+        "blocking": [],
+        "checked": ["pacing", "causality", "agency", "relations", "packetization"],
+    }
+    _execute_materialized_task(root, f"AUDIT-{book_id}", {f"books/{book_id}/design-audit.json": _json_bytes(audit)})
     return audit
 
 
