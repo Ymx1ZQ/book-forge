@@ -159,24 +159,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase E — Opt-in translation
 
-### M17: Translate and validate one chapter at a time
-
-**Depends on:** M14, M16
-
-**Why:** Chapter-local translation preserves voice and terminology without repeatedly loading the whole book.
-
-**Approach:** Build a translator envelope from source prose, imported voice/canon blocks, locale style and glossary blocks, localized metadata, and the preceding translated boundary. Use one call by default, deterministic omission and terminology checks, and one review or repair only for flagged or pivotal output.
-
-**Tasks:**
-- [ ] Register locale-scoped tasks under the shared run, status, pause, and resume state machine
-- [ ] Validate names, numbers, scene structure, omissions, and source leakage
-- [ ] Update glossary blocks and translated boundary state through promotion
-- [ ] Preserve stale and partial translations as historical attempts
-- [ ] Test: live — translate two consecutive fixture chapters within call budgets
-- [ ] Commit & push
-
-**Done when:** A requested locale advances serially with precise dependencies and one normal provider call per chapter.
-
 ### M18: Propagate translation changes until boundaries converge
 
 **Depends on:** M9, M17

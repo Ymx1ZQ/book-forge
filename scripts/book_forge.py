@@ -2681,6 +2681,232 @@ def add_translation(project: Path | str, book_id: str, locale: str) -> dict[str,
     return {**config, "created": True}
 
 
+def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
+    translated = value.get("translated_markdown")
+    problems = []
+    if not isinstance(translated, str) or not translated.strip():
+        return ["missing translated_markdown"]
+    if not isinstance(value.get("glossary_updates"), list):
+        problems.append("missing glossary_updates")
+    if not isinstance(value.get("boundary"), str) or not value["boundary"].strip():
+        problems.append("missing translated boundary")
+    source_numbers = re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", source)
+    translated_numbers = re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", translated)
+    if source_numbers != translated_numbers:
+        problems.append("numbers differ from source")
+    source_headings = len(re.findall(r"(?m)^#{1,6}\s", source))
+    translated_headings = len(re.findall(r"(?m)^#{1,6}\s", translated))
+    if source_headings != translated_headings or source.count("\n***\n") != translated.count("\n***\n"):
+        problems.append("scene or heading structure differs")
+    source_words = re.findall(r"\b[\w’'-]+\b", source, re.UNICODE)
+    translated_words = re.findall(r"\b[\w’'-]+\b", translated, re.UNICODE)
+    ratio = len(translated_words) / max(1, len(source_words))
+    if not 0.45 <= ratio <= 2.2:
+        problems.append("probable omission or expansion")
+    if len(source_words) >= 10:
+        sequences = [" ".join(source_words[index:index + 10]).lower() for index in range(len(source_words) - 9)]
+        normalized_translation = " ".join(translated_words).lower()
+        if any(sequence in normalized_translation for sequence in sequences):
+            problems.append("probable source-language leakage")
+    return problems
+
+
+def _append_glossary(glossary: str, updates: list[dict[str, object]]) -> str:
+    existing = set()
+    for line in glossary.splitlines():
+        if line.startswith("- **") and "** → " in line:
+            existing.add(line.split("**", 2)[1].casefold())
+    lines = [glossary.rstrip()]
+    for row in updates:
+        if not isinstance(row, dict) or not {"source", "translation", "note"} <= row.keys():
+            raise BookForgeError("Glossary update is missing source, translation, or note")
+        source = str(row["source"])
+        if source.casefold() not in existing:
+            lines.append(f"- **{source}** → {row['translation']} — {row['note']}")
+            existing.add(source.casefold())
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _ensure_locale_artifacts(root: Path, book_id: str, locale: str) -> None:
+    registry = _artifact_registry(root)
+    locale_root = root / "books" / book_id / "translations" / locale
+    specs = [
+        (f"LOCALE-STYLE-{book_id}-{locale}", "locale-style", locale_root / "style.md"),
+        (f"LOCALE-GLOSSARY-{book_id}-{locale}", "locale-glossary", locale_root / "glossary.md"),
+        (f"LOCALE-METADATA-{book_id}-{locale}", "locale-metadata", locale_root / "metadata.yaml"),
+    ]
+    for artifact_id, kind, path in specs:
+        if artifact_id not in registry["artifacts"]:
+            register_artifact(root, artifact_id, kind, path=path, authored=True)
+            registry = _artifact_registry(root)
+
+
+def _translate_one(
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    *,
+    provider=None,
+) -> dict[str, object]:
+    runner = provider or run_opencode_role
+    locale_root = root / "books" / book_id / "translations" / locale
+    source_path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md"
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    source = source_path.read_text(encoding="utf-8")
+    state_path = locale_root / "state.yaml"
+    state = _read_json(state_path)
+    previous = state.get("boundary", "")
+    previous_id = None
+    if state.get("completed_chapters"):
+        previous_id = f"TRANSLATION-{book_id}-{state['completed_chapters'][-1]}-{locale}"
+    task_id = f"TRANSLATE-{book_id}-{chapter_id}-{locale}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        deps = [previous_id.replace("TRANSLATION-", "TRANSLATE-", 1)] if previous_id else []
+        add_task(
+            root,
+            task_id,
+            "translator",
+            deps=deps,
+            priority=80,
+            chapter_order=int(contract["order"]),
+            outputs=[
+                f"books/{book_id}/translations/{locale}/chapters/{chapter_id}.md",
+                f"books/{book_id}/translations/{locale}/state.yaml",
+                f"books/{book_id}/translations/{locale}/glossary.md",
+            ],
+        )
+    last_error = ""
+    calls = 0
+    must_review = bool(contract.get("pivotal"))
+    for attempt_number in (1, 2):
+        capsule = {
+            "book": book_id,
+            "chapter": chapter_id,
+            "source_language": _read_json(root / "book-forge.yaml")["source_language"],
+            "target_locale": locale,
+            "source_markdown": source,
+            "contract": contract,
+            "locale_style": (locale_root / "style.md").read_text(encoding="utf-8"),
+            "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
+            "metadata": _read_json(locale_root / "metadata.yaml"),
+        }
+        if last_error or (must_review and attempt_number == 2):
+            capsule["repair"] = {"reason": last_error or "pivotal translation independent self-review", "previous_output": previous_output}
+        envelope = build_envelope(
+            root,
+            role="translator",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state={"previous_boundary": previous},
+            tools=[],
+            max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = runner("translator", envelope, attempt_dir)
+        calls += 1
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        _write_bytes_atomic(attempt_dir / "raw-output.txt", str(result["text"]).encode())
+        try:
+            value = _parse_contract_json(str(result["text"]))
+            problems = _translation_validation(source, value)
+            if problems:
+                raise BookForgeError("; ".join(problems))
+        except BookForgeError as exc:
+            last_error = str(exc)
+            _set_attempt_failure(root, claim["attempt"], block=attempt_number == 2, reason=last_error)
+            if attempt_number == 2:
+                raise BookForgeError(f"Translation blocked after one repair: {last_error}") from exc
+            previous_output = str(result["text"])
+            continue
+        if must_review and attempt_number == 1:
+            previous_output = value
+            _set_attempt_failure(root, claim["attempt"], block=False, reason="pivotal-review-requested")
+            continue
+        glossary = _append_glossary((locale_root / "glossary.md").read_text(encoding="utf-8"), list(value["glossary_updates"]))
+        completed = list(state.get("completed_chapters", []))
+        if chapter_id not in completed:
+            completed.append(chapter_id)
+        all_source = [path.stem for path in sorted((root / "books" / book_id / "manuscript" / "chapters").glob("CH-*.md"))]
+        state.update(
+            {
+                "completed_chapters": completed,
+                "boundary": value["boundary"],
+                "boundary_hashes": {**state.get("boundary_hashes", {}), chapter_id: _sha256_bytes(str(value["boundary"]).encode())},
+                "status": "current" if completed == all_source else "in_progress",
+                "current": True,
+            }
+        )
+        outputs = {
+            f"books/{book_id}/translations/{locale}/chapters/{chapter_id}.md": str(value["translated_markdown"]).rstrip() + "\n",
+            f"books/{book_id}/translations/{locale}/state.yaml": _json_bytes(state),
+            f"books/{book_id}/translations/{locale}/glossary.md": glossary,
+        }
+        manifest = stage_outputs(root, claim["attempt"], outputs)
+        receipt = record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=_provider_telemetry(result, envelope, attempt_number),
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+        reconcile_artifacts(root)
+        artifact_id = f"TRANSLATION-{book_id}-{chapter_id}-{locale}"
+        registry = _artifact_registry(root)
+        if f"SOURCE-{book_id}-{chapter_id}" not in registry["artifacts"]:
+            register_artifact(root, f"SOURCE-{book_id}-{chapter_id}", "source-chapter", path=source_path)
+        dependencies = [
+            f"SOURCE-{book_id}-{chapter_id}",
+            f"LOCALE-STYLE-{book_id}-{locale}",
+            f"LOCALE-GLOSSARY-{book_id}-{locale}",
+            f"LOCALE-METADATA-{book_id}-{locale}",
+        ]
+        if previous_id:
+            dependencies.append(previous_id)
+        registry = _artifact_registry(root)
+        if artifact_id not in registry["artifacts"]:
+            register_artifact(root, artifact_id, "translation-chapter", path=locale_root / "chapters" / f"{chapter_id}.md", dependencies=dependencies)
+        return {"chapter": chapter_id, "locale": locale, "calls": calls, "receipt": receipt}
+    raise BookForgeError("Unreachable translation state")
+
+
+def translate_next(
+    project: Path | str,
+    book_id: str,
+    locale: str,
+    *,
+    provider=None,
+    run_all: bool = False,
+) -> dict[str, object]:
+    root = _project_root(project)
+    canonical = _canonical_locale(locale)
+    locale_root = root / "books" / book_id / "translations" / canonical
+    if not (locale_root / "locale.yaml").is_file():
+        raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
+    _ensure_locale_artifacts(root, book_id, canonical)
+    results = []
+    while True:
+        source_chapters = sorted((root / "books" / book_id / "manuscript" / "chapters").glob("CH-*.md"))
+        next_source = next((path for path in source_chapters if not (locale_root / "chapters" / path.name).is_file()), None)
+        if not next_source:
+            break
+        results.append(_translate_one(root, book_id, canonical, next_source.stem, provider=provider))
+        if not run_all:
+            break
+    if not results:
+        return {"state": "current", "book": book_id, "locale": canonical, "calls": 0, "chapters": []}
+    return {
+        "state": _read_json(locale_root / "state.yaml")["status"],
+        "book": book_id,
+        "locale": canonical,
+        "calls": sum(int(result["calls"]) for result in results),
+        "chapters": [result["chapter"] for result in results],
+    }
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)

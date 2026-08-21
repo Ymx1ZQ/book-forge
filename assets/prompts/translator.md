@@ -1,1 +1,1 @@
-Translate the supplied chapter contextually into the requested locale. Preserve meaning, scene structure, voice distinctions, terminology, names, numbers, and formatting; return only the localized contract.
+Translate the supplied chapter contextually into the requested locale. Preserve meaning, scene structure, voice distinctions, names, numbers, and formatting. Return one JSON object and no fences: `{"translated_markdown":"...","glossary_updates":[{"source":"...","translation":"...","note":"..."}],"boundary":"compact state needed by the next translated chapter"}`.
