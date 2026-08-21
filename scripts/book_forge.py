@@ -213,6 +213,26 @@ def _canonical_language(value: str) -> str:
     return "-".join([parts[0].lower(), *parts[1:]])
 
 
+def _canonical_locale(value: str) -> str:
+    if "/" in value or "\\" in value or ".." in value:
+        raise BookForgeError(f"Unsafe language tag: {value}")
+    if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", value):
+        raise BookForgeError(f"Invalid BCP 47 language tag: {value}")
+    parts = value.split("-")
+    language = parts[0].lower()
+    if language in {"iw", "in", "ji", "sh"}:
+        raise BookForgeError(f"Legacy language alias is not accepted: {language}")
+    canonical = [language]
+    for index, part in enumerate(parts[1:], start=1):
+        if index == 1 and len(part) == 4 and part.isalpha():
+            canonical.append(part.title())
+        elif (len(part) == 2 and part.isalpha()) or (len(part) == 3 and part.isdigit()):
+            canonical.append(part.upper())
+        else:
+            canonical.append(part.lower())
+    return "-".join(canonical)
+
+
 def _inside_git_repo(parent: Path) -> bool:
     result = subprocess.run(
         ["git", "-C", str(parent), "rev-parse", "--show-toplevel"],
@@ -2603,6 +2623,64 @@ def produce_pivotal_chapter(
     return {"state": closure["state"], "book": book_id, "chapter": chapter_id, "calls": 3 + int(closure["calls"]), "winner": winner_label}
 
 
+def add_translation(project: Path | str, book_id: str, locale: str) -> dict[str, object]:
+    root = _project_root(project)
+    book = next((item for item in list_books(root) if item["id"] == book_id), None)
+    if not book:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    canonical = _canonical_locale(locale)
+    source = _canonical_locale(str(_read_json(root / "book-forge.yaml")["source_language"]))
+    if canonical == source:
+        raise BookForgeError("Translation locale duplicates the authoritative source language")
+    translations = root / "books" / book_id / "translations"
+    target = translations / canonical
+    config_path = target / "locale.yaml"
+    if target.exists():
+        if not config_path.is_file():
+            raise BookForgeError(f"Translation path collision: {target}")
+        config = _read_json(config_path)
+        if config.get("locale") != canonical or config.get("book") != book_id:
+            raise BookForgeError(f"Translation workspace identity collision: {target}")
+        return {**config, "created": False}
+    locale_id = f"LOC-{hashlib.sha256(f'{book_id}:{canonical}'.encode()).hexdigest()[:8].upper()}"
+    translations.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{canonical}-", dir=translations))
+    try:
+        config = {
+            "schema": 1,
+            "id": locale_id,
+            "book": book_id,
+            "source_language": source,
+            "locale": canonical,
+            "status": "empty",
+        }
+        _write_json(stage / "locale.yaml", config)
+        _write_json(
+            stage / "metadata.yaml",
+            {"schema": 1, "locale": canonical, "title": book["title"], "subtitle": "", "contributors": []},
+        )
+        _write_json(
+            stage / "state.yaml",
+            {"schema": 1, "locale": canonical, "completed_chapters": [], "current": True, "boundary_hashes": {}},
+        )
+        (stage / "style.md").write_text(
+            f"---\nid: {locale_id}-STYLE\n---\n\n# Locale Style\n\n<!-- bf:block style -->\n"
+            "Define register, dialogue punctuation, narrative tense, and voice-preservation decisions here.\n",
+            encoding="utf-8",
+        )
+        (stage / "glossary.md").write_text(
+            f"---\nid: {locale_id}-GLOSS\n---\n\n# Locale Glossary\n\n<!-- bf:block terms -->\n"
+            "Record names, honorifics, register, character dialogue voices, and do-not-translate terms here.\n",
+            encoding="utf-8",
+        )
+        (stage / "chapters").mkdir()
+        os.replace(stage, target)
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+    return {**config, "created": True}
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -2680,6 +2758,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--book")
     run.add_argument("--task")
     run.add_argument("--next", action="store_true")
+    translate = commands.add_parser("translate")
+    translate.add_argument("action", choices=("add", "next", "run", "status"))
+    translate.add_argument("book")
+    translate.add_argument("locale")
     return parser
 
 
@@ -2726,6 +2808,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"scheduled": [task["id"] for task in schedule_book_design(args.project, args.book)]}, sort_keys=True))
         elif args.command == "run":
             print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))
+        elif args.command == "translate" and args.action == "add":
+            print(json.dumps(add_translation(args.project, args.book, args.locale), sort_keys=True))
+        elif args.command == "translate" and args.action == "status":
+            canonical = _canonical_locale(args.locale)
+            print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
+        elif args.command == "translate":
+            print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

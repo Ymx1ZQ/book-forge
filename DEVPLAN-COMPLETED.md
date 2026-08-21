@@ -282,3 +282,23 @@
 - [x] Commit & push
 
 **Done when:** The fixture promotes one blind-selected winner within the nominal and recovery call ceilings.
+
+## Phase E — Opt-in translation
+
+### M16: Create a canonical locale workspace on request ✅
+
+**Depends on:** M2, M7, M8, M9, M10
+
+**Why:** Translation needs persistent terminology and voice decisions but must add no files or tokens until requested.
+
+**Approach:** Add `translate add` for canonicalized, path-safe BCP 47 tags, creating locale config, style blocks, glossary blocks, boundary state, localized metadata, and an empty chapter directory. Treat the configured source language as authoritative and isolate each locale.
+
+**Tasks:**
+- [x] Canonicalize language tags and reject aliases, traversal, collisions, and source duplication
+- [x] Generate locale style, glossary, metadata, and state only on explicit request
+- [x] Address names, honorifics, register, dialogue voice, and do-not-translate terms
+- [x] Keep locale state separate from source canon and other locales
+- [x] Test: integration — create aliasing and distinct locales without touching source prose
+- [x] Commit & push
+
+**Done when:** Requested locale paths are canonical and safe while an untouched book has no translation artifacts.

@@ -159,24 +159,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase E — Opt-in translation
 
-### M16: Create a canonical locale workspace on request
-
-**Depends on:** M2, M7, M8, M9, M10
-
-**Why:** Translation needs persistent terminology and voice decisions but must add no files or tokens until requested.
-
-**Approach:** Add `translate add` for canonicalized, path-safe BCP 47 tags, creating locale config, style blocks, glossary blocks, boundary state, localized metadata, and an empty chapter directory. Treat the configured source language as authoritative and isolate each locale.
-
-**Tasks:**
-- [ ] Canonicalize language tags and reject aliases, traversal, collisions, and source duplication
-- [ ] Generate locale style, glossary, metadata, and state only on explicit request
-- [ ] Address names, honorifics, register, dialogue voice, and do-not-translate terms
-- [ ] Keep locale state separate from source canon and other locales
-- [ ] Test: integration — create aliasing and distinct locales without touching source prose
-- [ ] Commit & push
-
-**Done when:** Requested locale paths are canonical and safe while an untouched book has no translation artifacts.
-
 ### M17: Translate and validate one chapter at a time
 
 **Depends on:** M14, M16
