@@ -395,3 +395,21 @@
 - [x] Commit & push
 
 **Done when:** Repeated fixture builds have identical PDF bytes and fail closed when any toolchain input drifts.
+
+### M22: Publish current translated editions ✅
+
+**Depends on:** M18, M20, M21
+
+**Why:** Requested locales should reuse the proven publication toolchains without allowing stale or incomplete translations into release artifacts.
+
+**Approach:** Extend normalized assembly to locale-specific chapter trees, metadata, front/back matter, typography, and language declarations. Require current M18 dependency state before either renderer starts, and register both edition formats in the artifact DAG with exact locale and toolchain inputs.
+
+**Tasks:**
+- [x] Assemble translated editions only from one canonical locale workspace
+- [x] Reject stale boundaries, mixed languages, missing chapters, and incomplete metadata
+- [x] Render translated EPUB and PDF through the existing pinned toolchains
+- [x] Register locale publication inputs, outputs, manifests, and currentness edges
+- [x] Test: integration — publish a current locale and refuse each seeded stale condition
+- [x] Commit & push
+
+**Done when:** A requested current locale produces both validated formats and every stale fixture fails before rendering.

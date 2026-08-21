@@ -3201,20 +3201,51 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
     canonical = _canonical_locale(language)
     config = _read_json(root / "book-forge.yaml")
     source_language = _canonical_locale(str(config["source_language"]))
-    if canonical != source_language:
-        raise BookForgeError("Source publication must use the configured source language")
     book = next((item for item in list_books(root) if item["id"] == book_id), None)
     if not book:
         raise BookForgeError(f"Unknown book: {book_id}")
     contracts = sorted((root / "books" / book_id / "chapters").glob("CH-*.json"))
     expected = [path.stem for path in contracts]
-    state = _read_json(root / "books" / book_id / "state.yaml")
-    manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
+    if not expected:
+        raise BookForgeError("Publication refused: the book has no chapter contracts")
+    translated = canonical != source_language
+    metadata = None
+    if translated:
+        locale_root = root / "books" / book_id / "translations" / canonical
+        locale_config_path = locale_root / "locale.yaml"
+        state_path = locale_root / "state.yaml"
+        metadata_path = locale_root / "metadata.yaml"
+        if not all(path.is_file() for path in (locale_config_path, state_path, metadata_path)):
+            raise BookForgeError("Publication refused: requested translation workspace is missing or incomplete")
+        locale_config = _read_json(locale_config_path)
+        state = _read_json(state_path)
+        metadata = _read_json(metadata_path)
+        if (
+            locale_config.get("book") != book_id
+            or _canonical_locale(str(locale_config.get("locale", ""))) != canonical
+            or _canonical_locale(str(metadata.get("locale", ""))) != canonical
+            or _canonical_locale(str(state.get("locale", ""))) != canonical
+        ):
+            raise BookForgeError("Publication refused: locale workspace contains mixed identity or language metadata")
+        if (
+            state.get("status") != "current"
+            or state.get("current") is not True
+            or state.get("stale_prose")
+            or state.get("boundary_audit")
+            or state.get("completed_chapters") != expected
+        ):
+            raise BookForgeError("Publication refused: translation is stale, incomplete, or awaiting a boundary audit")
+        manuscript_root = locale_root / "chapters"
+    else:
+        state = _read_json(root / "books" / book_id / "state.yaml")
+        if state.get("closed_chapters") != expected:
+            raise BookForgeError("Publication refused: source chapters are incomplete, stale, or out of order")
+        manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
     present = [path.stem for path in sorted(manuscript_root.glob("CH-*.md"))]
-    if not expected or expected != present or state.get("closed_chapters") != expected:
-        raise BookForgeError("Publication refused: source chapters are missing, incomplete, stale, or out of order")
+    if expected != present:
+        raise BookForgeError("Publication refused: edition chapters are missing, extra, or out of order")
     registry = _artifact_registry(root)
-    if registry.get("artifacts"):
+    if not translated and registry.get("artifacts"):
         try:
             stale = reconcile_artifacts(root)
         except BookForgeError as exc:
@@ -3228,15 +3259,24 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
         path = manuscript_root / f"{chapter_id}.md"
         text_value = _normalize_text(path.read_text(encoding="utf-8"))
         chapters.append({"id": chapter_id, "title": next((line[2:].strip() for line in text_value.splitlines() if line.startswith("# ")), chapter_id), "markdown": text_value})
-        input_hashes[f"books/{book_id}/manuscript/chapters/{chapter_id}.md"] = _sha256_bytes(text_value.encode())
-    book_path = root / "books" / book_id / "book.yaml"
-    input_hashes[f"books/{book_id}/book.yaml"] = _file_hash(book_path)
+        input_hashes[str(path.relative_to(root))] = _sha256_bytes(text_value.encode())
+    if translated:
+        for name in ("locale.yaml", "metadata.yaml", "state.yaml", "style.md", "glossary.md"):
+            path = locale_root / name
+            input_hashes[str(path.relative_to(root))] = _file_hash(path)
+        title = str(metadata.get("title", "")).strip()
+        if not title:
+            raise BookForgeError("Publication refused: localized title is missing")
+    else:
+        book_path = root / "books" / book_id / "book.yaml"
+        input_hashes[f"books/{book_id}/book.yaml"] = _file_hash(book_path)
+        title = str(book["title"])
     identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f"book-forge:{config['universe']}:{book_id}:{canonical}:edition"))
     assembly = {
         "schema": 1,
         "universe": config["universe"],
         "book": book_id,
-        "title": str(book["title"]),
+        "title": title,
         "author": str(config.get("author", "")),
         "language": canonical,
         "identifier": identity,
@@ -3246,6 +3286,30 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
     }
     assembly["hash"] = _sha256_bytes(_json_bytes(assembly))
     return assembly
+
+
+def _edition_dependencies(root: Path, assembly: dict[str, object]) -> list[str]:
+    book_id = str(assembly["book"])
+    language = str(assembly["language"])
+    source_language = _canonical_locale(str(_read_json(root / "book-forge.yaml")["source_language"]))
+    translated = language != source_language
+    registry = _artifact_registry(root)
+    dependencies = []
+    for chapter in assembly["chapters"]:
+        chapter_id = str(chapter["id"])
+        if translated:
+            artifact_id = f"TRANSLATION-{book_id}-{chapter_id}-{language}"
+            path = root / "books" / book_id / "translations" / language / "chapters" / f"{chapter_id}.md"
+            kind = "translation-chapter"
+        else:
+            artifact_id = f"SOURCE-{book_id}-{chapter_id}"
+            path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md"
+            kind = "source-chapter"
+        if artifact_id not in registry["artifacts"]:
+            register_artifact(root, artifact_id, kind, path=path)
+            registry = _artifact_registry(root)
+        dependencies.append(artifact_id)
+    return dependencies
 
 
 def _markdown_xhtml(markdown: str) -> str:
@@ -3406,17 +3470,15 @@ def export_epub(project: Path | str, book_id: str, language: str) -> dict[str, o
     }
     manifest_path = output_dir / f"{book_id}.epub.manifest.json"
     _write_json(manifest_path, manifest)
+    dependencies = _edition_dependencies(root, assembly)
     registry = _artifact_registry(root)
-    dependencies = []
-    for chapter in assembly["chapters"]:
-        artifact_id = f"SOURCE-{book_id}-{chapter['id']}"
-        if artifact_id not in registry["artifacts"]:
-            register_artifact(root, artifact_id, "source-chapter", path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter['id']}.md")
-            registry = _artifact_registry(root)
-        dependencies.append(artifact_id)
     edition_id = f"EDITION-{book_id}-{assembly['language']}-EPUB"
     if edition_id not in registry["artifacts"]:
         register_artifact(root, edition_id, "epub-edition", path=output_path, dependencies=dependencies)
+        registry = _artifact_registry(root)
+    manifest_id = f"{edition_id}-MANIFEST"
+    if manifest_id not in registry["artifacts"]:
+        register_artifact(root, manifest_id, "publication-manifest", path=manifest_path, dependencies=[edition_id])
     return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
 
 
@@ -3552,15 +3614,15 @@ def export_pdf(
     }
     manifest_path = output_dir / f"{book_id}.pdf.manifest.json"
     _write_json(manifest_path, manifest)
+    dependencies = _edition_dependencies(root, assembly)
     registry = _artifact_registry(root)
-    dependencies = [f"SOURCE-{book_id}-{chapter['id']}" for chapter in assembly["chapters"]]
-    for chapter, artifact_id in zip(assembly["chapters"], dependencies):
-        if artifact_id not in registry["artifacts"]:
-            register_artifact(root, artifact_id, "source-chapter", path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter['id']}.md")
-            registry = _artifact_registry(root)
     edition_id = f"EDITION-{book_id}-{assembly['language']}-PDF"
     if edition_id not in registry["artifacts"]:
         register_artifact(root, edition_id, "pdf-edition", path=output_path, dependencies=dependencies)
+        registry = _artifact_registry(root)
+    manifest_id = f"{edition_id}-MANIFEST"
+    if manifest_id not in registry["artifacts"]:
+        register_artifact(root, manifest_id, "publication-manifest", path=manifest_path, dependencies=[edition_id])
     return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
 
 
@@ -3652,6 +3714,10 @@ def build_parser() -> argparse.ArgumentParser:
     audit_scope.add_argument("--continuity")
     audit.add_argument("--max-jobs", type=int, default=8)
     audit.add_argument("--override", action="store_true")
+    export = commands.add_parser("export")
+    export.add_argument("book")
+    export.add_argument("--lang", required=True)
+    export.add_argument("--format", choices=("epub", "pdf", "all"), default="all")
     return parser
 
 
@@ -3707,6 +3773,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
         elif args.command == "audit":
             print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
+        elif args.command == "export":
+            results = {}
+            if args.format in {"epub", "all"}:
+                results["epub"] = export_epub(args.project, args.book, args.lang)
+            if args.format in {"pdf", "all"}:
+                results["pdf"] = export_pdf(args.project, args.book, args.lang)
+            print(json.dumps(results, sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
