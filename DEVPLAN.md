@@ -157,24 +157,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase D — Fast chapter production
 
-### M13: Draft an ordinary chapter in one provider call
-
-**Depends on:** M8, M10, M12
-
-**Why:** The common path must turn one approved contract into prose without variant proliferation or whole-book rereads.
-
-**Approach:** Let a fresh writer consume the configured-language envelope and emit one staged draft, beat self-map, and consequence disclosure. Pre-review validation remains mechanical—materialization, structure, placeholders, bounds, and hashes—while the technical editor later judges semantic contract coverage.
-
-**Tasks:**
-- [ ] Implement deterministic `run --next` selection and writer capsules
-- [ ] Produce one source-language draft for ordinary chapters
-- [ ] Validate output materialization and request/output bounds before review
-- [ ] Permit at most one separately receipted continuation or repair attempt
-- [ ] Test: live — draft one fixture chapter and verify envelope and call budgets
-- [ ] Commit & push
-
-**Done when:** The happy path materializes one reviewable draft in one provider call and any recovery remains inside the declared ceiling.
-
 ### M14: Review, revise, and close a chapter
 
 **Depends on:** M13

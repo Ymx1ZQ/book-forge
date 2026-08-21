@@ -43,6 +43,12 @@ class ContextOverflowError(BookForgeError):
         super().__init__(f"Context estimate {estimated} exceeds budget {budget}; contributors: {summary}")
 
 
+class ProviderOutcomeUnknown(BookForgeError):
+    def __init__(self, session_id: str | None, message: str):
+        self.session_id = session_id
+        super().__init__(message)
+
+
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -816,7 +822,14 @@ def _attempt_dir(root: Path, attempt: dict[str, object]) -> Path:
     return root / ".book-forge" / "runs" / str(attempt.get("run", "RUN-0001")) / "attempts" / str(attempt["id"])
 
 
-def record_execution(project: Path | str, attempt_id: str, fence: int, *, output_hash: str) -> dict[str, object]:
+def record_execution(
+    project: Path | str,
+    attempt_id: str,
+    fence: int,
+    *,
+    output_hash: str,
+    telemetry: dict[str, object] | None = None,
+) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
     attempt = _attempt(plan, attempt_id)
@@ -826,6 +839,15 @@ def record_execution(project: Path | str, attempt_id: str, fence: int, *, output
     if not re.fullmatch(r"[0-9a-f]{64}", output_hash):
         raise BookForgeError("output_hash must be a lowercase SHA-256")
     receipt = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "fence": fence, "output_hash": output_hash, "outcome": "observed"}
+    if telemetry:
+        role = str(attempt["role"])
+        expected_variant = ROLE_SPECS[role][1]
+        observed_model = str(telemetry.get("model"))
+        if telemetry.get("provider") != "openrouter" or observed_model not in {MODEL, MODEL.split("/", 1)[1]}:
+            raise BookForgeError("Provider receipt does not match the pinned OpenRouter DeepSeek model")
+        if telemetry.get("variant") != expected_variant:
+            raise BookForgeError(f"Provider variant {telemetry.get('variant')} does not match {role} pin {expected_variant}")
+        receipt.update(telemetry)
     receipt_path = _attempt_dir(root, attempt) / "execution-receipt.json"
     if receipt_path.exists():
         raise BookForgeError("Execution receipt is immutable")
@@ -1863,6 +1885,259 @@ def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, obj
     return audit
 
 
+def _parse_contract_json(text_value: str) -> dict[str, object]:
+    stripped = text_value.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1])
+            if stripped.lstrip().startswith("json\n"):
+                stripped = stripped.lstrip()[5:]
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise BookForgeError("Model output contract must be an object")
+    return value
+
+
+def validate_writer_output(contract: dict[str, object], text_value: str) -> dict[str, object]:
+    value = _parse_contract_json(text_value)
+    prose = value.get("prose_markdown")
+    if not isinstance(prose, str) or not prose.strip():
+        raise BookForgeError("Writer output has no prose_markdown")
+    if not isinstance(value.get("beat_map"), list) or len(value["beat_map"]) < len(contract.get("beats", [])):
+        raise BookForgeError("Writer output has an incomplete beat map")
+    if not isinstance(value.get("consequences"), list):
+        raise BookForgeError("Writer output has no consequence disclosure")
+    if re.search(r"\b(?:TODO|TBD)\b|\[(?:INSERT|PLACEHOLDER)[^]]*\]", prose, re.IGNORECASE):
+        raise BookForgeError("Writer output contains a placeholder")
+    words = len(re.findall(r"\b[\w’'-]+\b", prose, re.UNICODE))
+    target = int(contract["target_words"])
+    lower = max(1, int(target * 0.70))
+    upper = int(target * 1.40)
+    if not lower <= words <= upper:
+        raise BookForgeError(f"Writer output word count {words} is outside {lower}..{upper}")
+    value["word_count"] = words
+    return value
+
+
+def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
+    if role not in ROLE_SPECS or ROLE_SPECS[role][0] not in {"all", "primary"}:
+        raise BookForgeError(f"Role cannot run headlessly: {role}")
+    root = attempt_dir.parents[4]
+    binary = _opencode_binary()
+    environment = dict(os.environ)
+    environment.pop("OPENROUTER_API_KEY", None)
+    started = time.monotonic()
+    result = subprocess.run(
+        [
+            binary,
+            "run",
+            "--pure",
+            "--dir",
+            str(root),
+            "--agent",
+            role,
+            "--format",
+            "json",
+            "--title",
+            f"book-forge-{attempt_dir.name.lower()}",
+            envelope["bytes"].decode("utf-8"),
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    _write_bytes_atomic(attempt_dir / "provider-events.jsonl", result.stdout.encode())
+    events = []
+    for line in result.stdout.splitlines():
+        if line.startswith("{"):
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    session_ids = [str(event["sessionID"]) for event in events if event.get("sessionID")]
+    session_id = session_ids[0] if session_ids else None
+    if result.returncode != 0 or not session_id:
+        if session_id:
+            raise ProviderOutcomeUnknown(session_id, f"OpenCode ended without a complete result: {result.stderr.strip()}")
+        raise BookForgeError(f"OpenCode failed before provider acceptance: {result.stderr.strip()}")
+    export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, check=False)
+    if export.returncode != 0:
+        raise ProviderOutcomeUnknown(session_id, "OpenCode session export failed after an accepted call")
+    try:
+        receipt = json.loads(export.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProviderOutcomeUnknown(session_id, "OpenCode session telemetry is unreadable") from exc
+    info = receipt["info"]
+    if info.get("agent") != role:
+        raise BookForgeError(f"OpenCode fell back from {role} to {info.get('agent')}")
+    texts = [event["part"]["text"] for event in events if event.get("type") == "text" and isinstance(event.get("part", {}).get("text"), str)]
+    if not texts:
+        raise ProviderOutcomeUnknown(session_id, "Accepted call produced no observable text")
+    model = info["model"]
+    return {
+        "text": texts[-1],
+        "provider": model["providerID"],
+        "model": model["id"],
+        "variant": model.get("variant"),
+        "session_id": session_id,
+        "tokens": info.get("tokens", {}),
+        "cost": info.get("cost", 0),
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "finish": "stop",
+    }
+
+
+def _set_attempt_failure(root: Path, attempt_id: str, *, block: bool, reason: str) -> None:
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    attempt["state"] = "validation_failed"
+    attempt["failure"] = reason
+    task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+    task["state"] = "blocked" if block else "pending"
+    task.pop("attempt", None)
+    _save_plan(root, plan)
+    render_plan(root)
+    if block:
+        control = _control(root)
+        if control.get("active_run"):
+            run_path = _run_path(root, str(control["active_run"]))
+            run = _read_json(run_path)
+            run["state"] = "blocked"
+            _write_json(run_path, run)
+
+
+def _ensure_draft_task(root: Path, book_id: str, chapter_id: str) -> dict[str, object]:
+    task_id = f"DRAFT-{book_id}-{chapter_id}"
+    plan = _load_plan(root)
+    existing = next((task for task in plan["tasks"] if task["id"] == task_id), None)
+    if existing:
+        return existing
+    book = next((item for item in list_books(root) if item["id"] == book_id), None)
+    if not book:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    return add_task(
+        root,
+        task_id,
+        "writer",
+        priority=50,
+        book_order=int(book.get("order", 0)),
+        chapter_order=int(chapter_id.split("-")[-1]),
+        inputs=[f"books/{book_id}/chapters/{chapter_id}.json"],
+        outputs=[
+            f"books/{book_id}/work/{chapter_id}/draft.md",
+            f"books/{book_id}/work/{chapter_id}/beat-map.json",
+            f"books/{book_id}/work/{chapter_id}/consequences.json",
+        ],
+    )
+
+
+def draft_chapter(
+    project: Path | str,
+    book_id: str,
+    chapter_id: str,
+    *,
+    provider=None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    contract_path = root / "books" / book_id / "chapters" / f"{chapter_id}.json"
+    contract = _read_json(contract_path)
+    if contract.get("book") != book_id or contract.get("id") != chapter_id:
+        raise BookForgeError("Chapter contract identity mismatch")
+    if contract.get("pivotal"):
+        raise BookForgeError("Pivotal chapters must use the judge workflow")
+    _ensure_draft_task(root, book_id, chapter_id)
+    runner = provider or run_opencode_role
+    last_error = ""
+    for call_number in (1, 2):
+        capsule = dict(contract)
+        if last_error:
+            capsule["repair"] = {"attempt": call_number, "validation_error": last_error}
+        state_path = root / "books" / book_id / "state.yaml"
+        state = _read_json(state_path)
+        envelope = build_envelope(
+            root,
+            role="writer",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state={"book_state": state, "previous_chapter_tail": state.get("previous_chapter_tail", "")},
+            tools=[],
+            max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+        )
+        claim = claim_task(root, f"DRAFT-{book_id}-{chapter_id}", request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+        try:
+            result = runner("writer", envelope, attempt_dir)
+            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+            parsed = validate_writer_output(contract, str(result["text"]))
+        except ProviderOutcomeUnknown as exc:
+            if exc.session_id:
+                mark_provider_accepted(root, claim["attempt"], exc.session_id)
+            plan = _load_plan(root)
+            attempt = _attempt(plan, claim["attempt"])
+            attempt["state"] = "outcome_unknown"
+            task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+            task["state"] = "outcome_unknown"
+            _save_plan(root, plan)
+            raise
+        except BookForgeError as exc:
+            last_error = str(exc)
+            _set_attempt_failure(root, claim["attempt"], block=call_number == 2, reason=last_error)
+            if call_number == 2:
+                raise BookForgeError(f"Chapter draft blocked after one repair: {last_error}") from exc
+            continue
+        outputs = {
+            f"books/{book_id}/work/{chapter_id}/draft.md": str(parsed["prose_markdown"]).rstrip() + "\n",
+            f"books/{book_id}/work/{chapter_id}/beat-map.json": _json_bytes({"schema": 1, "chapter": chapter_id, "beats": parsed["beat_map"]}),
+            f"books/{book_id}/work/{chapter_id}/consequences.json": _json_bytes({"schema": 1, "chapter": chapter_id, "consequences": parsed["consequences"]}),
+        }
+        manifest = stage_outputs(root, claim["attempt"], outputs)
+        telemetry = {key: result[key] for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
+        telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
+        receipt = record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=telemetry,
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+        return {"state": "drafted", "book": book_id, "chapter": chapter_id, "calls": call_number, "receipt": receipt}
+    raise BookForgeError("Unreachable draft workflow state")
+
+
+def run_next(
+    project: Path | str,
+    *,
+    book_id: str | None = None,
+    task_id: str | None = None,
+    provider=None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    if task_id:
+        match = re.fullmatch(r"DRAFT-(BOOK-\d{4})-(CH-\d{4})", task_id)
+        if not match:
+            raise BookForgeError(f"Task route is not executable by run yet: {task_id}")
+        return draft_chapter(root, match.group(1), match.group(2), provider=provider)
+    books = list_books(root)
+    if book_id:
+        books = [book for book in books if book["id"] == book_id]
+        if not books:
+            raise BookForgeError(f"Unknown book: {book_id}")
+    for book in sorted(books, key=lambda row: (int(row.get("order", 0)), str(row["id"]))):
+        for contract_path in sorted((root / "books" / str(book["id"]) / "chapters").glob("CH-*.json")):
+            contract = _read_json(contract_path)
+            draft_path = root / "books" / str(book["id"]) / "work" / str(contract["id"]) / "draft.md"
+            if not draft_path.exists() and not contract.get("pivotal"):
+                return draft_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
+    raise BookForgeError("No ordinary chapter draft is ready; design a book or use the pivotal workflow")
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -1936,6 +2211,10 @@ def build_parser() -> argparse.ArgumentParser:
     design = commands.add_parser("design")
     design.add_argument("scope", choices=("universe", "book"))
     design.add_argument("--book")
+    run = commands.add_parser("run")
+    run.add_argument("--book")
+    run.add_argument("--task")
+    run.add_argument("--next", action="store_true")
     return parser
 
 
@@ -1980,6 +2259,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.book:
                 raise BookForgeError("design book requires --book")
             print(json.dumps({"scheduled": [task["id"] for task in schedule_book_design(args.project, args.book)]}, sort_keys=True))
+        elif args.command == "run":
+            print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

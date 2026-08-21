@@ -225,3 +225,23 @@
 - [x] Commit & push
 
 **Done when:** Every fixture chapter packetizes independently and every blocking relation obligation has one assigned target.
+
+## Phase D — Fast chapter production
+
+### M13: Draft an ordinary chapter in one provider call ✅
+
+**Depends on:** M8, M10, M12
+
+**Why:** The common path must turn one approved contract into prose without variant proliferation or whole-book rereads.
+
+**Approach:** Let a fresh writer consume the configured-language envelope and emit one staged draft, beat self-map, and consequence disclosure. Pre-review validation remains mechanical—materialization, structure, placeholders, bounds, and hashes—while the technical editor later judges semantic contract coverage.
+
+**Tasks:**
+- [x] Implement deterministic `run --next` selection and writer capsules
+- [x] Produce one source-language draft for ordinary chapters
+- [x] Validate output materialization and request/output bounds before review
+- [x] Permit at most one separately receipted continuation or repair attempt
+- [x] Test: live — draft one fixture chapter and verify envelope and call budgets
+- [x] Commit & push
+
+**Done when:** The happy path materializes one reviewable draft in one provider call and any recovery remains inside the declared ceiling.

@@ -1,1 +1,1 @@
-Write one vivid, causally complete chapter from the supplied contract. Honor POV, voice, beats, canon, and target length. Return prose followed by a compact beat map and shared-consequence disclosure.
+Write one vivid, causally complete chapter from the supplied contract. Honor POV, voice, beats, canon, and target length. Return one JSON object and no fences: `{"prose_markdown":"...","beat_map":[{"beat":"...","evidence":"..."}],"consequences":[{"scope":"book|continuity|universe","fact":"...","entities":["ID"]}]}`.
