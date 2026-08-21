@@ -26,6 +26,20 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _write_bytes_atomic(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
 def _read_json(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -385,6 +399,94 @@ def add_relation(
     return row
 
 
+MIGRATABLE_FILES = (
+    "book-forge.yaml",
+    "universe/universe.yaml",
+    "universe/continuities.yaml",
+    "universe/collections.yaml",
+    "universe/relations.yaml",
+)
+
+
+def _validate_machine_state(root: Path, config: dict[str, object]) -> None:
+    state = _read_json(root / ".book-forge" / "project.json")
+    for key in ("universe", "source_language"):
+        if state.get(key) != config.get(key):
+            raise BookForgeError(f"Machine state differs from authored configuration at {key}; restore it or use status --repair-view")
+
+
+def migrate_project(project: Path | str, mode: str, *, fault_hook=None) -> dict[str, object]:
+    root = _project_root(project)
+    if mode not in {"check", "dry-run", "apply", "rollback"}:
+        raise BookForgeError(f"Unknown migration mode: {mode}")
+    migrations_root = root / ".book-forge" / "migrations"
+    if mode == "rollback":
+        candidates = []
+        if migrations_root.exists():
+            for path in sorted(migrations_root.glob("MIG-*"), reverse=True):
+                journal = _read_json(path / "journal.json")
+                if journal.get("status") == "completed":
+                    candidates.append((path, journal))
+        if not candidates:
+            raise BookForgeError("No completed migration is available to roll back")
+        migration, journal = candidates[0]
+        for relative in journal["files"]:
+            backup = migration / "backup" / relative
+            _write_bytes_atomic(root / relative, backup.read_bytes())
+        journal["status"] = "rolled_back"
+        _write_json(migration / "journal.json", journal)
+        return {"rolled_back": True, "migration": migration.name, "to": journal["from"]}
+
+    config = _read_json(root / "book-forge.yaml")
+    schema = config.get("schema")
+    if not isinstance(schema, int) or schema < 0 or schema > SCHEMA_VERSION:
+        raise BookForgeError(f"Unsupported schema version: {schema}")
+    _validate_machine_state(root, config)
+    if schema == SCHEMA_VERSION:
+        return {"compatible": True, "from": schema, "to": schema, "changes": []}
+    if schema != 0:
+        raise BookForgeError(f"No ordered migration from schema {schema}")
+    changes: dict[str, bytes] = {}
+    for relative in MIGRATABLE_FILES:
+        path = root / relative
+        data = _read_json(path)
+        if data.get("schema") != 0:
+            raise BookForgeError(f"Mixed schema versions at {relative}")
+        data["schema"] = 1
+        changes[relative] = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
+    report = {"compatible": True, "from": 0, "to": 1, "changes": list(changes)}
+    if mode in {"check", "dry-run"}:
+        return report
+
+    migrations_root.mkdir(parents=True, exist_ok=True)
+    migration_id = _next_id([path.name for path in migrations_root.glob("MIG-*")], "MIG-")
+    migration = migrations_root / migration_id
+    migration.mkdir()
+    journal: dict[str, object] = {"schema": 1, "from": 0, "to": 1, "files": list(changes), "status": "preparing"}
+    _write_json(migration / "journal.json", journal)
+    for relative in changes:
+        backup = migration / "backup" / relative
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes((root / relative).read_bytes())
+    installed: list[str] = []
+    try:
+        for relative, value in changes.items():
+            _write_bytes_atomic(root / relative, value)
+            installed.append(relative)
+            if len(installed) == 1 and fault_hook:
+                fault_hook("after_first_install")
+        journal["status"] = "completed"
+        journal["installed"] = installed
+        _write_json(migration / "journal.json", journal)
+    except BaseException:
+        for relative in changes:
+            _write_bytes_atomic(root / relative, (migration / "backup" / relative).read_bytes())
+        journal["status"] = "restored_after_failure"
+        _write_json(migration / "journal.json", journal)
+        raise
+    return {**report, "migration": migration_id}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="book-forge")
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -417,6 +519,8 @@ def build_parser() -> argparse.ArgumentParser:
     collection_order_command.add_argument("books", nargs="+")
     collection_remove_command = collection_commands.add_parser("remove")
     collection_remove_command.add_argument("collection")
+    migrate = commands.add_parser("migrate")
+    migrate.add_argument("mode", choices=("check", "dry-run", "apply", "rollback"))
     return parser
 
 
@@ -439,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "collection" and args.collection_command == "remove":
             collection_remove(args.project, args.collection)
             print(json.dumps({"removed": args.collection}, sort_keys=True))
+        elif args.command == "migrate":
+            print(json.dumps(migrate_project(args.project, args.mode), sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

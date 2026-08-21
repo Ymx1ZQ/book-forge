@@ -54,3 +54,21 @@
 - [x] Commit & push
 
 **Done when:** An arbitrary valid book network round-trips without fixed-length assumptions or duplicate membership state.
+
+### M4: Migrate versioned schemas safely ✅
+
+**Depends on:** M2, M3
+
+**Why:** An open-ended universe must survive skill upgrades without corrupting authored canon or machine state.
+
+**Approach:** Add schema compatibility checks, dry-run migrations, durable backups, journaled upgrades, and rollback before promotion. Migrate only the M2–M3 schemas introduced so far; require every later schema-producing milestone to register its own version and migration. Reject unsupported versions and direct machine-state changes with actionable recovery instructions.
+
+**Tasks:**
+- [x] Define supported schema window and ordered migration contracts
+- [x] Add dry-run, backup, journaled apply, and rollback behavior
+- [x] Preserve authored prose and canon bytes unless their schema requires migration
+- [x] Detect machine-state or devplan tampering and regenerate the view only on explicit command
+- [x] Test: integration — migrate, interrupt, roll back, and reject an unsupported version
+- [x] Commit & push
+
+**Done when:** A supported old fixture upgrades recoverably while unsupported or interrupted migrations preserve the original project.

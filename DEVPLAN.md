@@ -151,24 +151,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase A — Installable universe foundation
 
-### M4: Migrate versioned schemas safely
-
-**Depends on:** M2, M3
-
-**Why:** An open-ended universe must survive skill upgrades without corrupting authored canon or machine state.
-
-**Approach:** Add schema compatibility checks, dry-run migrations, durable backups, journaled upgrades, and rollback before promotion. Migrate only the M2–M3 schemas introduced so far; require every later schema-producing milestone to register its own version and migration. Reject unsupported versions and direct machine-state changes with actionable recovery instructions.
-
-**Tasks:**
-- [ ] Define supported schema window and ordered migration contracts
-- [ ] Add dry-run, backup, journaled apply, and rollback behavior
-- [ ] Preserve authored prose and canon bytes unless their schema requires migration
-- [ ] Detect machine-state or devplan tampering and regenerate the view only on explicit command
-- [ ] Test: integration — migrate, interrupt, roll back, and reject an unsupported version
-- [ ] Commit & push
-
-**Done when:** A supported old fixture upgrades recoverably while unsupported or interrupted migrations preserve the original project.
-
 ## Phase B — Durable orchestration and bounded context
 
 ### M5: Pin and verify the OpenCode role topology
