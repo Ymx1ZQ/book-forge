@@ -57,8 +57,7 @@ class ProviderOutcomeUnknown(BookForgeError):
 
 
 def _write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_bytes_atomic(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
 
 
 def _write_bytes_atomic(path: Path, value: bytes) -> None:
@@ -3901,6 +3900,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command != "init":
+            recover_transactions(args.project)
         if args.command == "init":
             title = args.title or args.project.name.replace("-", " ").title()
             print(json.dumps(init_project(args.project, title, args.source_language), sort_keys=True))

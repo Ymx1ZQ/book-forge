@@ -163,24 +163,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase G — Measured reliability
 
-### M24: Prove the recovery and transaction matrix hermetically
-
-**Depends on:** M7, M8, M18, M20, M21, M22
-
-**Why:** Recovery claims require deterministic fault injection independent from provider credentials or timing.
-
-**Approach:** Build fake provider, clock, filesystem, and Git adapters. Enumerate crash points for dispatch intent, result materialization, each promotion journal state, commit, receipt, plan render, rate-limit wait, translation propagation, and publication; assert exact states, hashes, and permitted next actions.
-
-**Tasks:**
-- [ ] Inject crash-before-send, outcome-unknown, late-result, and malformed-result cases
-- [ ] Inject duplicate resume, expired lease, stale worker, conflict, and failed sync
-- [ ] Inject every per-path promotion and derived-state write boundary
-- [ ] Verify cleanup refusal and preservation of ambiguous or orphaned output
-- [ ] Test: hermetic — run the enumerated matrix with fixed clocks and provider responses
-- [ ] Commit & push
-
-**Done when:** Every enumerated fault has one deterministic observed state and recovery action with no duplicate promotion or lost artifact.
-
 ### M25: Forward-test the complete skill before release
 
 **Depends on:** M11–M24

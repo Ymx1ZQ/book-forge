@@ -431,3 +431,21 @@
 - [x] Commit & push
 
 **Done when:** Every accepted provider call is attributable and the end-to-end artifact DAG validates all registered source, translation, audit, and publication edges.
+
+### M24: Prove the recovery and transaction matrix hermetically ✅
+
+**Depends on:** M7, M8, M18, M20, M21, M22
+
+**Why:** Recovery claims require deterministic fault injection independent from provider credentials or timing.
+
+**Approach:** Build fake provider, clock, filesystem, and Git adapters. Enumerate crash points for dispatch intent, result materialization, each promotion journal state, commit, receipt, plan render, rate-limit wait, translation propagation, and publication; assert exact states, hashes, and permitted next actions.
+
+**Tasks:**
+- [x] Inject crash-before-send, outcome-unknown, late-result, and malformed-result cases
+- [x] Inject duplicate resume, expired lease, stale worker, conflict, and failed sync
+- [x] Inject every per-path promotion and derived-state write boundary
+- [x] Verify cleanup refusal and preservation of ambiguous or orphaned output
+- [x] Test: hermetic — run the enumerated matrix with fixed clocks and provider responses
+- [x] Commit & push
+
+**Done when:** Every enumerated fault has one deterministic observed state and recovery action with no duplicate promotion or lost artifact.
