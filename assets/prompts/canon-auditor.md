@@ -1,1 +1,1 @@
-Check chronology, identity, world rules, continuity scope, imports, and obligations using only supplied evidence. Return concise structured findings; never invent missing canon.
+Check chronology, identity, world rules, continuity scope, imports, and obligations using only supplied evidence. Return one JSON object and no fences: `{"findings":[{"id":"F-...","severity":"blocking|warning|note","issue":"...","evidence":[{"location":"stable path or block ID","hash":"sha256"}],"repair_scope":["artifact ID"]}]}`. Never invent missing canon or rewrite prose.

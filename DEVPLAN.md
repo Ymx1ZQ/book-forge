@@ -161,25 +161,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase F — Cross-book assurance and publication
 
-### M19: Audit continuity from bounded evidence
-
-**Depends on:** M9, M14
-
-**Why:** Cross-book assurance should follow actual shared evidence rather than comparing every book pair.
-
-**Approach:** Generate jobs from explicit relations, consecutive appearances, overlapping intervals, shared events, crossover obligations, and technical-editor consequence disclosures. Feed only relation metadata, boundary snapshots, involved blocks, and cited prose; schedule confirmed repairs rather than rewriting automatically.
-
-**Tasks:**
-- [ ] Implement relation, boundary, entity-transition, overlap, crossover, and timeline jobs
-- [ ] Generate candidates deterministically from the artifact indexes
-- [ ] Enforce per-job calls, eight-job waves, and the twenty-candidate override gate
-- [ ] Require evidence locations and new hashes for repeated findings
-- [ ] Preserve immutable receipts while deriving impacted currentness
-- [ ] Test: integration — find every seeded indexed defect without unrelated book context
-- [ ] Commit & push
-
-**Done when:** Fixture audits cover every declared shared edge, avoid all-pairs loading, and schedule only evidence-backed work.
-
 ### M20: Assemble and export deterministic EPUB editions
 
 **Depends on:** M9, M14

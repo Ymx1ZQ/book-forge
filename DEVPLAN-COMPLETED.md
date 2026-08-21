@@ -338,3 +338,24 @@
 - [x] Commit & push
 
 **Done when:** Each seeded change produces the minimal proven stale suffix and no current translation is regenerated unnecessarily.
+
+## Phase F — Cross-book assurance and publication
+
+### M19: Audit continuity from bounded evidence ✅
+
+**Depends on:** M9, M14
+
+**Why:** Cross-book assurance should follow actual shared evidence rather than comparing every book pair.
+
+**Approach:** Generate jobs from explicit relations, consecutive appearances, overlapping intervals, shared events, crossover obligations, and technical-editor consequence disclosures. Feed only relation metadata, boundary snapshots, involved blocks, and cited prose; schedule confirmed repairs rather than rewriting automatically.
+
+**Tasks:**
+- [x] Implement relation, boundary, entity-transition, overlap, crossover, and timeline jobs
+- [x] Generate candidates deterministically from the artifact indexes
+- [x] Enforce per-job calls, eight-job waves, and the twenty-candidate override gate
+- [x] Require evidence locations and new hashes for repeated findings
+- [x] Preserve immutable receipts while deriving impacted currentness
+- [x] Test: integration — find every seeded indexed defect without unrelated book context
+- [x] Commit & push
+
+**Done when:** Fixture audits cover every declared shared edge, avoid all-pairs loading, and schedule only evidence-backed work.

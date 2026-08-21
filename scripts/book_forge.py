@@ -3014,6 +3014,178 @@ def converge_translation_boundaries(
     return {"book": book_id, "locale": canonical, "stale_prose": stale, "boundary_audit": boundary_audit, "causes": state["stale_causes"]}
 
 
+def generate_audit_jobs(
+    project: Path | str,
+    *,
+    book_id: str | None = None,
+    relation_id: str | None = None,
+    continuity_id: str | None = None,
+    override: bool = False,
+) -> list[dict[str, object]]:
+    root = _project_root(project)
+    books = {str(book["id"]): book for book in list_books(root)}
+    relations_path = root / "universe" / "relations.yaml"
+    relations = _read_json(relations_path).get("relations", [])
+    jobs = []
+    for relation in relations:
+        endpoints = list(relation.get("endpoints", []))
+        if relation_id and relation["id"] != relation_id:
+            continue
+        if book_id and book_id not in endpoints:
+            continue
+        if continuity_id and not any(books.get(endpoint, {}).get("continuity") == continuity_id for endpoint in endpoints):
+            continue
+        relation_hash = _sha256_bytes(_json_bytes(relation))
+        jobs.append(
+            {
+                "id": f"JOB-{relation['id']}",
+                "kind": "crossover-obligation" if relation["type"] == "crossover" else "relation-boundary",
+                "books": endpoints,
+                "relation": relation,
+                "imports": [item["block"] for item in relation.get("imports", [])],
+                "evidence": [{"location": f"universe/relations.yaml#{relation['id']}", "hash": relation_hash}],
+            }
+        )
+    entity_books: dict[str, list[tuple[str, str, str]]] = {}
+    for current_book in ([] if relation_id else books.values()):
+        if book_id and current_book["id"] != book_id:
+            continue
+        if continuity_id and current_book["continuity"] != continuity_id:
+            continue
+        state_path = root / "books" / str(current_book["id"]) / "state.yaml"
+        state = _read_json(state_path)
+        for consequence in state.get("consequences", []):
+            for entity in consequence.get("entities", []):
+                entity_books.setdefault(str(entity), []).append((str(current_book["id"]), str(consequence.get("fact", "")), _file_hash(state_path) or ""))
+    for entity, appearances in sorted(entity_books.items()):
+        unique_books = []
+        for appearance in appearances:
+            if appearance[0] not in unique_books:
+                unique_books.append(appearance[0])
+        if len(unique_books) < 2:
+            continue
+        digest = hashlib.sha256(entity.encode()).hexdigest()[:8].upper()
+        jobs.append(
+            {
+                "id": f"JOB-ENTITY-{digest}",
+                "kind": "entity-transition",
+                "entity": entity,
+                "books": unique_books,
+                "facts": [{"book": book, "fact": fact} for book, fact, _ in appearances],
+                "imports": [],
+                "evidence": [{"location": f"books/{book}/state.yaml", "hash": hash_value} for book, _, hash_value in appearances],
+            }
+        )
+    events = _read_json(root / "universe" / "timeline" / "events.yaml").get("events", [])
+    for event in ([] if relation_id else events):
+        event_books = list(event.get("books", []))
+        if len(event_books) > 1 and (not book_id or book_id in event_books):
+            jobs.append(
+                {
+                    "id": f"JOB-TIMELINE-{event['id']}",
+                    "kind": "timeline-overlap",
+                    "books": event_books,
+                    "event": event,
+                    "imports": [],
+                    "evidence": [{"location": f"universe/timeline/events.yaml#{event['id']}", "hash": _sha256_bytes(_json_bytes(event))}],
+                }
+            )
+    return sorted(jobs, key=lambda job: str(job["id"]))
+
+
+def _validate_audit_output(value: dict[str, object]) -> list[dict[str, object]]:
+    findings = value.get("findings")
+    if not isinstance(findings, list):
+        raise BookForgeError("Audit output has no findings list")
+    for finding in findings:
+        if not isinstance(finding, dict) or not {"id", "severity", "issue", "evidence", "repair_scope"} <= finding.keys():
+            raise BookForgeError("Audit finding is missing required fields")
+        if finding["severity"] not in {"blocking", "warning", "note"} or not isinstance(finding["evidence"], list) or not finding["evidence"]:
+            raise BookForgeError("Audit finding has invalid severity or no evidence")
+        for evidence in finding["evidence"]:
+            if not isinstance(evidence, dict) or not evidence.get("location") or not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("hash", ""))):
+                raise BookForgeError("Audit evidence requires a stable location and SHA-256")
+    return findings
+
+
+def audit_continuity(
+    project: Path | str,
+    *,
+    book_id: str | None = None,
+    relation_id: str | None = None,
+    continuity_id: str | None = None,
+    max_jobs: int = 8,
+    override: bool = False,
+    provider=None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    if not 1 <= max_jobs <= 8:
+        raise BookForgeError("Audit waves must contain between one and eight jobs")
+    candidates = generate_audit_jobs(root, book_id=book_id, relation_id=relation_id, continuity_id=continuity_id, override=override)
+    if len(candidates) > 20 and not override:
+        raise BookForgeError(f"Audit has {len(candidates)} candidates; rerun with a manifest-recorded override")
+    if override:
+        _write_json(root / ".book-forge" / "audit-overrides.json", {"schema": 1, "candidate_count": len(candidates), "max_jobs": max_jobs, "scope": {"book": book_id, "relation": relation_id, "continuity": continuity_id}})
+    runner = provider or run_opencode_role
+    audit_id = f"AUD-{_sha256_bytes(_json_bytes([job['id'] for job in candidates]))[:10].upper()}"
+    all_findings = []
+    calls = 0
+    jobs_run = []
+    for job in candidates[:max_jobs]:
+        task_id = f"AUDIT-{job['id']}"
+        output_path = f"universe/audits/{audit_id}/{job['id']}.json"
+        plan = _load_plan(root)
+        if not any(task["id"] == task_id for task in plan["tasks"]):
+            add_task(root, task_id, "canon-auditor", priority=90, outputs=[output_path])
+        last_error = ""
+        for attempt_number in (1, 2):
+            capsule = {"job": job}
+            if last_error:
+                capsule["repair"] = last_error
+            envelope = build_envelope(
+                root,
+                role="canon-auditor",
+                task_capsule=capsule,
+                imports=list(job.get("imports", [])),
+                state={},
+                tools=[],
+                max_output_tokens=3000,
+            )
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            result = runner("canon-auditor", envelope, Path(claim["capsule"]).parent)
+            calls += 1
+            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+            try:
+                value = _parse_contract_json(str(result["text"]))
+                findings = _validate_audit_output(value)
+            except BookForgeError as exc:
+                last_error = str(exc)
+                _set_attempt_failure(root, claim["attempt"], block=attempt_number == 2, reason=last_error)
+                if attempt_number == 2:
+                    raise BookForgeError(f"Audit job {job['id']} blocked after repair: {last_error}") from exc
+                continue
+            record = {"schema": 1, "audit": audit_id, "job": job, "findings": findings}
+            manifest = stage_outputs(root, claim["attempt"], {output_path: _json_bytes(record)})
+            record_execution(
+                root,
+                claim["attempt"],
+                claim["fence"],
+                output_hash=_sha256_bytes(_json_bytes(manifest)),
+                telemetry=_provider_telemetry(result, envelope, attempt_number),
+            )
+            promote_task(root, claim["attempt"], claim["fence"])
+            all_findings.extend(findings)
+            jobs_run.append(job["id"])
+            for finding in findings:
+                if finding["severity"] in {"blocking", "warning"}:
+                    repair_id = f"REPAIR-{re.sub(r'[^A-Z0-9-]', '-', str(finding['id']).upper())}"
+                    plan = _load_plan(root)
+                    if not any(task["id"] == repair_id for task in plan["tasks"]):
+                        add_task(root, repair_id, "reviser", deps=[task_id], priority=95, inputs=list(finding.get("repair_scope", [])))
+            break
+    return {"audit": audit_id, "candidate_count": len(candidates), "jobs": jobs_run, "calls": calls, "findings": all_findings}
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -3095,6 +3267,13 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("action", choices=("add", "next", "run", "status"))
     translate.add_argument("book")
     translate.add_argument("locale")
+    audit = commands.add_parser("audit")
+    audit_scope = audit.add_mutually_exclusive_group()
+    audit_scope.add_argument("--book")
+    audit_scope.add_argument("--relation")
+    audit_scope.add_argument("--continuity")
+    audit.add_argument("--max-jobs", type=int, default=8)
+    audit.add_argument("--override", action="store_true")
     return parser
 
 
@@ -3148,6 +3327,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
         elif args.command == "translate":
             print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
+        elif args.command == "audit":
+            print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
