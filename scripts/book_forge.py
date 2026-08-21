@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import html
 import hashlib
+import io
 import json
 import os
 import re
@@ -12,6 +14,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
+import uuid
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -3184,6 +3190,234 @@ def audit_continuity(
                         add_task(root, repair_id, "reviser", deps=[task_id], priority=95, inputs=list(finding.get("repair_scope", [])))
             break
     return {"audit": audit_id, "candidate_count": len(candidates), "jobs": jobs_run, "calls": calls, "findings": all_findings}
+
+
+def _normalize_text(value: str) -> str:
+    return unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n")).rstrip() + "\n"
+
+
+def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[str, object]:
+    root = _project_root(project)
+    canonical = _canonical_locale(language)
+    config = _read_json(root / "book-forge.yaml")
+    source_language = _canonical_locale(str(config["source_language"]))
+    if canonical != source_language:
+        raise BookForgeError("Source publication must use the configured source language")
+    book = next((item for item in list_books(root) if item["id"] == book_id), None)
+    if not book:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    contracts = sorted((root / "books" / book_id / "chapters").glob("CH-*.json"))
+    expected = [path.stem for path in contracts]
+    state = _read_json(root / "books" / book_id / "state.yaml")
+    manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
+    present = [path.stem for path in sorted(manuscript_root.glob("CH-*.md"))]
+    if not expected or expected != present or state.get("closed_chapters") != expected:
+        raise BookForgeError("Publication refused: source chapters are missing, incomplete, stale, or out of order")
+    registry = _artifact_registry(root)
+    if registry.get("artifacts"):
+        try:
+            stale = reconcile_artifacts(root)
+        except BookForgeError as exc:
+            raise BookForgeError(f"Publication refused by artifact currentness: {exc}") from exc
+        source_ids = {f"SOURCE-{book_id}-{chapter}" for chapter in expected}
+        if source_ids & set(stale):
+            raise BookForgeError("Publication refused: source chapter artifact is stale")
+    chapters = []
+    input_hashes = {}
+    for chapter_id in expected:
+        path = manuscript_root / f"{chapter_id}.md"
+        text_value = _normalize_text(path.read_text(encoding="utf-8"))
+        chapters.append({"id": chapter_id, "title": next((line[2:].strip() for line in text_value.splitlines() if line.startswith("# ")), chapter_id), "markdown": text_value})
+        input_hashes[f"books/{book_id}/manuscript/chapters/{chapter_id}.md"] = _sha256_bytes(text_value.encode())
+    book_path = root / "books" / book_id / "book.yaml"
+    input_hashes[f"books/{book_id}/book.yaml"] = _file_hash(book_path)
+    identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f"book-forge:{config['universe']}:{book_id}:{canonical}:edition"))
+    assembly = {
+        "schema": 1,
+        "universe": config["universe"],
+        "book": book_id,
+        "title": str(book["title"]),
+        "author": str(config.get("author", "")),
+        "language": canonical,
+        "identifier": identity,
+        "source_epoch": 946684800,
+        "chapters": chapters,
+        "input_hashes": dict(sorted(input_hashes.items())),
+    }
+    assembly["hash"] = _sha256_bytes(_json_bytes(assembly))
+    return assembly
+
+
+def _markdown_xhtml(markdown: str) -> str:
+    blocks = re.split(r"\n\s*\n", markdown.strip())
+    rendered = []
+    for block in blocks:
+        stripped = block.strip()
+        if stripped == "***":
+            rendered.append('<p class="scene-break">* * *</p>')
+        elif stripped.startswith("# "):
+            rendered.append(f"<h1>{html.escape(stripped[2:].strip())}</h1>")
+        elif stripped.startswith("## "):
+            rendered.append(f"<h2>{html.escape(stripped[3:].strip())}</h2>")
+        else:
+            rendered.append(f"<p>{html.escape(' '.join(line.strip() for line in stripped.splitlines()))}</p>")
+    return "\n".join(rendered)
+
+
+def _xhtml_document(title: str, language: str, body: str, *, nav: bool = False) -> bytes:
+    nav_namespace = ' xmlns:epub="http://www.idpf.org/2007/ops"' if nav else ""
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        f'<html xmlns="http://www.w3.org/1999/xhtml"{nav_namespace} xml:lang="{html.escape(language)}" lang="{html.escape(language)}">\n'
+        f'<head><title>{html.escape(title)}</title><link rel="stylesheet" type="text/css" href="styles/epub.css"/></head>\n'
+        f"<body>{body}</body></html>\n"
+    ).encode()
+
+
+def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
+    chapters = assembly["chapters"]
+    chapter_items = []
+    spine_items = []
+    nav_items = []
+    members: list[tuple[str, bytes]] = [
+        ("mimetype", b"application/epub+zip"),
+        (
+            "META-INF/container.xml",
+            b'<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>\n',
+        ),
+    ]
+    for index, chapter in enumerate(chapters, start=1):
+        filename = f"chapter-{index:04d}.xhtml"
+        chapter_items.append(f'<item id="chapter-{index:04d}" href="{filename}" media-type="application/xhtml+xml"/>')
+        spine_items.append(f'<itemref idref="chapter-{index:04d}"/>')
+        nav_items.append(f'<li><a href="{filename}">{html.escape(str(chapter["title"]))}</a></li>')
+        members.append((f"OEBPS/{filename}", _xhtml_document(str(chapter["title"]), str(assembly["language"]), _markdown_xhtml(str(chapter["markdown"])))))
+    modified = "2000-01-01T00:00:00Z"
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id" xml:lang="{lang}">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:identifier id="book-id">urn:uuid:{identifier}</dc:identifier><dc:title>{title}</dc:title>'
+        '<dc:language>{lang}</dc:language><dc:creator>{author}</dc:creator>'
+        '<meta property="dcterms:modified">{modified}</meta></metadata>'
+        '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+        '<item id="css" href="styles/epub.css" media-type="text/css"/>{items}</manifest>'
+        '<spine>{spine}</spine></package>\n'
+    ).format(
+        lang=html.escape(str(assembly["language"])),
+        identifier=assembly["identifier"],
+        title=html.escape(str(assembly["title"])),
+        author=html.escape(str(assembly["author"])),
+        modified=modified,
+        items="".join(chapter_items),
+        spine="".join(spine_items),
+    ).encode()
+    nav_body = f'<nav epub:type="toc" id="toc"><h1>Contents</h1><ol>{"".join(nav_items)}</ol></nav>'
+    css = (Path(__file__).resolve().parents[1] / "assets" / "publication" / "epub.css").read_bytes()
+    members.extend(
+        [
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/nav.xhtml", _xhtml_document("Contents", str(assembly["language"]), nav_body, nav=True)),
+            ("OEBPS/styles/epub.css", css),
+        ]
+    )
+    first = members[:2]
+    rest = sorted(members[2:], key=lambda item: item[0])
+    return first + rest
+
+
+def _deterministic_zip(members: list[tuple[str, bytes]]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED, strict_timestamps=True) as archive:
+        for name, value in members:
+            info = zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            info.extra = b""
+            info.comment = b""
+            archive.writestr(info, value)
+    return output.getvalue()
+
+
+def validate_epub(path: Path | str, *, expected_chapters: int) -> dict[str, object]:
+    target = Path(path)
+    try:
+        with zipfile.ZipFile(target) as archive:
+            infos = archive.infolist()
+            if not infos or infos[0].filename != "mimetype" or infos[0].compress_type != zipfile.ZIP_STORED:
+                raise BookForgeError("EPUB mimetype must be the first stored member")
+            if archive.read("mimetype") != b"application/epub+zip":
+                raise BookForgeError("EPUB mimetype content is invalid")
+            if any(info.date_time != (2000, 1, 1, 0, 0, 0) for info in infos):
+                raise BookForgeError("EPUB contains nondeterministic member timestamps")
+            names = {info.filename for info in infos}
+            opf = ET.fromstring(archive.read("OEBPS/content.opf"))
+            namespace = {"opf": "http://www.idpf.org/2007/opf"}
+            chapter_items = []
+            for item in opf.findall(".//opf:item", namespace):
+                href = item.attrib["href"]
+                member = f"OEBPS/{href}"
+                if member not in names:
+                    raise BookForgeError(f"EPUB manifest target is missing: {href}")
+                if item.attrib.get("id", "").startswith("chapter-"):
+                    chapter_items.append(member)
+            if len(chapter_items) != expected_chapters:
+                raise BookForgeError("EPUB chapter completeness check failed")
+            for member in chapter_items + ["OEBPS/nav.xhtml"]:
+                ET.fromstring(archive.read(member))
+    except (zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
+        raise BookForgeError(f"Invalid EPUB structure: {exc}") from exc
+    return {"valid": True, "chapters": expected_chapters, "sha256": _file_hash(target)}
+
+
+def _skill_commit() -> str:
+    result = subprocess.run(
+        ["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "uncommitted"
+
+
+def export_epub(project: Path | str, book_id: str, language: str) -> dict[str, object]:
+    root = _project_root(project)
+    assembly = assemble_edition(root, book_id, language)
+    members = _epub_members(assembly)
+    epub_bytes = _deterministic_zip(members)
+    output_dir = root / "dist" / book_id / str(assembly["language"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{book_id}.epub"
+    _write_bytes_atomic(output_path, epub_bytes)
+    validation = validate_epub(output_path, expected_chapters=len(assembly["chapters"]))
+    manifest = {
+        "schema": 1,
+        "format": "epub",
+        "book": book_id,
+        "language": assembly["language"],
+        "identifier": assembly["identifier"],
+        "source_epoch": assembly["source_epoch"],
+        "assembly_hash": assembly["hash"],
+        "input_hashes": assembly["input_hashes"],
+        "toolchain": {"builder": "book-forge-stdlib-epub-v1", "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"},
+        "skill_commit": _skill_commit(),
+        "output_sha256": validation["sha256"],
+    }
+    manifest_path = output_dir / f"{book_id}.epub.manifest.json"
+    _write_json(manifest_path, manifest)
+    registry = _artifact_registry(root)
+    dependencies = []
+    for chapter in assembly["chapters"]:
+        artifact_id = f"SOURCE-{book_id}-{chapter['id']}"
+        if artifact_id not in registry["artifacts"]:
+            register_artifact(root, artifact_id, "source-chapter", path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter['id']}.md")
+            registry = _artifact_registry(root)
+        dependencies.append(artifact_id)
+    edition_id = f"EDITION-{book_id}-{assembly['language']}-EPUB"
+    if edition_id not in registry["artifacts"]:
+        register_artifact(root, edition_id, "epub-edition", path=output_path, dependencies=dependencies)
+    return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
 
 
 def render_plan(project: Path | str) -> str:

@@ -161,24 +161,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase F — Cross-book assurance and publication
 
-### M20: Assemble and export deterministic EPUB editions
-
-**Depends on:** M9, M14
-
-**Why:** Source manuscripts need a validated publication representation before format-specific rendering.
-
-**Approach:** Assemble one normalized source-language document from current chapters, metadata, front/back matter, cover, and typography assets. Pin dependencies; normalize identifiers, ZIP order, timestamps, locale, timezone, and metadata; record input and toolchain hashes before rendering EPUB.
-
-**Tasks:**
-- [ ] Define publication assembly, freshness, metadata, matter, order, and asset contracts
-- [ ] Refuse stale, missing, incomplete, or mixed-language inputs
-- [ ] Build navigation, language metadata, stylesheet, and embedded assets
-- [ ] Validate EPUB structure, links, images, fonts, and chapter completeness
-- [ ] Test: integration — produce byte-identical rebuilds in the pinned environment
-- [ ] Commit & push
-
-**Done when:** Repeated fixture builds have identical EPUB bytes and a complete verifiable build manifest.
-
 ### M21: Export deterministic source PDF editions
 
 **Depends on:** M20

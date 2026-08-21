@@ -1,0 +1,5 @@
+body { font-family: serif; line-height: 1.45; margin: 5%; }
+h1 { break-before: page; text-align: center; margin: 2em 0 1em; }
+p { margin: 0; text-indent: 1.2em; }
+h1 + p, p.scene-break { text-indent: 0; }
+p.scene-break { text-align: center; margin: 1.5em 0; }

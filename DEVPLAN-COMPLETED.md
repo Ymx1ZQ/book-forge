@@ -359,3 +359,21 @@
 - [x] Commit & push
 
 **Done when:** Fixture audits cover every declared shared edge, avoid all-pairs loading, and schedule only evidence-backed work.
+
+### M20: Assemble and export deterministic EPUB editions ✅
+
+**Depends on:** M9, M14
+
+**Why:** Source manuscripts need a validated publication representation before format-specific rendering.
+
+**Approach:** Assemble one normalized source-language document from current chapters, metadata, front/back matter, cover, and typography assets. Pin dependencies; normalize identifiers, ZIP order, timestamps, locale, timezone, and metadata; record input and toolchain hashes before rendering EPUB.
+
+**Tasks:**
+- [x] Define publication assembly, freshness, metadata, matter, order, and asset contracts
+- [x] Refuse stale, missing, incomplete, or mixed-language inputs
+- [x] Build navigation, language metadata, stylesheet, and embedded assets
+- [x] Validate EPUB structure, links, images, fonts, and chapter completeness
+- [x] Test: integration — produce byte-identical rebuilds in the pinned environment
+- [x] Commit & push
+
+**Done when:** Repeated fixture builds have identical EPUB bytes and a complete verifiable build manifest.
