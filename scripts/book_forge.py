@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -2133,9 +2134,294 @@ def run_next(
         for contract_path in sorted((root / "books" / str(book["id"]) / "chapters").glob("CH-*.json")):
             contract = _read_json(contract_path)
             draft_path = root / "books" / str(book["id"]) / "work" / str(contract["id"]) / "draft.md"
+            final_path = root / "books" / str(book["id"]) / "manuscript" / "chapters" / f"{contract['id']}.md"
+            if final_path.exists():
+                continue
+            if draft_path.exists() and not contract.get("pivotal"):
+                return review_and_close_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
             if not draft_path.exists() and not contract.get("pivotal"):
                 return draft_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
     raise BookForgeError("No ordinary chapter draft is ready; design a book or use the pivotal workflow")
+
+
+def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str, dict[str, object]]:
+    draft_id = f"DRAFT-{book_id}-{chapter_id}"
+    plan = _load_plan(root)
+    if not any(task["id"] == draft_id and task["state"] == "succeeded" for task in plan["tasks"]):
+        raise BookForgeError("Chapter must have a promoted draft before review")
+    specs = [
+        (
+            f"REVIEW-COLD-{book_id}-{chapter_id}",
+            "cold-reader",
+            [draft_id],
+            [f"books/{book_id}/reviews/{chapter_id}/cold-reader.json"],
+        ),
+        (
+            f"REVIEW-TECH-{book_id}-{chapter_id}",
+            "technical-editor",
+            [draft_id],
+            [f"books/{book_id}/reviews/{chapter_id}/technical-editor.json"],
+        ),
+    ]
+    existing = {str(task["id"]) for task in plan["tasks"]}
+    for task_id, role, deps, outputs in specs:
+        if task_id not in existing:
+            add_task(root, task_id, role, deps=deps, priority=60, outputs=outputs)
+    reviser_id = f"REVISE-{book_id}-{chapter_id}"
+    plan = _load_plan(root)
+    if not any(task["id"] == reviser_id for task in plan["tasks"]):
+        add_task(
+            root,
+            reviser_id,
+            "reviser",
+            deps=[specs[0][0], specs[1][0]],
+            priority=70,
+            outputs=[
+                f"books/{book_id}/manuscript/chapters/{chapter_id}.md",
+                f"books/{book_id}/state.yaml",
+                f"books/{book_id}/reader-state.md",
+                f"books/{book_id}/reviews/{chapter_id}/dispositions.json",
+            ],
+        )
+    plan = _load_plan(root)
+    ids = [spec[0] for spec in specs] + [reviser_id]
+    return {task_id: next(task for task in plan["tasks"] if task["id"] == task_id) for task_id in ids}
+
+
+def _provider_telemetry(result: dict[str, object], envelope: dict[str, object], call_number: int = 1) -> dict[str, object]:
+    telemetry = {key: result[key] for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
+    telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
+    return telemetry
+
+
+def _validate_findings(value: dict[str, object], *, technical: bool) -> list[dict[str, object]]:
+    findings = value.get("findings")
+    if not isinstance(findings, list):
+        raise BookForgeError("Review output has no findings list")
+    seen = set()
+    for finding in findings:
+        required = {"id", "dimension", "severity", "evidence", "issue", "fix_required"}
+        if not isinstance(finding, dict) or not required <= finding.keys():
+            raise BookForgeError("Review finding is missing required evidence fields")
+        if finding["id"] in seen or finding["severity"] not in {"blocking", "warning", "note"}:
+            raise BookForgeError("Review finding has duplicate ID or invalid severity")
+        if technical and "objective" not in finding:
+            raise BookForgeError("Technical finding must declare objective status")
+        seen.add(finding["id"])
+    return findings
+
+
+def _materialize_review_result(
+    root: Path,
+    task_id: str,
+    claim: dict[str, object],
+    envelope: dict[str, object],
+    result: dict[str, object],
+    value: dict[str, object],
+) -> dict[str, object]:
+    plan = _load_plan(root)
+    task = next(row for row in plan["tasks"] if row["id"] == task_id)
+    output = str(task["outputs"][0])
+    manifest = stage_outputs(root, claim["attempt"], {output: _json_bytes({"schema": 1, **value})})
+    receipt = record_execution(
+        root,
+        claim["attempt"],
+        claim["fence"],
+        output_hash=_sha256_bytes(_json_bytes(manifest)),
+        telemetry=_provider_telemetry(result, envelope),
+    )
+    promote_task(root, claim["attempt"], claim["fence"])
+    return receipt
+
+
+def _call_parallel_reviews(
+    root: Path,
+    book_id: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    draft: str,
+    writer_consequences: dict[str, object],
+    runner,
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
+    jobs = []
+    for role, task_id in (
+        ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}"),
+        ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}"),
+    ):
+        capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft}
+        if role == "technical-editor":
+            capsule["writer_consequences"] = writer_consequences.get("consequences", [])
+        envelope = build_envelope(
+            root,
+            role=role,
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state={},
+            tools=[],
+            max_output_tokens=2500 if role == "cold-reader" else 3000,
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+        jobs.append((role, task_id, envelope, claim, attempt_dir))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(runner, role, envelope, attempt_dir): (role, task_id, envelope, claim) for role, task_id, envelope, claim, attempt_dir in jobs}
+        results = []
+        for future, metadata in futures.items():
+            results.append((*metadata, future.result()))
+    parsed: dict[str, dict[str, object]] = {}
+    receipts = []
+    for role, task_id, envelope, claim, result in results:
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        value = _parse_contract_json(str(result["text"]))
+        _validate_findings(value, technical=role == "technical-editor")
+        if role == "technical-editor" and not isinstance(value.get("consequences"), list):
+            raise BookForgeError("Technical review has no independent consequence extraction")
+        parsed[role] = value
+        receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
+    return parsed["cold-reader"], parsed["technical-editor"], receipts
+
+
+def _validate_revision(
+    contract: dict[str, object],
+    value: dict[str, object],
+    findings: list[dict[str, object]],
+    technical_consequences: list[dict[str, object]],
+) -> dict[str, object]:
+    validated = validate_writer_output(contract, json.dumps(value))
+    dispositions = value.get("dispositions")
+    if not isinstance(dispositions, list):
+        raise BookForgeError("Revision has no finding dispositions")
+    by_finding = {str(row.get("finding")): row for row in dispositions if isinstance(row, dict)}
+    if set(by_finding) != {str(finding["id"]) for finding in findings}:
+        raise BookForgeError("Revision must disposition every finding exactly once")
+    for finding in findings:
+        disposition = by_finding[str(finding["id"])]
+        required = {"action", "evidence", "loss", "supersedes"}
+        if not required <= disposition.keys():
+            raise BookForgeError(f"Incomplete disposition for {finding['id']}")
+        if finding.get("objective") and finding["severity"] == "blocking" and disposition["action"] != "repaired":
+            raise BookForgeError(f"Objective blocker {finding['id']} cannot be dismissed")
+    revised_facts = {str(row.get("fact")) for row in value.get("consequences", []) if isinstance(row, dict)}
+    required_facts = {str(row.get("fact")) for row in technical_consequences}
+    if not required_facts <= revised_facts:
+        raise BookForgeError("Revision omitted an independently extracted shared consequence")
+    if not isinstance(value.get("reader_state"), str) or not value["reader_state"].strip():
+        raise BookForgeError("Revision has no compact reader state")
+    return validated
+
+
+def review_and_close_chapter(
+    project: Path | str,
+    book_id: str,
+    chapter_id: str,
+    *,
+    provider=None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    draft_path = root / "books" / book_id / "work" / chapter_id / "draft.md"
+    if not draft_path.is_file():
+        raise BookForgeError("No promoted draft is available for review")
+    draft = draft_path.read_text(encoding="utf-8")
+    writer_consequences = _read_json(root / "books" / book_id / "work" / chapter_id / "consequences.json")
+    _ensure_review_tasks(root, book_id, chapter_id)
+    cold, technical, receipts = _call_parallel_reviews(root, book_id, chapter_id, contract, draft, writer_consequences, runner)
+    findings = list(cold["findings"]) + list(technical["findings"])
+    reviser_id = f"REVISE-{book_id}-{chapter_id}"
+    envelope = build_envelope(
+        root,
+        role="reviser",
+        task_capsule={"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]},
+        imports=list(contract.get("imports", [])),
+        state=_read_json(root / "books" / book_id / "state.yaml"),
+        tools=[],
+        max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+    )
+    claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
+    attempt_dir = Path(claim["capsule"]).parent
+    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+    result = runner("reviser", envelope, attempt_dir)
+    mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+    value = _parse_contract_json(str(result["text"]))
+    try:
+        validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
+    except BookForgeError as exc:
+        _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
+        raise
+    state_path = root / "books" / book_id / "state.yaml"
+    state = _read_json(state_path)
+    if chapter_id in state.get("closed_chapters", []):
+        raise BookForgeError("Chapter is already closed")
+    state.setdefault("closed_chapters", []).append(chapter_id)
+    state.setdefault("consequences", []).extend(value["consequences"])
+    state["previous_chapter_tail"] = str(validated["prose_markdown"])[-2000:]
+    outputs = {
+        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
+        f"books/{book_id}/state.yaml": _json_bytes(state),
+        f"books/{book_id}/reader-state.md": f"# Reader State\n\n{value['reader_state'].strip()}\n",
+        f"books/{book_id}/reviews/{chapter_id}/dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": value["dispositions"]}),
+    }
+    manifest = stage_outputs(root, claim["attempt"], outputs)
+    revision_receipt = record_execution(
+        root,
+        claim["attempt"],
+        claim["fence"],
+        output_hash=_sha256_bytes(_json_bytes(manifest)),
+        telemetry=_provider_telemetry(result, envelope),
+    )
+    receipts.append(revision_receipt)
+    objective_blockers = [finding for finding in findings if finding.get("objective") and finding["severity"] == "blocking"]
+    calls = 3
+    if objective_blockers:
+        verify_id = f"VERIFY-{book_id}-{chapter_id}"
+        plan = _load_plan(root)
+        if not any(task["id"] == verify_id for task in plan["tasks"]):
+            add_task(
+                root,
+                verify_id,
+                "technical-editor",
+                deps=[f"REVIEW-COLD-{book_id}-{chapter_id}", f"REVIEW-TECH-{book_id}-{chapter_id}"],
+                priority=75,
+                outputs=[f"books/{book_id}/reviews/{chapter_id}/verification.json"],
+            )
+        verification_envelope = build_envelope(
+            root,
+            role="technical-editor",
+            task_capsule={"mode": "changed-span-verification", "blockers": objective_blockers, "revised_prose": validated["prose_markdown"], "dispositions": value["dispositions"]},
+            imports=list(contract.get("imports", [])),
+            state={},
+            tools=[],
+            max_output_tokens=1500,
+        )
+        verify_claim = claim_task(root, verify_id, request_hash=str(verification_envelope["hash"]))
+        verify_dir = Path(verify_claim["capsule"]).parent
+        verification_result = runner("technical-editor", verification_envelope, verify_dir)
+        mark_provider_accepted(root, verify_claim["attempt"], str(verification_result["session_id"]))
+        verification = _parse_contract_json(str(verification_result["text"]))
+        if verification.get("verified") is not True or verification.get("findings"):
+            _set_attempt_failure(root, verify_claim["attempt"], block=True, reason="Independent semantic verification failed")
+            raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
+        receipts.append(_materialize_review_result(root, verify_id, verify_claim, verification_envelope, verification_result, verification))
+        calls += 1
+    promote_task(root, claim["attempt"], claim["fence"])
+    machine_state = _read_json(root / ".book-forge" / "state.json")
+    machine_state["source_locked"] = True
+    machine_state["source_language"] = _read_json(root / "book-forge.yaml")["source_language"]
+    _write_json(root / ".book-forge" / "state.json", machine_state)
+    artifact_id = f"SOURCE-{book_id}-{chapter_id}"
+    registry = _artifact_registry(root)
+    if artifact_id not in registry["artifacts"]:
+        register_artifact(
+            root,
+            artifact_id,
+            "source-chapter",
+            path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md",
+            dependencies=list(contract.get("imports", [])),
+            entities=[str(contract.get("pov"))],
+        )
+    return {"state": "closed", "book": book_id, "chapter": chapter_id, "calls": calls, "receipts": receipts}
 
 
 def render_plan(project: Path | str) -> str:

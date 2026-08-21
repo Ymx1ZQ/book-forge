@@ -245,3 +245,22 @@
 - [x] Commit & push
 
 **Done when:** The happy path materializes one reviewable draft in one provider call and any recovery remains inside the declared ceiling.
+
+### M14: Review, revise, and close a chapter ✅
+
+**Depends on:** M13
+
+**Why:** A fast draft still needs independent reader response, canon checking, controlled revision, and recorded consequences.
+
+**Approach:** Run cold-reader and technical-editor calls in parallel with isolated envelopes, then let one reviser disposition every finding and produce a replacement. Make objective blockers fix-required. If any semantic blocker existed, spend the single recovery call on an independent changed-span verification; one failed verification blocks the chapter without another loop.
+
+**Tasks:**
+- [x] Define evidence, severity, disposition, loss, fix, and supersession fields
+- [x] Make the technical editor independently extract shared consequences from the draft
+- [x] Prevent revisers from dismissing objective blocking findings without repair
+- [x] Verify repaired semantic blockers independently within the recovery-call ceiling
+- [x] Update prose and derived state through one promotion transaction
+- [x] Test: integration — detect a seeded undisclosed consequence and block incomplete state
+- [x] Commit & push
+
+**Done when:** The fixture closes in four happy-path calls with no unresolved blocker records and all expected hashes promoted.

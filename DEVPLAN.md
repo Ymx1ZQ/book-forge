@@ -157,25 +157,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase D — Fast chapter production
 
-### M14: Review, revise, and close a chapter
-
-**Depends on:** M13
-
-**Why:** A fast draft still needs independent reader response, canon checking, controlled revision, and recorded consequences.
-
-**Approach:** Run cold-reader and technical-editor calls in parallel with isolated envelopes, then let one reviser disposition every finding and produce a replacement. Make objective blockers fix-required. If any semantic blocker existed, spend the single recovery call on an independent changed-span verification; one failed verification blocks the chapter without another loop.
-
-**Tasks:**
-- [ ] Define evidence, severity, disposition, loss, fix, and supersession fields
-- [ ] Make the technical editor independently extract shared consequences from the draft
-- [ ] Prevent revisers from dismissing objective blocking findings without repair
-- [ ] Verify repaired semantic blockers independently within the recovery-call ceiling
-- [ ] Update prose and derived state through one promotion transaction
-- [ ] Test: integration — detect a seeded undisclosed consequence and block incomplete state
-- [ ] Commit & push
-
-**Done when:** The fixture closes in four happy-path calls with no unresolved blocker records and all expected hashes promoted.
-
 ### M15: Judge only explicitly pivotal chapters
 
 **Depends on:** M13, M14

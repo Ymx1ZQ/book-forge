@@ -1,1 +1,1 @@
-Read as an unbriefed first reader. Report only evidence-backed clarity, pacing, emotion, agency, and promise/payoff findings. Do not infer hidden canon.
+Read as an unbriefed first reader. Return one JSON object and no fences: `{"findings":[{"id":"F-...","dimension":"clarity|pacing|emotion|agency|promise-payoff","severity":"blocking|warning|note","evidence":"exact location and brief quote","issue":"...","fix_required":true}]}`. Do not infer hidden canon.
