@@ -5,6 +5,8 @@ REPO_URL="${BOOK_FORGE_REPO_URL:-https://github.com/Ymx1ZQ/book-forge.git}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_HOME="${BOOK_FORGE_CONFIG_HOME:-$HOME/.config/opencode}"
 DEST="$CONFIG_HOME/skills/book-forge"
+GLOBAL_AGENT="$CONFIG_HOME/agents/book-forge-orchestrator.md"
+GLOBAL_COMMAND="$CONFIG_HOME/commands/book-forge.md"
 FORCE=false
 CHECK=false
 CLEANUP_DIR=""
@@ -55,7 +57,12 @@ else
     SRC_ROOT="$CLEANUP_DIR/book-forge"
 fi
 
-for required in SKILL.md agents/openai.yaml; do
+SOURCE_COMMIT="$(git -C "$SRC_ROOT" rev-parse HEAD 2>/dev/null || true)"
+if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    SOURCE_COMMIT="0000000000000000000000000000000000000000"
+fi
+
+for required in SKILL.md agents/openai.yaml assets/opencode/book-forge-orchestrator.md assets/opencode/book-forge-command.md; do
     if [ ! -f "$SRC_ROOT/$required" ]; then
         echo "Error: runtime payload is missing $required." >&2
         exit 1
@@ -87,7 +94,17 @@ check_payload() {
         fi
     done
     if [ "$status" -eq 0 ]; then
-        echo "OK: installed book-forge matches $SRC_ROOT"
+        if ! cmp -s "$SRC_ROOT/assets/opencode/book-forge-orchestrator.md" "$GLOBAL_AGENT"; then
+            echo "DRIFT: global book-forge orchestrator differs from source"
+            status=1
+        fi
+        if ! cmp -s "$SRC_ROOT/assets/opencode/book-forge-command.md" "$GLOBAL_COMMAND"; then
+            echo "DRIFT: global /book-forge command differs from source"
+            status=1
+        fi
+    fi
+    if [ "$status" -eq 0 ]; then
+        echo "OK: installed book-forge and global OpenCode entrypoints match $SRC_ROOT"
     fi
     return "$status"
 }
@@ -97,8 +114,8 @@ if [ "$CHECK" = true ]; then
     exit $?
 fi
 
-if [ -d "$DEST" ] && [ "$FORCE" != true ]; then
-    printf 'book-forge already exists at %s. Replace it? [y/N] ' "$DEST"
+if { [ -d "$DEST" ] || [ -e "$GLOBAL_AGENT" ] || [ -e "$GLOBAL_COMMAND" ]; } && [ "$FORCE" != true ]; then
+    printf 'book-forge components already exist under %s. Replace them? [y/N] ' "$CONFIG_HOME"
     read -r reply
     case "$reply" in y|Y|yes|YES) ;; *) echo "Installation cancelled."; exit 0 ;; esac
 fi
@@ -110,9 +127,16 @@ for entry in "${PAYLOAD[@]}"; do
         cp -R "$SRC_ROOT/$entry" "$STAGING/$entry"
     fi
 done
+find "$STAGING" -type f -name '*.pyc' -delete
+find "$STAGING" -type d -name __pycache__ -prune -exec rm -rf -- {} +
 
 if [ -d "$DEST" ]; then
     rm -rf "$DEST"
 fi
 mv "$STAGING" "$DEST"
+printf '{\n  "schema": 1,\n  "source_commit": "%s"\n}\n' "$SOURCE_COMMIT" >"$DEST/INSTALL-MANIFEST.json"
+mkdir -p "$(dirname "$GLOBAL_AGENT")" "$(dirname "$GLOBAL_COMMAND")"
+install -m 0644 "$SRC_ROOT/assets/opencode/book-forge-orchestrator.md" "$GLOBAL_AGENT"
+install -m 0644 "$SRC_ROOT/assets/opencode/book-forge-command.md" "$GLOBAL_COMMAND"
 echo "Installed book-forge -> $DEST"
+echo "Installed OpenCode command -> $GLOBAL_COMMAND"

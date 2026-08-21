@@ -449,3 +449,29 @@
 - [x] Commit & push
 
 **Done when:** Every enumerated fault has one deterministic observed state and recovery action with no duplicate promotion or lost artifact.
+
+### M25: Forward-test the complete skill before release ✅
+
+**Depends on:** M11–M24
+
+**Why:** Fresh agents must operate the skill correctly without access to the design conversation or hidden assumptions.
+
+**Approach:** Create a disposable fixture universe with unrelated, sequel, parallel, crossover, and alternate-continuity books. Run realistic commands in fresh OpenCode sessions, translate one edition, export both formats, validate installation drift, and compare observed budgets with hermetic expectations.
+
+**Tasks:**
+- [x] Exercise every public route and selector with fresh agents
+- [x] Verify generated projects have no project shell or Claude instruction dependency
+- [x] Run skill validation, automated suites, install drift check, and live smoke tests
+- [x] Record measured budgets and resolve every blocking evaluation finding
+- [x] Test: end-to-end — complete the fixture lifecycle from init through both exports
+- [x] Commit & push
+
+**Release evidence (2026-08-22):**
+- 67 automated tests passed, including a complete fixture lifecycle and deterministic EPUB/PDF rebuilds.
+- The skill validator, shell syntax checks, temporary install, and install drift checks passed.
+- Two context-isolated forward tests selected the correct route/reference sequence without hidden conversation state.
+- OpenCode 1.18.18 loaded the installed skill and resolved the pinned orchestrator to OpenRouter, `deepseek/deepseek-v4-flash-0731`, variant `high`.
+- Live smoke session `ses_fd9a4ae00ffePNDm1jpej3NUrv` returned `BOOK_FORGE_READY`; it used 4,999 input, 53 output, 30 reasoning, and 3,584 cache-read tokens at a total cost of 0.000472204 USD.
+- No blocking evaluation finding remained.
+
+**Done when:** A clean install completes the fixture lifecycle within all contracts and no blocking forward-test finding remains.

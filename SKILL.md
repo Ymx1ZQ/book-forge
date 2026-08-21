@@ -5,6 +5,33 @@ description: Design, write, review, resume, translate, audit, and publish token-
 
 # Book Forge
 
+## Route protocol
+
+Resolve the directory containing this loaded `SKILL.md` as `SKILL_ROOT`. The
+only state-writing executable is `SKILL_ROOT/scripts/book_forge.py`. Invoke it
+as `python3 SKILL_ROOT/scripts/book_forge.py --project PROJECT ...`; place the
+global `--project` option before the selector.
+
+Choose exactly one route for the current command and read only that one-level
+reference before acting:
+
+| Selector | Reference |
+|---|---|
+| `init` | `references/init.md` |
+| `migrate`, `continuity`, `add-book`, `relate`, `collection` | `references/catalog.md` |
+| `design` | `references/design.md` |
+| `run` | `references/run.md` |
+| `pause`, `resume`, `status` | `references/lifecycle.md` |
+| `audit` | `references/audit.md` |
+| `translate` | `references/translate.md` |
+| `export` | `references/export.md` |
+
+For a multi-command request, finish and checkpoint one command before loading
+the next route. Do not read the development plan, unrelated references, whole
+manuscripts, or provider logs unless the active route explicitly requires it.
+Return the helper's result in concise user-facing language. On an error, stop;
+never bypass a block by editing canonical files.
+
 ## Product contract
 
 - Make the universe the root object and allow it to contain any number of books.
@@ -24,11 +51,11 @@ description: Design, write, review, resume, translate, audit, and publish token-
 Preserve this compact route set while implementing the plan:
 
 ```text
-book-forge init [--source-language <bcp47>]
+book-forge init [--title <title>] [--source-language <bcp47>]
 book-forge migrate <check|dry-run|apply|rollback>
-book-forge continuity <add|relate> ...
-book-forge add-book [--continuity <id>]
-book-forge relate <book...> --type <type> [--import <block>...]
+book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>] [--import <block>...]
+book-forge add-book <title> [--continuity <id>]
+book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
 book-forge design <universe|book> [--book <id>]
 book-forge run [--book <id>] [--task <id>] [--next]
@@ -41,9 +68,6 @@ book-forge export <book> --lang <tag> --format <epub|pdf|all>
 ```
 
 Make `run` compose task-specific roles rather than duplicate their instructions.
-Keep detailed workflows in one-level `references/` files and load only the route
-needed for the current command. Put deterministic state, context, validation,
-and publication operations in bundled helpers under `scripts/`.
 
 ## Operational invariants
 

@@ -65,11 +65,11 @@ IDs and explicit imports over semantic retrieval.
 ## Public command selectors
 
 ```text
-book-forge init [--source-language <bcp47>]
+book-forge init [--title <title>] [--source-language <bcp47>]
 book-forge migrate <check|dry-run|apply|rollback>
-book-forge continuity <add|relate> ...
-book-forge add-book [--continuity <id>]
-book-forge relate <book...> --type <type> [--import <block>...]
+book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>] [--import <block>...]
+book-forge add-book <title> [--continuity <id>]
+book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
 book-forge design <universe|book> [--book <id>]
 book-forge run [--book <id>] [--task <id>] [--next]
@@ -162,24 +162,6 @@ dist/<book-id>/<bcp47>/
 ## Phase F — Cross-book assurance and publication
 
 ## Phase G — Measured reliability
-
-### M25: Forward-test the complete skill before release
-
-**Depends on:** M11–M24
-
-**Why:** Fresh agents must operate the skill correctly without access to the design conversation or hidden assumptions.
-
-**Approach:** Create a disposable fixture universe with unrelated, sequel, parallel, crossover, and alternate-continuity books. Run realistic commands in fresh OpenCode sessions, translate one edition, export both formats, validate installation drift, and compare observed budgets with hermetic expectations.
-
-**Tasks:**
-- [ ] Exercise every public route and selector with fresh agents
-- [ ] Verify generated projects have no project shell or Claude instruction dependency
-- [ ] Run skill validation, automated suites, install drift check, and live smoke tests
-- [ ] Record measured budgets and resolve every blocking evaluation finding
-- [ ] Test: end-to-end — complete the fixture lifecycle from init through both exports
-- [ ] Commit & push
-
-**Done when:** A clean install completes the fixture lifecycle within all contracts and no blocking forward-test finding remains.
 
 ## Out of scope
 

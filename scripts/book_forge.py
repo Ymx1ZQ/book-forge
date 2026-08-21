@@ -96,6 +96,16 @@ def _project_root(project: Path | str) -> Path:
     root = Path(project).expanduser().resolve()
     if not (root / "book-forge.yaml").is_file():
         raise BookForgeError(f"Not a Book Forge universe: {root}")
+    state_path = root / ".book-forge" / "state.json"
+    if state_path.is_file():
+        machine_state = _read_json(state_path)
+        if machine_state.get("source_locked"):
+            configured = _canonical_locale(str(_read_json(root / "book-forge.yaml").get("source_language", "")))
+            locked = _canonical_locale(str(machine_state.get("source_language", "")))
+            if configured != locked:
+                raise BookForgeError(
+                    f"Source language is locked to {locked} after chapter closure; restore book-forge.yaml"
+                )
     return root
 
 
@@ -1258,11 +1268,28 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
     return report
 
 
-def status_project(project: Path | str) -> dict[str, object]:
+def status_project(
+    project: Path | str,
+    *,
+    book_id: str | None = None,
+    run_id: str | None = None,
+    locale: str | None = None,
+) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
+    if book_id and book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    selected_tasks = plan["tasks"]
+    if book_id:
+        path_marker = f"books/{book_id}/"
+        selected_tasks = [
+            task
+            for task in selected_tasks
+            if book_id in str(task["id"])
+            or any(path_marker in str(value) for value in [*task.get("inputs", []), *task.get("outputs", [])])
+        ]
     counts: dict[str, int] = {}
-    for task in plan["tasks"]:
+    for task in selected_tasks:
         counts[str(task["state"])] = counts.get(str(task["state"]), 0) + 1
     transaction_states: dict[str, int] = {}
     transactions = root / ".book-forge" / "transactions"
@@ -1271,16 +1298,44 @@ def status_project(project: Path | str) -> dict[str, object]:
             state = str(_read_json(path)["state"])
             transaction_states[state] = transaction_states.get(state, 0) + 1
     control = _control(root)
+    selected_run_id = run_id or control.get("active_run")
     run = None
-    if control.get("active_run"):
-        run = _read_json(root / ".book-forge" / "runs" / str(control["active_run"]) / "run.json")
-    return {
+    if selected_run_id:
+        run_path = root / ".book-forge" / "runs" / str(selected_run_id) / "run.json"
+        if not run_path.is_file():
+            raise BookForgeError(f"Unknown run: {selected_run_id}")
+        run = _read_json(run_path)
+    telemetry = telemetry_report(root)
+    scope: dict[str, object] = {}
+    if book_id:
+        scope["book"] = book_id
+        scope["book_telemetry"] = telemetry["by_book"].get(book_id, _telemetry_bucket())
+    if run_id:
+        scope["run"] = run_id
+        scope["run_telemetry"] = telemetry["by_run"].get(run_id, _telemetry_bucket())
+    if locale:
+        canonical = _canonical_locale(locale)
+        locale_rows = []
+        candidate_books = [book_id] if book_id else [str(book["id"]) for book in list_books(root)]
+        for candidate in candidate_books:
+            state_path = root / "books" / str(candidate) / "translations" / canonical / "state.yaml"
+            if state_path.is_file():
+                locale_rows.append({"book": candidate, "state": _read_json(state_path)})
+        if not locale_rows:
+            raise BookForgeError(f"No translation workspace for locale {canonical} in the selected scope")
+        scope["locale"] = canonical
+        scope["locales"] = locale_rows
+        scope["locale_telemetry"] = telemetry["by_locale"].get(canonical, _telemetry_bucket())
+    result = {
         "tasks": counts,
         "transactions": transaction_states,
         "plan_hash": control["plan_hash"],
         "run": run,
-        "telemetry": telemetry_report(root),
+        "telemetry": telemetry,
     }
+    if scope:
+        result["scope"] = scope
+    return result
 
 
 def _run_path(root: Path, run_id: str) -> Path:
@@ -1354,11 +1409,13 @@ def mark_provider_accepted(
     return attempt
 
 
-def pause_run(project: Path | str, *, emergency: bool = False) -> dict[str, object]:
+def pause_run(project: Path | str, *, run_id: str | None = None, emergency: bool = False) -> dict[str, object]:
     root = _project_root(project)
     control = _control(root)
     if not control.get("active_run"):
         raise BookForgeError("No active run")
+    if run_id and run_id != control["active_run"]:
+        raise BookForgeError(f"Requested run {run_id} is not the active run {control['active_run']}")
     run_path = _run_path(root, str(control["active_run"]))
     run = _read_json(run_path)
     if run["state"] not in {"running", "pausing"}:
@@ -1400,11 +1457,18 @@ def _block_descendants(plan: dict[str, object], task_id: str) -> None:
                 task["state"] = "blocked"
 
 
-def resume_run(project: Path | str, *, resolutions: dict[str, str] | None = None) -> dict[str, object]:
+def resume_run(
+    project: Path | str,
+    *,
+    run_id: str | None = None,
+    resolutions: dict[str, str] | None = None,
+) -> dict[str, object]:
     root = _project_root(project)
     control = _control(root)
     if not control.get("active_run"):
         raise BookForgeError("No active run")
+    if run_id and run_id != control["active_run"]:
+        raise BookForgeError(f"Requested run {run_id} is not the active run {control['active_run']}")
     run_path = _run_path(root, str(control["active_run"]))
     run = _read_json(run_path)
     if run["state"] not in {"paused", "blocked"}:
@@ -1929,13 +1993,34 @@ def _execute_materialized_task(root: Path, task_id: str, outputs: dict[str, str 
     promote_task(root, claim["attempt"], claim["fence"])
 
 
-def apply_universe_design(project: Path | str, proposal: dict[str, object]) -> dict[str, object]:
-    root = _project_root(project)
-    findings = validate_universe_design(root, proposal)
-    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
-    if blocking:
-        raise BookForgeError(f"Universe design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
-    schedule_universe_design(root)
+def _complete_model_task(
+    root: Path,
+    task_id: str,
+    claim: dict[str, object],
+    outputs: dict[str, str | bytes],
+    result: dict[str, object],
+    envelope: dict[str, object],
+) -> dict[str, object]:
+    plan = _load_plan(root)
+    task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
+    if not task or task.get("state") != "running" or task.get("attempt") != claim["attempt"]:
+        raise BookForgeError(f"Model task is not owned by its active claim: {task_id}")
+    task["outputs"] = sorted(outputs)
+    _save_plan(root, plan)
+    render_plan(root)
+    manifest = stage_outputs(root, str(claim["attempt"]), outputs)
+    receipt = record_execution(
+        root,
+        str(claim["attempt"]),
+        int(claim["fence"]),
+        output_hash=_sha256_bytes(_json_bytes(manifest)),
+        telemetry=_provider_telemetry(result, envelope),
+    )
+    promote_task(root, str(claim["attempt"]), int(claim["fence"]))
+    return receipt
+
+
+def _universe_design_outputs(proposal: dict[str, object]) -> dict[str, str | bytes]:
     outputs: dict[str, str | bytes] = {
         "universe/design.json": _json_bytes({"schema": 1, **proposal}),
         "universe/timeline/eras.yaml": _json_bytes({"schema": 1, "eras": proposal["eras"]}),
@@ -1955,6 +2040,17 @@ def apply_universe_design(project: Path | str, proposal: dict[str, object]) -> d
         for row in proposal[category]:
             continuity = None if category == "kernel" else "CNT-0001"
             outputs[f"universe/canon/{directory}/{row['id']}.md"] = _canon_markdown(row, continuity=continuity)
+    return outputs
+
+
+def apply_universe_design(project: Path | str, proposal: dict[str, object]) -> dict[str, object]:
+    root = _project_root(project)
+    findings = validate_universe_design(root, proposal)
+    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
+    if blocking:
+        raise BookForgeError(f"Universe design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
+    schedule_universe_design(root)
+    outputs = _universe_design_outputs(proposal)
     _execute_materialized_task(root, "DESIGN-UNI-0001", outputs)
     audit = {"schema": 1, "state": "design_clean", "blocking": [], "checked": ["world-rules", "chronology", "identity", "scope", "imports"]}
     _execute_materialized_task(root, "AUDIT-UNI-0001", {"universe/design-audit.json": _json_bytes(audit)})
@@ -2036,13 +2132,7 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
     return findings
 
 
-def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> dict[str, object]:
-    root = _project_root(project)
-    findings = validate_book_design(root, book_id, proposal)
-    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
-    if blocking:
-        raise BookForgeError(f"Book design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
-    schedule_book_design(root, book_id)
+def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) -> dict[str, str | bytes]:
     obligations, relation_imports = _book_obligations(root, book_id)
     chapters = sorted(proposal["chapters"], key=lambda row: int(row["order"]))
     outputs: dict[str, str | bytes] = {
@@ -2076,6 +2166,17 @@ def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, obj
             "imports": sorted(set(chapter.get("imports", []) + relation_imports)),
         }
         outputs[f"books/{book_id}/chapters/{chapter['id']}.json"] = _json_bytes(contract)
+    return outputs
+
+
+def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> dict[str, object]:
+    root = _project_root(project)
+    findings = validate_book_design(root, book_id, proposal)
+    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
+    if blocking:
+        raise BookForgeError(f"Book design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
+    schedule_book_design(root, book_id)
+    outputs = _book_design_outputs(root, book_id, proposal)
     _execute_materialized_task(root, f"DESIGN-{book_id}", outputs)
     audit = {
         "schema": 1,
@@ -2086,6 +2187,191 @@ def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, obj
     }
     _execute_materialized_task(root, f"AUDIT-{book_id}", {f"books/{book_id}/design-audit.json": _json_bytes(audit)})
     return audit
+
+
+def _run_design_role(
+    root: Path,
+    task_id: str,
+    role: str,
+    envelope: dict[str, object],
+    runner,
+) -> tuple[dict[str, object], dict[str, object]]:
+    claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+    attempt_dir = Path(claim["capsule"]).parent
+    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+    try:
+        result = runner(role, envelope, attempt_dir)
+    except ProviderOutcomeUnknown as exc:
+        if exc.session_id:
+            mark_provider_accepted(root, str(claim["attempt"]), exc.session_id)
+        plan = _load_plan(root)
+        attempt = _attempt(plan, str(claim["attempt"]))
+        attempt["state"] = "outcome_unknown"
+        task = next(row for row in plan["tasks"] if row["id"] == task_id)
+        task["state"] = "outcome_unknown"
+        _save_plan(root, plan)
+        raise
+    except BookForgeError as exc:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+        raise
+    mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+    _write_bytes_atomic(attempt_dir / "raw-output.txt", str(result["text"]).encode())
+    return claim, result
+
+
+def _design_audit_record(
+    root: Path,
+    task_id: str,
+    scope: dict[str, object],
+    imports: list[str],
+    runner,
+    output_path: str,
+) -> dict[str, object]:
+    envelope = build_envelope(
+        root,
+        role="canon-auditor",
+        task_capsule={"design_scope": scope, "required_output": {"findings": []}},
+        imports=imports,
+        state={},
+        tools=[],
+        max_output_tokens=3000,
+    )
+    claim, result = _run_design_role(root, task_id, "canon-auditor", envelope, runner)
+    try:
+        value = _parse_contract_json(str(result["text"]))
+        findings = _validate_audit_output(value)
+    except BookForgeError as exc:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+        raise
+    record = {
+        "schema": 1,
+        "state": "blocked" if any(row["severity"] == "blocking" for row in findings) else "design_clean",
+        "findings": findings,
+    }
+    _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
+    if record["state"] == "blocked":
+        raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(findings, sort_keys=True)}")
+    return record
+
+
+def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, object]:
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    tasks = schedule_universe_design(root)
+    if all(task["state"] == "succeeded" for task in tasks):
+        return {**_read_json(root / "universe" / "design-audit.json"), "calls": 0}
+    brief = _read_json(root / "universe" / "design-brief.json")
+    envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule={
+            "scope": "universe",
+            "brief": brief,
+            "continuities": _continuities(root)["continuities"],
+            "required_output": {
+                "kernel": "LAW-#### rows",
+                "eras": "ERA-#### rows",
+                "events": "EVT-#### rows with era and order",
+                "places": "PLC-#### rows",
+                "factions": "FAC-#### rows",
+                "characters": "CHR-#### rows",
+                "themes": ["theme"],
+                "style": {"tense": "past", "person": "third-limited"},
+                "continuity_material": {"CNT-0001": ["stable IDs"]},
+                "book_local": {},
+                "unresolved_questions": [],
+            },
+        },
+        imports=["UNI-0001#kernel"],
+        state={},
+        tools=[],
+        max_output_tokens=5000,
+    )
+    claim, result = _run_design_role(root, "DESIGN-UNI-0001", "designer", envelope, runner)
+    try:
+        proposal = _parse_contract_json(str(result["text"]))
+        findings = validate_universe_design(root, proposal)
+        if any(row["severity"] == "blocking" for row in findings):
+            raise BookForgeError(f"Universe design has blocking findings: {json.dumps(findings, sort_keys=True)}")
+    except BookForgeError as exc:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+        raise
+    _complete_model_task(root, "DESIGN-UNI-0001", claim, _universe_design_outputs(proposal), result, envelope)
+    rebuild_indexes(root)
+    audit = _design_audit_record(
+        root,
+        "AUDIT-UNI-0001",
+        {"scope": "universe", "proposal": proposal},
+        ["UNI-0001#kernel"],
+        runner,
+        "universe/design-audit.json",
+    )
+    return {**audit, "calls": 2}
+
+
+def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> dict[str, object]:
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    tasks = schedule_book_design(root, book_id)
+    if all(task["state"] == "succeeded" for task in tasks):
+        return {**_read_json(root / "books" / book_id / "design-audit.json"), "calls": 0}
+    book = next(row for row in list_books(root) if row["id"] == book_id)
+    obligations, relation_imports = _book_obligations(root, book_id)
+    imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
+    envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule={
+            "scope": "book",
+            "book": book,
+            "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
+            "obligations": list(obligations.values()),
+            "required_output": {
+                "premise": "string",
+                "entry_state": {},
+                "arc": ["at least three causal turns"],
+                "exit_boundary": {},
+                "chapters": [
+                    {
+                        "id": "CH-0001",
+                        "order": 1,
+                        "pov": "stable character ID",
+                        "beats": ["causal beat"],
+                        "plants": [],
+                        "reveals": [],
+                        "target_words": 2000,
+                        "imports": imports,
+                        "obligations": [],
+                        "pivotal": None,
+                    }
+                ],
+            },
+        },
+        imports=imports,
+        state={},
+        tools=[],
+        max_output_tokens=5000,
+    )
+    task_id = f"DESIGN-{book_id}"
+    claim, result = _run_design_role(root, task_id, "designer", envelope, runner)
+    try:
+        proposal = _parse_contract_json(str(result["text"]))
+        findings = validate_book_design(root, book_id, proposal)
+        if any(row["severity"] == "blocking" for row in findings):
+            raise BookForgeError(f"Book design has blocking findings: {json.dumps(findings, sort_keys=True)}")
+    except BookForgeError as exc:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+        raise
+    _complete_model_task(root, task_id, claim, _book_design_outputs(root, book_id, proposal), result, envelope)
+    audit = _design_audit_record(
+        root,
+        f"AUDIT-{book_id}",
+        {"scope": "book", "book": book_id, "proposal": proposal},
+        imports,
+        runner,
+        f"books/{book_id}/design-audit.json",
+    )
+    return {**audit, "calls": 2}
 
 
 def _parse_contract_json(text_value: str) -> dict[str, object]:
@@ -3612,6 +3898,11 @@ def validate_epub(path: Path | str, *, expected_chapters: int) -> dict[str, obje
 
 
 def _skill_commit() -> str:
+    install_manifest = Path(__file__).resolve().parents[1] / "INSTALL-MANIFEST.json"
+    if install_manifest.is_file():
+        source_commit = str(_read_json(install_manifest).get("source_commit", ""))
+        if re.fullmatch(r"[0-9a-f]{40}", source_commit):
+            return source_commit
     result = subprocess.run(
         ["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"],
         capture_output=True,
@@ -3921,7 +4212,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "migrate":
             print(json.dumps(migrate_project(args.project, args.mode), sort_keys=True))
         elif args.command == "pause":
-            print(json.dumps(pause_run(args.project, emergency=args.emergency), sort_keys=True))
+            print(json.dumps(pause_run(args.project, run_id=args.run, emergency=args.emergency), sort_keys=True))
         elif args.command == "resume":
             resolutions = {}
             for value in args.resolve_unknown:
@@ -3929,17 +4220,17 @@ def main(argv: list[str] | None = None) -> int:
                     raise BookForgeError("--resolve-unknown must be TASK:retry or TASK:abandon")
                 task, resolution = value.rsplit(":", 1)
                 resolutions[task] = resolution
-            print(json.dumps(resume_run(args.project, resolutions=resolutions), sort_keys=True))
+            print(json.dumps(resume_run(args.project, run_id=args.run, resolutions=resolutions), sort_keys=True))
         elif args.command == "status":
             if args.repair_view:
                 repair_plan_view(args.project)
-            print(json.dumps(status_project(args.project), sort_keys=True))
+            print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps({"scheduled": [task["id"] for task in schedule_universe_design(args.project)]}, sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
-            print(json.dumps({"scheduled": [task["id"] for task in schedule_book_design(args.project, args.book)]}, sort_keys=True))
+            print(json.dumps(execute_book_design(args.project, args.book), sort_keys=True))
         elif args.command == "run":
             print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))
         elif args.command == "translate" and args.action == "add":

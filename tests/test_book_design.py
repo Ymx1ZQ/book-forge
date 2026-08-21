@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
+MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 def load_module():
@@ -30,6 +31,27 @@ def proposal(obligation=None):
         "exit_boundary": {"CHR-0001": "committed"},
         "chapters": chapters,
     }
+
+
+class DesignProvider:
+    def __init__(self, value):
+        self.value = value
+        self.calls = []
+
+    def __call__(self, role, envelope, attempt_dir):
+        self.calls.append(role)
+        payload = self.value if role == "designer" else {"findings": []}
+        return {
+            "text": json.dumps(payload),
+            "provider": "openrouter",
+            "model": MODEL,
+            "variant": "high",
+            "session_id": f"ses-{len(self.calls)}",
+            "tokens": {"input": envelope["estimated_input_tokens"], "output": 300},
+            "cost": 0.001,
+            "latency_ms": 5,
+            "finish": "stop",
+        }
 
 
 class BookDesignTests(unittest.TestCase):
@@ -71,6 +93,15 @@ class BookDesignTests(unittest.TestCase):
             self.bf.apply_book_design(self.project, b, bad)
         self.assertIn(relation["obligations"][0]["id"], str(caught.exception))
         self.assertFalse((self.project / f"books/{b}/chapters").exists())
+
+    def test_executes_book_design_as_two_paid_receipted_calls(self):
+        book = self.bf.add_book(self.project, "Agentic Book")["id"]
+        provider = DesignProvider(proposal())
+        result = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(result["calls"], 2)
+        self.assertEqual(provider.calls, ["designer", "canon-auditor"])
+        self.assertTrue((self.project / f"books/{book}/chapters/CH-0001.json").is_file())
 
 
 if __name__ == "__main__":

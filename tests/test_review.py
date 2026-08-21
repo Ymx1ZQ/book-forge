@@ -89,6 +89,12 @@ class ReviewTests(unittest.TestCase):
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertEqual(state["closed_chapters"], ["CH-0001"])
         self.assertTrue(json.loads((self.project / ".book-forge/state.json").read_text())["source_locked"])
+        config_path = self.project / "book-forge.yaml"
+        config = json.loads(config_path.read_text())
+        config["source_language"] = "fr"
+        config_path.write_text(json.dumps(config))
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.status_project(self.project)
 
     def test_seeded_undisclosed_consequence_requires_repair_and_verification(self):
         finding = {"id": "F-STATE-1", "dimension": "state", "severity": "blocking", "objective": True, "evidence": "final paragraph", "issue": "Signal knowledge omitted", "fix_required": True}

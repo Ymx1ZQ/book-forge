@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
+MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 def load_module():
@@ -29,6 +30,28 @@ def clean_proposal():
         "book_local": {},
         "unresolved_questions": ["Who first sealed the archive?"],
     }
+
+
+class DesignProvider:
+    def __init__(self, proposal):
+        self.proposal = proposal
+        self.calls = []
+
+    def __call__(self, role, envelope, attempt_dir):
+        self.calls.append(role)
+        value = self.proposal if role == "designer" else {"findings": []}
+        variant = "high"
+        return {
+            "text": json.dumps(value),
+            "provider": "openrouter",
+            "model": MODEL,
+            "variant": variant,
+            "session_id": f"ses-{len(self.calls)}",
+            "tokens": {"input": envelope["estimated_input_tokens"], "output": 300},
+            "cost": 0.001,
+            "latency_ms": 5,
+            "finish": "stop",
+        }
 
 
 class UniverseDesignTests(unittest.TestCase):
@@ -60,6 +83,15 @@ class UniverseDesignTests(unittest.TestCase):
             self.bf.apply_universe_design(self.project, proposal)
         self.assertEqual((self.project / "universe/kernel.md").read_bytes(), before)
         self.assertFalse((self.project / "universe/design.json").exists())
+
+    def test_executes_designer_and_independent_auditor_with_receipts(self):
+        provider = DesignProvider(clean_proposal())
+        result = self.bf.execute_universe_design(self.project, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(result["calls"], 2)
+        self.assertEqual(provider.calls, ["designer", "canon-auditor"])
+        report = self.bf.telemetry_report(self.project, strict=True)
+        self.assertEqual(report["calls"]["with_receipts"], 2)
 
 
 if __name__ == "__main__":
