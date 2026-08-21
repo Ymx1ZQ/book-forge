@@ -151,25 +151,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase A — Installable universe foundation
 
-### M3: Add books, continuities, collections, and relations
-
-**Depends on:** M2
-
-**Why:** Shared universes need flexible organization and explicit narrative dependencies without duplicated canon ownership.
-
-**Approach:** Implement `continuity`, `add-book`, `relate`, and `collection` over stable IDs. Treat `sequel_of`, `prequel_of`, `adaptation_of`, and `alternate_of` as directed; `parallel_to` as symmetric binary; and `crossover` as symmetric n-ary. Keep sequel, prequel, parallel, and crossover inside one continuity; allow adaptation and alternate links across continuities only through addressable imports.
-
-**Tasks:**
-- [ ] Create books with one continuity and collection membership stored in one registry
-- [ ] Create primary or alternate continuities with explicit fork metadata and imports
-- [ ] Validate direction, inverse semantics, symmetry, arity, endpoints, and allowed cycles
-- [ ] Give relation obligations and boundary imports stable IDs and hashes
-- [ ] Preserve IDs when titles, paths, or reading order change
-- [ ] Test: unit — cover every relation type, ancestry conflict, crossover, and alternate import
-- [ ] Commit & push
-
-**Done when:** An arbitrary valid book network round-trips without fixed-length assumptions or duplicate membership state.
-
 ### M4: Migrate versioned schemas safely
 
 **Depends on:** M2, M3

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,37 @@ class BookForgeError(RuntimeError):
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BookForgeError(f"Invalid project file {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise BookForgeError(f"Expected an object in {path}")
+    return value
+
+
+def _project_root(project: Path | str) -> Path:
+    root = Path(project).expanduser().resolve()
+    if not (root / "book-forge.yaml").is_file():
+        raise BookForgeError(f"Not a Book Forge universe: {root}")
+    return root
+
+
+def _next_id(existing: list[str], prefix: str) -> str:
+    used = {int(value.removeprefix(prefix)) for value in existing if value.startswith(prefix) and value.removeprefix(prefix).isdigit()}
+    number = 1
+    while number in used:
+        number += 1
+    return f"{prefix}{number:04d}"
+
+
+def _block_record(block: str) -> dict[str, str]:
+    if not re.fullmatch(r"[A-Z][A-Z0-9-]*#[a-z0-9][a-z0-9-]*", block):
+        raise BookForgeError(f"Invalid addressable block: {block}")
+    return {"block": block, "hash": hashlib.sha256(block.encode()).hexdigest()}
 
 
 def _canonical_language(value: str) -> str:
@@ -167,6 +199,192 @@ def init_project(
             shutil.rmtree(stage)
 
 
+def list_books(project: Path | str) -> list[dict[str, object]]:
+    root = _project_root(project)
+    books: list[dict[str, object]] = []
+    for path in sorted((root / "books").glob("*/book.yaml")):
+        book = _read_json(path)
+        if path.parent.name != book.get("id"):
+            raise BookForgeError(f"Book path and stable ID differ: {path}")
+        books.append(book)
+    return sorted(books, key=lambda item: str(item["id"]))
+
+
+def _continuities(root: Path) -> dict[str, object]:
+    return _read_json(root / "universe" / "continuities.yaml")
+
+
+def add_continuity(
+    project: Path | str,
+    name: str,
+    *,
+    kind: str = "alternate",
+    fork_from: str | None = None,
+    imports: list[str] | None = None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    data = _continuities(root)
+    rows = data.setdefault("continuities", [])
+    if not isinstance(rows, list):
+        raise BookForgeError("Invalid continuities registry")
+    if kind not in {"primary", "alternate"}:
+        raise BookForgeError(f"Invalid continuity kind: {kind}")
+    if kind == "alternate" and not fork_from:
+        raise BookForgeError("Alternate continuity requires fork_from")
+    ids = [str(row["id"]) for row in rows if isinstance(row, dict)]
+    if fork_from and fork_from not in ids:
+        raise BookForgeError(f"Unknown fork continuity: {fork_from}")
+    row: dict[str, object] = {
+        "id": _next_id(ids, "CNT-"),
+        "kind": kind,
+        "name": name,
+        "imports": [_block_record(value) for value in (imports or [])],
+    }
+    if fork_from:
+        row["fork_from"] = fork_from
+    rows.append(row)
+    _write_json(root / "universe" / "continuities.yaml", data)
+    return row
+
+
+def add_book(project: Path | str, title: str, *, continuity: str = "CNT-0001") -> dict[str, object]:
+    root = _project_root(project)
+    continuity_ids = {str(row["id"]) for row in _continuities(root)["continuities"]}
+    if continuity not in continuity_ids:
+        raise BookForgeError(f"Unknown continuity: {continuity}")
+    books = list_books(root)
+    book_id = _next_id([str(book["id"]) for book in books], "BOOK-")
+    book = {"schema": SCHEMA_VERSION, "id": book_id, "title": title, "continuity": continuity, "order": len(books) + 1}
+    directory = root / "books" / book_id
+    if directory.exists():
+        raise BookForgeError(f"Book path collision: {directory}")
+    directory.mkdir(parents=True)
+    _write_json(directory / "book.yaml", book)
+    _write_json(directory / "outline.yaml", {"schema": SCHEMA_VERSION, "chapters": []})
+    _write_json(directory / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
+    _write_json(directory / "continuity.yaml", {"schema": SCHEMA_VERSION, "imports": [], "obligations": []})
+    (directory / "design.md").write_text(f"# {title}\n\n<!-- bf:block premise -->\n", encoding="utf-8")
+    (directory / "reader-state.md").write_text("# Reader State\n", encoding="utf-8")
+    (directory / "manuscript" / "chapters").mkdir(parents=True)
+    return book
+
+
+def collection_add(project: Path | str, name: str, books: list[str]) -> dict[str, object]:
+    root = _project_root(project)
+    known = {str(book["id"]) for book in list_books(root)}
+    if len(set(books)) != len(books) or not set(books) <= known:
+        raise BookForgeError("Collection contains duplicate or unknown books")
+    data = _read_json(root / "universe" / "collections.yaml")
+    rows = data.setdefault("collections", [])
+    ids = [str(row["id"]) for row in rows]
+    row = {"id": _next_id(ids, "COL-"), "name": name, "books": list(books)}
+    rows.append(row)
+    _write_json(root / "universe" / "collections.yaml", data)
+    return row
+
+
+def collection_order(project: Path | str, collection_id: str, books: list[str]) -> dict[str, object]:
+    root = _project_root(project)
+    data = _read_json(root / "universe" / "collections.yaml")
+    for row in data["collections"]:
+        if row["id"] == collection_id:
+            if set(row["books"]) != set(books) or len(books) != len(set(books)):
+                raise BookForgeError("Order must contain every collection book exactly once")
+            row["books"] = list(books)
+            _write_json(root / "universe" / "collections.yaml", data)
+            return row
+    raise BookForgeError(f"Unknown collection: {collection_id}")
+
+
+def collection_remove(project: Path | str, collection_id: str) -> None:
+    root = _project_root(project)
+    data = _read_json(root / "universe" / "collections.yaml")
+    before = len(data["collections"])
+    data["collections"] = [row for row in data["collections"] if row["id"] != collection_id]
+    if len(data["collections"]) == before:
+        raise BookForgeError(f"Unknown collection: {collection_id}")
+    _write_json(root / "universe" / "collections.yaml", data)
+
+
+def _ancestry_edges(relations: list[dict[str, object]]) -> dict[str, set[str]]:
+    edges: dict[str, set[str]] = {}
+    for row in relations:
+        endpoints = row.get("endpoints", [])
+        if row.get("type") == "sequel_of":
+            edges.setdefault(str(endpoints[0]), set()).add(str(endpoints[1]))
+        elif row.get("type") == "prequel_of":
+            edges.setdefault(str(endpoints[1]), set()).add(str(endpoints[0]))
+    return edges
+
+
+def _reachable(edges: dict[str, set[str]], start: str, target: str) -> bool:
+    frontier = [start]
+    seen: set[str] = set()
+    while frontier:
+        node = frontier.pop()
+        if node == target:
+            return True
+        if node not in seen:
+            seen.add(node)
+            frontier.extend(edges.get(node, set()))
+    return False
+
+
+def add_relation(
+    project: Path | str,
+    relation_type: str,
+    endpoints: list[str],
+    *,
+    imports: list[str] | None = None,
+    obligations: list[str] | None = None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    allowed = {"sequel_of", "prequel_of", "adaptation_of", "alternate_of", "parallel_to", "crossover"}
+    if relation_type not in allowed:
+        raise BookForgeError(f"Unknown relation type: {relation_type}")
+    expected_arity = 2 if relation_type != "crossover" else None
+    if (expected_arity and len(endpoints) != expected_arity) or (relation_type == "crossover" and len(endpoints) < 2):
+        raise BookForgeError(f"Invalid arity for {relation_type}")
+    if len(set(endpoints)) != len(endpoints):
+        raise BookForgeError("Relation endpoints must be distinct")
+    books = {str(book["id"]): book for book in list_books(root)}
+    if not set(endpoints) <= books.keys():
+        raise BookForgeError("Unknown relation endpoint")
+    continuities = {str(books[value]["continuity"]) for value in endpoints}
+    local_types = {"sequel_of", "prequel_of", "parallel_to", "crossover"}
+    if relation_type in local_types and len(continuities) != 1:
+        raise BookForgeError(f"{relation_type} must remain inside one continuity")
+    if relation_type in {"adaptation_of", "alternate_of"} and len(continuities) > 1 and not imports:
+        raise BookForgeError("Cross-continuity relations require explicit block imports")
+    normalized = sorted(endpoints) if relation_type in {"parallel_to", "crossover"} else list(endpoints)
+    data = _read_json(root / "universe" / "relations.yaml")
+    rows = data.setdefault("relations", [])
+    if any(row["type"] == relation_type and row["endpoints"] == normalized for row in rows):
+        raise BookForgeError("Duplicate relation")
+    if relation_type in {"sequel_of", "prequel_of"}:
+        child, parent = normalized if relation_type == "sequel_of" else [normalized[1], normalized[0]]
+        edges = _ancestry_edges(rows)
+        if _reachable(edges, parent, child):
+            raise BookForgeError("Ancestry relation would create a cycle")
+    relation_ids = [str(row["id"]) for row in rows]
+    obligation_ids = [str(item["id"]) for row in rows for item in row.get("obligations", [])]
+    obligation_rows = []
+    for text_value in obligations or []:
+        obligation_id = _next_id(obligation_ids, "OBL-")
+        obligation_ids.append(obligation_id)
+        obligation_rows.append({"id": obligation_id, "text": text_value, "hash": hashlib.sha256(text_value.encode()).hexdigest()})
+    row = {
+        "id": _next_id(relation_ids, "REL-"),
+        "type": relation_type,
+        "endpoints": normalized,
+        "imports": [_block_record(value) for value in (imports or [])],
+        "obligations": obligation_rows,
+    }
+    rows.append(row)
+    _write_json(root / "universe" / "relations.yaml", data)
+    return row
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="book-forge")
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -174,6 +392,31 @@ def build_parser() -> argparse.ArgumentParser:
     init = commands.add_parser("init")
     init.add_argument("--title")
     init.add_argument("--source-language", default="en")
+    continuity = commands.add_parser("continuity")
+    continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
+    continuity_add = continuity_commands.add_parser("add")
+    continuity_add.add_argument("name")
+    continuity_add.add_argument("--kind", choices=("primary", "alternate"), default="alternate")
+    continuity_add.add_argument("--fork-from")
+    continuity_add.add_argument("--import", dest="imports", action="append", default=[])
+    add_book_command = commands.add_parser("add-book")
+    add_book_command.add_argument("title")
+    add_book_command.add_argument("--continuity", default="CNT-0001")
+    relate = commands.add_parser("relate")
+    relate.add_argument("books", nargs="+")
+    relate.add_argument("--type", required=True)
+    relate.add_argument("--import", dest="imports", action="append", default=[])
+    relate.add_argument("--obligation", action="append", default=[])
+    collection = commands.add_parser("collection")
+    collection_commands = collection.add_subparsers(dest="collection_command", required=True)
+    collection_add_command = collection_commands.add_parser("add")
+    collection_add_command.add_argument("name")
+    collection_add_command.add_argument("books", nargs="+")
+    collection_order_command = collection_commands.add_parser("order")
+    collection_order_command.add_argument("collection")
+    collection_order_command.add_argument("books", nargs="+")
+    collection_remove_command = collection_commands.add_parser("remove")
+    collection_remove_command.add_argument("collection")
     return parser
 
 
@@ -183,6 +426,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init":
             title = args.title or args.project.name.replace("-", " ").title()
             print(json.dumps(init_project(args.project, title, args.source_language), sort_keys=True))
+        elif args.command == "continuity" and args.continuity_command == "add":
+            print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
+        elif args.command == "add-book":
+            print(json.dumps(add_book(args.project, args.title, continuity=args.continuity), sort_keys=True))
+        elif args.command == "relate":
+            print(json.dumps(add_relation(args.project, args.type, args.books, imports=args.imports, obligations=args.obligation), sort_keys=True))
+        elif args.command == "collection" and args.collection_command == "add":
+            print(json.dumps(collection_add(args.project, args.name, args.books), sort_keys=True))
+        elif args.command == "collection" and args.collection_command == "order":
+            print(json.dumps(collection_order(args.project, args.collection, args.books), sort_keys=True))
+        elif args.command == "collection" and args.collection_command == "remove":
+            collection_remove(args.project, args.collection)
+            print(json.dumps({"removed": args.collection}, sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
