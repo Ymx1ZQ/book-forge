@@ -1,0 +1,4 @@
+interface:
+  display_name: "Book Forge"
+  short_description: "Forge, translate, and publish fiction"
+  default_prompt: "Use $book-forge to create or continue a token-efficient shared-universe fiction project."
