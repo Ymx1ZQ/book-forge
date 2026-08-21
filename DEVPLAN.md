@@ -153,25 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M9: Build canon indexing and a generic artifact dependency engine
-
-**Depends on:** M3, M4, M6, M8
-
-**Why:** Block-only canon dependencies cannot propagate changes through state, translations, and publication outputs.
-
-**Approach:** Parse addressable blocks such as `CHR-0012#voice` and build a typed dependency engine, initially registering canon, relations, plans, receipts, and state introduced through M8. Require every later artifact producer to register edges and migrations. Reconcile legitimate external authored edits before planning; keep receipts immutable and derive currentness separately.
-
-**Tasks:**
-- [ ] Parse and validate IDs, blocks, imports, sources, entities, events, and obligations
-- [ ] Build reverse dependencies, appearances, timeline, and generic typed artifact edges
-- [ ] Detect duplicates, dangling imports, forbidden continuity edges, and import cycles
-- [ ] Reconcile external authored hashes and refuse direct edits to derived machine artifacts
-- [ ] Rebuild generated indexes without editing authored files or historical receipts
-- [ ] Test: unit — propagate seeded changes through exact transitive consumers only
-- [ ] Commit & push
-
-**Done when:** Seeded existing artifacts yield a deterministic minimal stale set and a later producer can register a new type without engine changes.
-
 ### M10: Build bounded complete request envelopes
 
 **Depends on:** M5, M9

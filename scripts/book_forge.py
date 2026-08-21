@@ -1271,6 +1271,193 @@ def cleanup_attempt(project: Path | str, attempt_id: str) -> None:
         shutil.rmtree(path)
 
 
+BLOCK_MARKER = re.compile(r"<!--\s*bf:block\s+([a-z0-9][a-z0-9-]*)\s*-->")
+IMPORT_MARKER = re.compile(r"<!--\s*bf:import\s+([A-Z][A-Z0-9-]*#[a-z0-9][a-z0-9-]*)\s*-->")
+
+
+def _markdown_metadata(text_value: str) -> dict[str, str]:
+    if not text_value.startswith("---\n") or "\n---\n" not in text_value[4:]:
+        return {}
+    header = text_value[4:].split("\n---\n", 1)[0]
+    metadata = {}
+    for line in header.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            metadata[key.strip()] = value.strip()
+    return metadata
+
+
+def _artifact_registry(root: Path) -> dict[str, object]:
+    return _read_json(root / ".book-forge" / "artifact-deps.json")
+
+
+def rebuild_indexes(project: Path | str) -> dict[str, object]:
+    root = _project_root(project)
+    blocks: dict[str, dict[str, object]] = {}
+    import_edges: dict[str, list[str]] = {}
+    authored_roots = [root / "universe", root / "books"]
+    for authored_root in authored_roots:
+        if not authored_root.exists():
+            continue
+        for path in sorted(authored_root.rglob("*.md")):
+            if "translations" in path.parts or "manuscript" in path.parts:
+                continue
+            text_value = path.read_text(encoding="utf-8")
+            metadata = _markdown_metadata(text_value)
+            owner = metadata.get("id")
+            markers = list(BLOCK_MARKER.finditer(text_value))
+            if markers and not owner:
+                raise BookForgeError(f"Addressable blocks require frontmatter id: {path.relative_to(root)}")
+            for index, marker in enumerate(markers):
+                block_id = f"{owner}#{marker.group(1)}"
+                end = markers[index + 1].start() if index + 1 < len(markers) else len(text_value)
+                content = text_value[marker.end():end].strip().encode()
+                if block_id in blocks:
+                    raise BookForgeError(f"Duplicate addressable block: {block_id}")
+                imports = IMPORT_MARKER.findall(text_value[marker.end():end])
+                blocks[block_id] = {
+                    "path": str(path.relative_to(root)),
+                    "hash": _sha256_bytes(content),
+                    "continuity": metadata.get("continuity"),
+                    "imports": imports,
+                }
+                import_edges[block_id] = imports
+    relations = _read_json(root / "universe" / "relations.yaml")
+    for relation in relations.get("relations", []):
+        for imported in relation.get("imports", []):
+            if imported.get("block") not in blocks:
+                raise BookForgeError(f"Dangling relation import: {imported.get('block')}")
+    for owner, dependencies in import_edges.items():
+        for dependency in dependencies:
+            if dependency not in blocks:
+                raise BookForgeError(f"Dangling block import: {owner} -> {dependency}")
+
+    def visit(node: str, visiting: set[str], visited: set[str]) -> None:
+        if node in visiting:
+            raise BookForgeError(f"Block import cycle at {node}")
+        if node in visited:
+            return
+        visiting.add(node)
+        for dependency in import_edges.get(node, []):
+            visit(dependency, visiting, visited)
+        visiting.remove(node)
+        visited.add(node)
+
+    visited: set[str] = set()
+    for block_id in blocks:
+        visit(block_id, set(), visited)
+    index = {"schema": 1, "blocks": blocks}
+    _write_json(root / ".book-forge" / "index.json", index)
+    _write_derived_dependency_views(root)
+    return index
+
+
+def _write_derived_dependency_views(root: Path) -> None:
+    registry = _artifact_registry(root)
+    revdeps: dict[str, list[str]] = {}
+    appearances: dict[str, list[str]] = {}
+    timeline: dict[str, list[str]] = {}
+    for artifact_id, artifact in registry.get("artifacts", {}).items():
+        for dependency in artifact.get("dependencies", []):
+            revdeps.setdefault(str(dependency), []).append(str(artifact_id))
+        for entity in artifact.get("entities", []):
+            appearances.setdefault(str(entity), []).append(str(artifact_id))
+        for event in artifact.get("events", []):
+            timeline.setdefault(str(event), []).append(str(artifact_id))
+    _write_json(root / ".book-forge" / "revdeps.json", {"schema": 1, "dependencies": {key: sorted(set(value)) for key, value in sorted(revdeps.items())}})
+    _write_json(root / ".book-forge" / "appearances.json", {"schema": 1, "entities": {key: sorted(set(value)) for key, value in sorted(appearances.items())}, "events": {key: sorted(set(value)) for key, value in sorted(timeline.items())}})
+
+
+def _dependency_hash(root: Path, dependency: str, registry: dict[str, object], index: dict[str, object]) -> str:
+    if "#" in dependency:
+        block = index["blocks"].get(dependency)
+        if not block:
+            raise BookForgeError(f"Dangling block dependency: {dependency}")
+        return str(block["hash"])
+    artifact = registry["artifacts"].get(dependency)
+    if not artifact:
+        raise BookForgeError(f"Dangling artifact dependency: {dependency}")
+    return str(artifact["hash"])
+
+
+def register_artifact(
+    project: Path | str,
+    artifact_id: str,
+    kind: str,
+    *,
+    path: Path | str,
+    dependencies: list[str] | None = None,
+    entities: list[str] | None = None,
+    events: list[str] | None = None,
+    authored: bool = False,
+) -> dict[str, object]:
+    root = _project_root(project)
+    target = Path(path).resolve() if Path(path).is_absolute() else (root / path).resolve()
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise BookForgeError("Artifact path escapes the project") from exc
+    if not target.is_file():
+        raise BookForgeError(f"Artifact path does not exist: {relative}")
+    registry = _artifact_registry(root)
+    if artifact_id in registry["artifacts"]:
+        raise BookForgeError(f"Duplicate artifact: {artifact_id}")
+    index = rebuild_indexes(root)
+    dependency_list = list(dependencies or [])
+    dependency_hashes = {dependency: _dependency_hash(root, dependency, registry, index) for dependency in dependency_list}
+    row = {
+        "kind": kind,
+        "path": str(relative),
+        "hash": _file_hash(target),
+        "authored": authored,
+        "dependencies": dependency_list,
+        "dependency_hashes": dependency_hashes,
+        "entities": list(entities or []),
+        "events": list(events or []),
+    }
+    registry["artifacts"][artifact_id] = row
+    registry["edges"] = sorted(
+        [{"from": dependency, "to": target_id} for target_id, artifact in registry["artifacts"].items() for dependency in artifact.get("dependencies", [])],
+        key=lambda edge: (edge["from"], edge["to"]),
+    )
+    _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+    _write_derived_dependency_views(root)
+    return row
+
+
+def reconcile_artifacts(project: Path | str) -> list[str]:
+    root = _project_root(project)
+    index = rebuild_indexes(root)
+    registry = _artifact_registry(root)
+    direct_stale: set[str] = set()
+    for artifact_id, artifact in registry["artifacts"].items():
+        target = root / artifact["path"]
+        current_hash = _file_hash(target)
+        if current_hash != artifact["hash"]:
+            if not artifact.get("authored"):
+                raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}")
+            artifact["hash"] = current_hash
+        for dependency in artifact.get("dependencies", []):
+            current_dependency = _dependency_hash(root, dependency, registry, index)
+            if current_dependency != artifact["dependency_hashes"].get(dependency):
+                direct_stale.add(str(artifact_id))
+    revdeps = _read_json(root / ".book-forge" / "revdeps.json")["dependencies"]
+    stale = set(direct_stale)
+    frontier = list(direct_stale)
+    while frontier:
+        dependency = frontier.pop()
+        for consumer in revdeps.get(dependency, []):
+            if consumer not in stale:
+                stale.add(consumer)
+                frontier.append(consumer)
+    _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+    _write_json(
+        root / ".book-forge" / "currentness.json",
+        {"schema": 1, "artifacts": {artifact_id: {"current": artifact_id not in stale, "causes": sorted(direct_stale) if artifact_id in stale else []} for artifact_id in sorted(registry["artifacts"])}},
+    )
+    return sorted(stale)
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
