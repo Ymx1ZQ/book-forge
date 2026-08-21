@@ -187,3 +187,23 @@
 - [x] Commit & push
 
 **Done when:** Repeated envelopes are byte-stable, visibility tests pass, and provider usage stays within the configured safety margin.
+
+## Phase C — Universe and book design
+
+### M11: Design and validate an evolving universe ✅
+
+**Depends on:** M7, M8, M9, M10
+
+**Why:** Writing should begin from coherent world rules, story space, and characters while canon remains incrementally extensible.
+
+**Approach:** Add `design universe` for kernel invariants, eras, events, places, factions, characters, themes, and style. Use structured designer proposals and canon-auditor findings; promote only schema-valid changes with every imported block recorded.
+
+**Tasks:**
+- [x] Add guided and autonomous universe-design task contracts
+- [x] Separate universal, continuity-scoped, and book-local material
+- [x] Validate world rules, chronology, identity, and unresolved questions
+- [x] Produce compact addressable summaries for later requests
+- [x] Test: integration — design a fixture universe and reject a seeded contradiction
+- [x] Commit & push
+
+**Done when:** The fixture reaches `design_clean` with every fixed validator and blocking-audit oracle satisfied.

@@ -1592,6 +1592,143 @@ def build_envelope(
     }
 
 
+def schedule_universe_design(
+    project: Path | str, *, guided_answers: dict[str, object] | None = None
+) -> list[dict[str, object]]:
+    root = _project_root(project)
+    brief_path = root / "universe" / "design-brief.json"
+    if not brief_path.exists():
+        _write_json(
+            brief_path,
+            {
+                "schema": 1,
+                "mode": "guided" if guided_answers else "autonomous",
+                "answers": guided_answers or {},
+                "scope": ["kernel", "chronology", "places", "factions", "characters", "themes", "style"],
+            },
+        )
+    plan = _load_plan(root)
+    existing = {str(task["id"]): task for task in plan["tasks"]}
+    if "DESIGN-UNI-0001" not in existing:
+        add_task(root, "DESIGN-UNI-0001", "designer", priority=10, inputs=["universe/design-brief.json"])
+    plan = _load_plan(root)
+    existing = {str(task["id"]): task for task in plan["tasks"]}
+    if "AUDIT-UNI-0001" not in existing:
+        add_task(root, "AUDIT-UNI-0001", "canon-auditor", deps=["DESIGN-UNI-0001"], priority=20)
+    plan = _load_plan(root)
+    return [next(task for task in plan["tasks"] if task["id"] == task_id) for task_id in ("DESIGN-UNI-0001", "AUDIT-UNI-0001")]
+
+
+def _validate_id_rows(rows: object, prefix: str, name: str) -> list[dict[str, object]]:
+    if not isinstance(rows, list):
+        raise BookForgeError(f"Universe proposal field {name} must be a list")
+    seen: set[str] = set()
+    result = []
+    for row in rows:
+        if not isinstance(row, dict) or not re.fullmatch(fr"{prefix}-\d{{4}}", str(row.get("id", ""))):
+            raise BookForgeError(f"Invalid stable ID in {name}")
+        if row["id"] in seen:
+            raise BookForgeError(f"Duplicate stable ID in {name}: {row['id']}")
+        seen.add(str(row["id"]))
+        result.append(row)
+    return result
+
+
+def validate_universe_design(project: Path | str, proposal: dict[str, object]) -> list[dict[str, object]]:
+    root = _project_root(project)
+    findings: list[dict[str, object]] = []
+    laws = _validate_id_rows(proposal.get("kernel"), "LAW", "kernel")
+    eras = _validate_id_rows(proposal.get("eras"), "ERA", "eras")
+    events = _validate_id_rows(proposal.get("events"), "EVT", "events")
+    _validate_id_rows(proposal.get("places"), "PLC", "places")
+    _validate_id_rows(proposal.get("factions"), "FAC", "factions")
+    _validate_id_rows(proposal.get("characters"), "CHR", "characters")
+    if not laws:
+        findings.append({"code": "kernel.empty", "severity": "blocking"})
+    era_ids = {str(row["id"]) for row in eras}
+    event_slots: set[tuple[str, int]] = set()
+    for event in events:
+        era = str(event.get("era", ""))
+        if era not in era_ids:
+            findings.append({"code": "event.unknown-era", "severity": "blocking", "event": event["id"], "era": era})
+        slot = (era, int(event.get("order", 0)))
+        if slot in event_slots:
+            findings.append({"code": "event.order-conflict", "severity": "blocking", "event": event["id"]})
+        event_slots.add(slot)
+    continuity_ids = {str(row["id"]) for row in _continuities(root)["continuities"]}
+    material = proposal.get("continuity_material", {})
+    if not isinstance(material, dict) or not set(material) <= continuity_ids:
+        findings.append({"code": "continuity.unknown", "severity": "blocking"})
+    if not isinstance(proposal.get("style"), dict) or not proposal.get("themes"):
+        findings.append({"code": "creative-contract.incomplete", "severity": "blocking"})
+    return findings
+
+
+def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) -> str:
+    metadata = f"---\nid: {row['id']}\n"
+    if continuity:
+        metadata += f"continuity: {continuity}\n"
+    metadata += "---\n\n"
+    name = row.get("name", row["id"])
+    body = f"# {name}\n\n<!-- bf:block summary -->\n{row.get('summary', '')}\n"
+    if row.get("voice"):
+        body += f"\n<!-- bf:block voice -->\n{row['voice']}\n"
+    return metadata + body
+
+
+def _set_task_outputs(root: Path, task_id: str, outputs: list[str]) -> None:
+    plan = _load_plan(root)
+    task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
+    if not task or task["state"] != "pending":
+        raise BookForgeError(f"Design task cannot accept outputs while {task['state'] if task else 'missing'}")
+    task["outputs"] = sorted(outputs)
+    _save_plan(root, plan)
+    render_plan(root)
+
+
+def _execute_materialized_task(root: Path, task_id: str, outputs: dict[str, str | bytes]) -> None:
+    _set_task_outputs(root, task_id, list(outputs))
+    request_hash = _sha256_bytes(_json_bytes({"task": task_id, "outputs": sorted(outputs)}))
+    claim = claim_task(root, task_id, request_hash=request_hash)
+    manifest = stage_outputs(root, claim["attempt"], outputs)
+    output_hash = _sha256_bytes(_json_bytes(manifest))
+    record_execution(root, claim["attempt"], claim["fence"], output_hash=output_hash)
+    promote_task(root, claim["attempt"], claim["fence"])
+
+
+def apply_universe_design(project: Path | str, proposal: dict[str, object]) -> dict[str, object]:
+    root = _project_root(project)
+    findings = validate_universe_design(root, proposal)
+    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
+    if blocking:
+        raise BookForgeError(f"Universe design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
+    schedule_universe_design(root)
+    outputs: dict[str, str | bytes] = {
+        "universe/design.json": _json_bytes({"schema": 1, **proposal}),
+        "universe/timeline/eras.yaml": _json_bytes({"schema": 1, "eras": proposal["eras"]}),
+        "universe/timeline/events.yaml": _json_bytes({"schema": 1, "events": proposal["events"]}),
+        "universe/style.md": (
+            "---\nid: STYLE-0001\n---\n\n# Style\n\n<!-- bf:block prose -->\n"
+            + json.dumps(proposal["style"], ensure_ascii=False, sort_keys=True)
+            + "\n"
+        ),
+    }
+    law_imports = "\n".join(f"<!-- bf:import {row['id']}#summary -->" for row in proposal["kernel"])
+    outputs["universe/kernel.md"] = (
+        "---\nid: UNI-0001\nkind: universe-kernel\n---\n\n## Kernel\n<!-- bf:block kernel -->\n"
+        f"{law_imports}\nThe following invariants are inherited by every continuity.\n"
+    )
+    for category, directory in (("kernel", "topics"), ("places", "places"), ("factions", "factions"), ("characters", "characters")):
+        for row in proposal[category]:
+            continuity = None if category == "kernel" else "CNT-0001"
+            outputs[f"universe/canon/{directory}/{row['id']}.md"] = _canon_markdown(row, continuity=continuity)
+    _execute_materialized_task(root, "DESIGN-UNI-0001", outputs)
+    audit = {"schema": 1, "state": "design_clean", "blocking": [], "checked": ["world-rules", "chronology", "identity", "scope", "imports"]}
+    _execute_materialized_task(root, "AUDIT-UNI-0001", {"universe/design-audit.json": _json_bytes(audit)})
+    rebuild_indexes(root)
+    return audit
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -1662,6 +1799,9 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--run")
     status.add_argument("--locale")
     status.add_argument("--repair-view", action="store_true")
+    design = commands.add_parser("design")
+    design.add_argument("scope", choices=("universe", "book"))
+    design.add_argument("--book")
     return parser
 
 
@@ -1700,6 +1840,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.repair_view:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project), sort_keys=True))
+        elif args.command == "design" and args.scope == "universe":
+            print(json.dumps({"scheduled": [task["id"] for task in schedule_universe_design(args.project)]}, sort_keys=True))
+        elif args.command == "design" and args.scope == "book":
+            if not args.book:
+                raise BookForgeError("design book requires --book")
+            print(json.dumps({"scheduled": [task["id"] for task in schedule_book_design(args.project, args.book)]}, sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

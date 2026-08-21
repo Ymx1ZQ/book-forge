@@ -155,24 +155,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase C — Universe and book design
 
-### M11: Design and validate an evolving universe
-
-**Depends on:** M7, M8, M9, M10
-
-**Why:** Writing should begin from coherent world rules, story space, and characters while canon remains incrementally extensible.
-
-**Approach:** Add `design universe` for kernel invariants, eras, events, places, factions, characters, themes, and style. Use structured designer proposals and canon-auditor findings; promote only schema-valid changes with every imported block recorded.
-
-**Tasks:**
-- [ ] Add guided and autonomous universe-design task contracts
-- [ ] Separate universal, continuity-scoped, and book-local material
-- [ ] Validate world rules, chronology, identity, and unresolved questions
-- [ ] Produce compact addressable summaries for later requests
-- [ ] Test: integration — design a fixture universe and reject a seeded contradiction
-- [ ] Commit & push
-
-**Done when:** The fixture reaches `design_clean` with every fixed validator and blocking-audit oracle satisfied.
-
 ### M12: Design related books and chapter contracts
 
 **Depends on:** M3, M7, M8, M10, M11
