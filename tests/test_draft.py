@@ -63,7 +63,7 @@ class DraftTests(unittest.TestCase):
         (chapter_dir / "CH-0001.json").write_text(json.dumps(self.contract))
 
     def test_happy_path_uses_one_call_and_materializes_receipted_draft(self):
-        provider = FakeProvider([valid_response()])
+        provider = FakeProvider(["Result follows:\n" + valid_response() + "\nEnd of result."])
         result = self.bf.draft_chapter(self.project, self.book, "CH-0001", provider=provider)
         self.assertEqual(result["calls"], 1)
         self.assertEqual(len(provider.calls), 1)

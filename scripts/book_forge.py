@@ -1894,8 +1894,11 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
             stripped = "\n".join(lines[1:-1])
             if stripped.lstrip().startswith("json\n"):
                 stripped = stripped.lstrip()[5:]
+    start = stripped.find("{")
+    if start < 0:
+        raise BookForgeError("Model output contains no JSON object")
     try:
-        value = json.loads(stripped)
+        value, _ = json.JSONDecoder().raw_decode(stripped[start:])
     except json.JSONDecodeError as exc:
         raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
     if not isinstance(value, dict):
@@ -1929,6 +1932,22 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         raise BookForgeError(f"Role cannot run headlessly: {role}")
     root = attempt_dir.parents[4]
     binary = _opencode_binary()
+    resolved_result = subprocess.run(
+        [binary, "--pure", "debug", "agent", role],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = json.loads(resolved_result.stdout)
+    resolved_model = resolved.get("model", {})
+    if (
+        resolved.get("name") != role
+        or resolved_model.get("providerID") != "openrouter"
+        or resolved_model.get("modelID") != MODEL.split("/", 1)[1]
+        or resolved.get("variant") != ROLE_SPECS[role][1]
+    ):
+        raise BookForgeError(f"Resolved OpenCode agent pin differs for {role}")
     environment = dict(os.environ)
     environment.pop("OPENROUTER_API_KEY", None)
     started = time.monotonic()
@@ -1966,30 +1985,41 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         if session_id:
             raise ProviderOutcomeUnknown(session_id, f"OpenCode ended without a complete result: {result.stderr.strip()}")
         raise BookForgeError(f"OpenCode failed before provider acceptance: {result.stderr.strip()}")
+    finishes = [event["part"] for event in events if event.get("type") == "step_finish" and isinstance(event.get("part"), dict)]
+    completed = [part for part in finishes if part.get("reason") == "stop"]
+    if not completed:
+        raise ProviderOutcomeUnknown(session_id, "Accepted call has no terminal stop event")
+    raw_finish = completed[-1]
     export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, check=False)
-    if export.returncode != 0:
-        raise ProviderOutcomeUnknown(session_id, "OpenCode session export failed after an accepted call")
+    receipt = None
     try:
-        receipt = json.loads(export.stdout)
-    except json.JSONDecodeError as exc:
-        raise ProviderOutcomeUnknown(session_id, "OpenCode session telemetry is unreadable") from exc
-    info = receipt["info"]
-    if info.get("agent") != role:
-        raise BookForgeError(f"OpenCode fell back from {role} to {info.get('agent')}")
+        if export.returncode == 0:
+            receipt = json.loads(export.stdout)
+    except json.JSONDecodeError:
+        receipt = None
     texts = [event["part"]["text"] for event in events if event.get("type") == "text" and isinstance(event.get("part", {}).get("text"), str)]
     if not texts:
         raise ProviderOutcomeUnknown(session_id, "Accepted call produced no observable text")
-    model = info["model"]
+    if receipt is not None:
+        info = receipt["info"]
+        if info.get("agent") != role:
+            raise BookForgeError(f"OpenCode fell back from {role} to {info.get('agent')}")
+        tokens = info.get("tokens", raw_finish.get("tokens", {}))
+        cost = info.get("cost", raw_finish.get("cost", 0))
+    else:
+        tokens = raw_finish.get("tokens", {})
+        cost = raw_finish.get("cost", 0)
     return {
         "text": texts[-1],
-        "provider": model["providerID"],
-        "model": model["id"],
-        "variant": model.get("variant"),
+        "provider": "openrouter",
+        "model": MODEL.split("/", 1)[1],
+        "variant": resolved["variant"],
         "session_id": session_id,
-        "tokens": info.get("tokens", {}),
-        "cost": info.get("cost", 0),
+        "tokens": tokens,
+        "cost": cost,
         "latency_ms": int((time.monotonic() - started) * 1000),
-        "finish": "stop",
+        "finish": raw_finish["reason"],
+        "session_export": "complete" if receipt is not None else "truncated-fallback-to-events",
     }
 
 
@@ -2137,6 +2167,8 @@ def run_next(
             final_path = root / "books" / str(book["id"]) / "manuscript" / "chapters" / f"{contract['id']}.md"
             if final_path.exists():
                 continue
+            if contract.get("pivotal"):
+                return produce_pivotal_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
             if draft_path.exists() and not contract.get("pivotal"):
                 return review_and_close_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
             if not draft_path.exists() and not contract.get("pivotal"):
@@ -2422,6 +2454,153 @@ def review_and_close_chapter(
             entities=[str(contract.get("pov"))],
         )
     return {"state": "closed", "book": book_id, "chapter": chapter_id, "calls": calls, "receipts": receipts}
+
+
+def produce_pivotal_chapter(
+    project: Path | str,
+    book_id: str,
+    chapter_id: str,
+    *,
+    provider=None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    if contract.get("pivotal") not in {"opener", "midpoint", "climax", "finale", "user-selected"}:
+        raise BookForgeError("Chapter is not explicitly pivotal")
+    task_specs = []
+    for label, brief in (
+        ("A", "Favor intimate restraint, subtext, and a precise interior turn."),
+        ("B", "Favor external pressure, irreversible action, and dramatic contrast."),
+    ):
+        task_id = f"PIVOT-{label}-{book_id}-{chapter_id}"
+        output_prefix = f"books/{book_id}/work/{chapter_id}/variants/{label}"
+        plan = _load_plan(root)
+        if not any(task["id"] == task_id for task in plan["tasks"]):
+            add_task(
+                root,
+                task_id,
+                "writer",
+                priority=45,
+                outputs=[f"{output_prefix}/draft.md", f"{output_prefix}/beat-map.json", f"{output_prefix}/consequences.json"],
+            )
+        capsule = {**contract, "variant_brief": brief, "anonymous": True}
+        envelope = build_envelope(
+            root,
+            role="writer",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state={"book_state": _read_json(root / "books" / book_id / "state.yaml")},
+            tools=[],
+            max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        task_specs.append((label, task_id, output_prefix, envelope, claim, Path(claim["capsule"]).parent))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(runner, "writer", envelope, attempt_dir): (label, task_id, output_prefix, envelope, claim)
+            for label, task_id, output_prefix, envelope, claim, attempt_dir in task_specs
+        }
+        variant_results = []
+        for future, metadata in futures.items():
+            variant_results.append((*metadata, future.result()))
+    candidates = {}
+    source_labels = {}
+    for label, task_id, output_prefix, envelope, claim, result in variant_results:
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        value = validate_writer_output(contract, str(result["text"]))
+        anonymous = f"candidate-{_sha256_bytes(str(value['prose_markdown']).encode())[:10]}"
+        if anonymous in candidates:
+            anonymous += f"-{label.lower()}"
+        candidates[anonymous] = value
+        source_labels[anonymous] = label
+        outputs = {
+            f"{output_prefix}/draft.md": str(value["prose_markdown"]).rstrip() + "\n",
+            f"{output_prefix}/beat-map.json": _json_bytes({"schema": 1, "beats": value["beat_map"]}),
+            f"{output_prefix}/consequences.json": _json_bytes({"schema": 1, "consequences": value["consequences"]}),
+        }
+        manifest = stage_outputs(root, claim["attempt"], outputs)
+        record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=_provider_telemetry(result, envelope),
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+    judge_id = f"JUDGE-{book_id}-{chapter_id}"
+    judgement_path = f"books/{book_id}/reviews/{chapter_id}/judgement.json"
+    plan = _load_plan(root)
+    if not any(task["id"] == judge_id for task in plan["tasks"]):
+        add_task(
+            root,
+            judge_id,
+            "judge",
+            deps=[f"PIVOT-A-{book_id}-{chapter_id}", f"PIVOT-B-{book_id}-{chapter_id}"],
+            priority=50,
+            outputs=[judgement_path],
+        )
+    judge_envelope = build_envelope(
+        root,
+        role="judge",
+        task_capsule={
+            "contract": contract,
+            "candidates": {label: {"prose_markdown": value["prose_markdown"], "beat_map": value["beat_map"]} for label, value in sorted(candidates.items())},
+        },
+        imports=list(contract.get("imports", [])),
+        state={},
+        tools=[],
+        max_output_tokens=2000,
+    )
+    judge_claim = claim_task(root, judge_id, request_hash=str(judge_envelope["hash"]))
+    judge_result = runner("judge", judge_envelope, Path(judge_claim["capsule"]).parent)
+    mark_provider_accepted(root, judge_claim["attempt"], str(judge_result["session_id"]))
+    decision = _parse_contract_json(str(judge_result["text"]))
+    ranking = decision.get("ranking")
+    if not isinstance(ranking, list) or len(ranking) != 2 or set(ranking) != set(candidates):
+        raise BookForgeError("Blind judge did not rank every anonymous candidate exactly once")
+    if not isinstance(decision.get("evidence"), list):
+        raise BookForgeError("Blind judge supplied no rank evidence")
+    winner_label = str(ranking[0])
+    winner = candidates[winner_label]
+    decision_record = {
+        "schema": 1,
+        "chapter": chapter_id,
+        "anonymous_candidates": sorted(candidates),
+        "ranking": ranking,
+        "evidence": decision["evidence"],
+        "winner": winner_label,
+        "anchors": [],
+    }
+    manifest = stage_outputs(root, judge_claim["attempt"], {judgement_path: _json_bytes(decision_record)})
+    record_execution(
+        root,
+        judge_claim["attempt"],
+        judge_claim["fence"],
+        output_hash=_sha256_bytes(_json_bytes(manifest)),
+        telemetry=_provider_telemetry(judge_result, judge_envelope),
+    )
+    promote_task(root, judge_claim["attempt"], judge_claim["fence"])
+    draft_id = f"DRAFT-{book_id}-{chapter_id}"
+    regular_outputs = [
+        f"books/{book_id}/work/{chapter_id}/draft.md",
+        f"books/{book_id}/work/{chapter_id}/beat-map.json",
+        f"books/{book_id}/work/{chapter_id}/consequences.json",
+    ]
+    plan = _load_plan(root)
+    if not any(task["id"] == draft_id for task in plan["tasks"]):
+        add_task(root, draft_id, "writer", deps=[judge_id], priority=55, outputs=regular_outputs)
+    _execute_materialized_task(
+        root,
+        draft_id,
+        {
+            regular_outputs[0]: str(winner["prose_markdown"]).rstrip() + "\n",
+            regular_outputs[1]: _json_bytes({"schema": 1, "chapter": chapter_id, "beats": winner["beat_map"]}),
+            regular_outputs[2]: _json_bytes({"schema": 1, "chapter": chapter_id, "consequences": winner["consequences"]}),
+        },
+    )
+    closure = review_and_close_chapter(root, book_id, chapter_id, provider=runner)
+    return {"state": closure["state"], "book": book_id, "chapter": chapter_id, "calls": 3 + int(closure["calls"]), "winner": winner_label}
 
 
 def render_plan(project: Path | str) -> str:

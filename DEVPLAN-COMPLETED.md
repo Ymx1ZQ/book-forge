@@ -264,3 +264,21 @@
 - [x] Commit & push
 
 **Done when:** The fixture closes in four happy-path calls with no unresolved blocker records and all expected hashes promoted.
+
+### M15: Judge only explicitly pivotal chapters ✅
+
+**Depends on:** M13, M14
+
+**Why:** Selective competition can improve high-leverage scenes without imposing ensemble cost on ordinary chapters.
+
+**Approach:** Mark opener, midpoint, climax, finale, or user-selected chapters as pivotal. Generate two isolated drafts with complementary briefs, randomize identities, select one through a blind judge, retain at most two low-risk anchors, then reuse the two-review and one-revision closure path.
+
+**Tasks:**
+- [x] Add explicit and policy-driven pivotal classification
+- [x] Generate two variants without shared session history
+- [x] Implement blind rank-only judgement and winner promotion
+- [x] Preserve losing output while limiting anchor integration
+- [x] Test: live — close a pivotal fixture in six happy-path calls
+- [x] Commit & push
+
+**Done when:** The fixture promotes one blind-selected winner within the nominal and recovery call ceilings.

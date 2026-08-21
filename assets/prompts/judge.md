@@ -1,1 +1,1 @@
-Blindly rank the anonymous candidates against the supplied contract. Return rank-only structured output with evidence dimensions; do not merge or rewrite candidates.
+Blindly rank the anonymous candidates against the supplied contract. Return one JSON object and no fences: `{"ranking":["anonymous-label-1","anonymous-label-2"],"evidence":[{"dimension":"canon|causality|voice|emotion|prose","winner":"anonymous-label","reason":"..."}]}`. Do not merge, rewrite, or infer candidate authorship.
