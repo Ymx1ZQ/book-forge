@@ -72,3 +72,23 @@
 - [x] Commit & push
 
 **Done when:** A supported old fixture upgrades recoverably while unsupported or interrupted migrations preserve the original project.
+
+## Phase B — Durable orchestration and bounded context
+
+### M5: Pin and verify the OpenCode role topology ✅
+
+**Depends on:** M2
+
+**Why:** Cost and permissions become unpredictable if roles inherit provider defaults or unrestricted filesystem access.
+
+**Approach:** Generate orchestrator, designer, writer, cold-reader, technical-editor, reviser, canon-auditor, translator, and judge roles. Pin model, variant, steps, depth, task permissions, and readable paths; give model roles write access only to attempt-local output. Validate OpenCode version and provider capabilities at boot and reject CLI overrides.
+
+**Tasks:**
+- [x] Define a role capability matrix and fail-closed permission templates
+- [x] Generate project-local OpenCode agents with exact model pins
+- [x] Probe required model, variants, task resume, and usage-reporting capabilities
+- [x] Test: unit — deny every forbidden role, delegation, read, and write edge
+- [x] Test: live — run one minimal role through existing OpenRouter authentication
+- [x] Commit & push
+
+**Done when:** Boot validation proves every configured capability and each role can access only its declared task surface.

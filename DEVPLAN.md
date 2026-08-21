@@ -153,24 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M5: Pin and verify the OpenCode role topology
-
-**Depends on:** M2
-
-**Why:** Cost and permissions become unpredictable if roles inherit provider defaults or unrestricted filesystem access.
-
-**Approach:** Generate orchestrator, designer, writer, cold-reader, technical-editor, reviser, canon-auditor, translator, and judge roles. Pin model, variant, steps, depth, task permissions, and readable paths; give model roles write access only to attempt-local output. Validate OpenCode version and provider capabilities at boot and reject CLI overrides.
-
-**Tasks:**
-- [ ] Define a role capability matrix and fail-closed permission templates
-- [ ] Generate project-local OpenCode agents with exact model pins
-- [ ] Probe required model, variants, task resume, and usage-reporting capabilities
-- [ ] Test: unit — deny every forbidden role, delegation, read, and write edge
-- [ ] Test: live — run one minimal role through existing OpenRouter authentication
-- [ ] Commit & push
-
-**Done when:** Boot validation proves every configured capability and each role can access only its declared task surface.
-
 ### M6: Execute a canonical single-writer task graph
 
 **Depends on:** M2, M5

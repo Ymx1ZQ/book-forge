@@ -15,6 +15,18 @@ from pathlib import Path
 
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 SCHEMA_VERSION = 1
+ROLE_SPECS = {
+    "book-forge-orchestrator": ("primary", "high", 30),
+    "designer": ("subagent", "high", 10),
+    "writer": ("subagent", "low", 8),
+    "cold-reader": ("subagent", "low", 5),
+    "technical-editor": ("subagent", "mid", 7),
+    "reviser": ("subagent", "mid", 8),
+    "canon-auditor": ("subagent", "high", 8),
+    "translator": ("subagent", "low", 7),
+    "judge": ("subagent", "high", 6),
+    "book-forge-smoke": ("primary", "low", 3),
+}
 
 
 class BookForgeError(RuntimeError):
@@ -71,6 +83,76 @@ def _block_record(block: str) -> dict[str, str]:
     return {"block": block, "hash": hashlib.sha256(block.encode()).hexdigest()}
 
 
+def _opencode_config() -> dict[str, object]:
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "model": MODEL,
+        "small_model": MODEL,
+        "default_agent": "book-forge-orchestrator",
+        "provider": {
+            "openrouter": {
+                "whitelist": ["deepseek/deepseek-v4-flash-0731"],
+                "models": {
+                    "deepseek/deepseek-v4-flash-0731": {
+                        "options": {
+                            "reasoningEffort": "medium",
+                            "provider": {
+                                "order": ["deepseek", "baidu"],
+                                "only": ["deepseek", "baidu"],
+                                "allow_fallbacks": False,
+                            },
+                        },
+                        "variants": {
+                            "low": {"reasoningEffort": "low"},
+                            "mid": {"reasoningEffort": "medium"},
+                            "high": {"reasoningEffort": "high"},
+                            "xhigh": {"reasoningEffort": "xhigh"},
+                        },
+                    }
+                },
+            }
+        },
+    }
+
+
+def _write_agents(stage: Path) -> None:
+    agents = stage / ".opencode" / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    for name, (mode, variant, steps) in ROLE_SPECS.items():
+        if name == "book-forge-orchestrator":
+            permissions = (
+                'permission:\n  "*": deny\n  skill:\n    "*": deny\n    book-forge: allow\n'
+                '  read:\n    "*": allow\n  bash:\n    "python3 *book_forge.py*": allow\n'
+            )
+            instruction = (
+                "Load the book-forge skill before acting. Route the request through its deterministic "
+                "control plane. Never edit canonical universe files directly."
+            )
+        elif name == "book-forge-smoke":
+            permissions = 'permission:\n  "*": deny\n  skill:\n    "*": deny\n    book-forge: allow\n'
+            instruction = "Load the book-forge skill when requested, then return exactly the requested readiness token."
+        else:
+            permissions = 'permission:\n  "*": deny\n'
+            instruction = (
+                f"You are the Book Forge {name} role. Return only the task's requested output contract. "
+                "You have no tools and must not assume context outside the supplied envelope."
+            )
+        body = (
+            "---\n"
+            f"description: Book Forge {name} role.\n"
+            f"mode: {mode}\nmodel: {MODEL}\nvariant: {variant}\nsteps: {steps}\n"
+            f"{permissions}---\n\n{instruction}\n"
+        )
+        (agents / f"{name}.md").write_text(body, encoding="utf-8")
+    commands = stage / ".opencode" / "commands"
+    commands.mkdir(parents=True, exist_ok=True)
+    (commands / "book-forge.md").write_text(
+        "---\ndescription: Run a Book Forge universe workflow.\nagent: book-forge-orchestrator\n---\n\n"
+        "Load the `book-forge` skill, then execute this request exactly: $ARGUMENTS\n",
+        encoding="utf-8",
+    )
+
+
 def _canonical_language(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", value):
         raise BookForgeError(f"Invalid source language tag: {value}")
@@ -120,19 +202,8 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "context": {"writer_max_input_tokens": 12000, "hard_fail_on_overflow": True},
     }
     _write_json(stage / "book-forge.yaml", config)
-    _write_json(
-        stage / "opencode.json",
-        {
-            "$schema": "https://opencode.ai/config.json",
-            "model": MODEL,
-            "small_model": MODEL,
-            "provider": {
-                "openrouter": {
-                    "whitelist": ["deepseek/deepseek-v4-flash-0731"],
-                }
-            },
-        },
-    )
+    _write_json(stage / "opencode.json", _opencode_config())
+    _write_agents(stage)
     _write_json(
         stage / "universe" / "universe.yaml",
         {
@@ -485,6 +556,46 @@ def migrate_project(project: Path | str, mode: str, *, fault_hook=None) -> dict[
         _write_json(migration / "journal.json", journal)
         raise
     return {**report, "migration": migration_id}
+
+
+def _opencode_binary() -> str:
+    binary = shutil.which("opencode")
+    if binary:
+        return binary
+    fallback = Path.home() / ".opencode" / "bin" / "opencode"
+    if fallback.is_file():
+        return str(fallback)
+    raise BookForgeError("OpenCode is not installed")
+
+
+def verify_runtime(project: Path | str) -> dict[str, object]:
+    root = _project_root(project)
+    binary = _opencode_binary()
+    version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    numbers = re.findall(r"\d+", version)
+    if tuple(map(int, numbers[:3])) < (1, 18, 18):
+        raise BookForgeError(f"OpenCode 1.18.18 or newer is required; found {version}")
+    models = subprocess.run([binary, "models", "openrouter"], capture_output=True, text=True, check=True).stdout
+    if MODEL not in models:
+        raise BookForgeError(f"Pinned model is unavailable: {MODEL}")
+    help_result = subprocess.run([binary, "run", "--help"], capture_output=True, text=True, check=True)
+    help_text = help_result.stdout + help_result.stderr
+    for required in ("--format", "--session", "--variant"):
+        if required not in help_text:
+            raise BookForgeError(f"OpenCode lacks required run capability: {required}")
+    debug = subprocess.run(
+        [binary, "--pure", "debug", "config"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout
+    resolved = json.loads(debug)
+    if resolved.get("model") != MODEL:
+        raise BookForgeError("Resolved OpenCode model differs from the project pin")
+    return {
+        "version": version,
+        "model": MODEL,
+        "variants": ["low", "mid", "high", "xhigh"],
+        "json_events": "--format" in help_text,
+        "session_resume": "--session" in help_text,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
