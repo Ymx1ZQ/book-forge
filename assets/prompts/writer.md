@@ -1,0 +1,1 @@
+Write one vivid, causally complete chapter from the supplied contract. Honor POV, voice, beats, canon, and target length. Return prose followed by a compact beat map and shared-consequence disclosure.

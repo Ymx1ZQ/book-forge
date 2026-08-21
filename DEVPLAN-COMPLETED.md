@@ -169,3 +169,21 @@
 - [x] Commit & push
 
 **Done when:** Seeded existing artifacts yield a deterministic minimal stale set and a later producer can register a new type without engine changes.
+
+### M10: Build bounded complete request envelopes ✅
+
+**Depends on:** M5, M9
+
+**Why:** Packet size alone omits role prompts, task instructions, tool schemas, and output allowance that the provider actually charges.
+
+**Approach:** Assemble and hash the complete byte-stable application envelope from role contract, task capsule, explicit imports, state, tools, and output limit. Close transitively only through `imports`, deduplicate, order, estimate with a pinned conservative DeepSeek-specific estimator plus an explicit OpenCode-provider overhead allowance, and calibrate that allowance from reported usage; apply distinct visibility and budgets per role.
+
+**Tasks:**
+- [x] Implement stable request assembly and model-specific token estimation
+- [x] Enforce per-role input, output, and total workflow budgets
+- [x] Exclude canon from cold-reader packets and author history from reviewers and judges
+- [x] Hard-fail overflow with ranked contributors instead of truncation
+- [x] Test: live — compare estimates with provider-reported usage within a declared tolerance
+- [x] Commit & push
+
+**Done when:** Repeated envelopes are byte-stable, visibility tests pass, and provider usage stays within the configured safety margin.

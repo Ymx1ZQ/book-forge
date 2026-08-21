@@ -153,24 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M10: Build bounded complete request envelopes
-
-**Depends on:** M5, M9
-
-**Why:** Packet size alone omits role prompts, task instructions, tool schemas, and output allowance that the provider actually charges.
-
-**Approach:** Assemble the complete serialized request envelope from role contract, task capsule, explicit imports, state, tools, and output limit. Close transitively only through `imports`, deduplicate, order, count with a pinned tokenizer plus safety margin, and hash the exact payload; apply distinct visibility and budgets per role.
-
-**Tasks:**
-- [ ] Implement stable request assembly and model-specific token estimation
-- [ ] Enforce per-role input, output, and total workflow budgets
-- [ ] Exclude canon from cold-reader packets and author history from reviewers and judges
-- [ ] Hard-fail overflow with ranked contributors instead of truncation
-- [ ] Test: live — compare estimates with provider-reported usage within a declared tolerance
-- [ ] Commit & push
-
-**Done when:** Repeated envelopes are byte-stable, visibility tests pass, and provider usage stays within the configured safety margin.
-
 ## Phase C — Universe and book design
 
 ### M11: Design and validate an evolving universe

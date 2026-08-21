@@ -18,20 +18,29 @@ MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 SCHEMA_VERSION = 1
 ROLE_SPECS = {
     "book-forge-orchestrator": ("primary", "high", 30),
-    "designer": ("subagent", "high", 10),
-    "writer": ("subagent", "low", 8),
-    "cold-reader": ("subagent", "low", 5),
-    "technical-editor": ("subagent", "mid", 7),
-    "reviser": ("subagent", "mid", 8),
-    "canon-auditor": ("subagent", "high", 8),
-    "translator": ("subagent", "low", 7),
-    "judge": ("subagent", "high", 6),
+    "designer": ("all", "high", 10),
+    "writer": ("all", "low", 8),
+    "cold-reader": ("all", "low", 5),
+    "technical-editor": ("all", "mid", 7),
+    "reviser": ("all", "mid", 8),
+    "canon-auditor": ("all", "high", 8),
+    "translator": ("all", "low", 7),
+    "judge": ("all", "high", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
 
 
 class BookForgeError(RuntimeError):
     pass
+
+
+class ContextOverflowError(BookForgeError):
+    def __init__(self, estimated: int, budget: int, contributors: list[dict[str, object]]):
+        self.estimated = estimated
+        self.budget = budget
+        self.contributors = contributors
+        summary = ", ".join(f"{row['name']}={row['estimated_tokens']}" for row in contributors[:5])
+        super().__init__(f"Context estimate {estimated} exceeds budget {budget}; contributors: {summary}")
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -1456,6 +1465,131 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
         {"schema": 1, "artifacts": {artifact_id: {"current": artifact_id not in stale, "causes": sorted(direct_stale) if artifact_id in stale else []} for artifact_id in sorted(registry["artifacts"])}},
     )
     return sorted(stale)
+
+
+ROLE_BUDGETS = {
+    "designer": (16000, 5000),
+    "writer": (12000, 6000),
+    "cold-reader": (8000, 2500),
+    "technical-editor": (10000, 3000),
+    "reviser": (14000, 6000),
+    "canon-auditor": (16000, 3500),
+    "translator": (14000, 6000),
+    "judge": (10000, 2000),
+}
+
+
+def _estimate_deepseek_tokens(value: bytes, *, include_overhead: bool = False) -> int:
+    # Conservative byte-based estimator pinned for the DeepSeek V4 Flash application
+    # envelope. Provider telemetry calibrates the separately visible OpenCode overhead.
+    estimate = (len(value) + 2) // 3
+    estimate = (estimate * 115 + 99) // 100
+    return estimate + (768 if include_overhead else 0)
+
+
+def _block_content(root: Path, block_id: str, index: dict[str, object]) -> str:
+    block = index["blocks"][block_id]
+    text_value = (root / block["path"]).read_text(encoding="utf-8")
+    local_name = block_id.split("#", 1)[1]
+    markers = list(BLOCK_MARKER.finditer(text_value))
+    for position, marker in enumerate(markers):
+        if marker.group(1) == local_name:
+            end = markers[position + 1].start() if position + 1 < len(markers) else len(text_value)
+            return text_value[marker.end():end].strip()
+    raise BookForgeError(f"Indexed block cannot be materialized: {block_id}")
+
+
+def _close_imports(index: dict[str, object], requested: list[str]) -> list[str]:
+    closed: set[str] = set()
+    frontier = list(requested)
+    while frontier:
+        block_id = frontier.pop()
+        if block_id in closed:
+            continue
+        if block_id not in index["blocks"]:
+            raise BookForgeError(f"Unknown context import: {block_id}")
+        closed.add(block_id)
+        frontier.extend(index["blocks"][block_id].get("imports", []))
+    return sorted(closed)
+
+
+def build_envelope(
+    project: Path | str,
+    *,
+    role: str,
+    task_capsule: dict[str, object],
+    imports: list[str],
+    state: dict[str, object],
+    tools: list[dict[str, object]],
+    max_output_tokens: int,
+    input_budget: int | None = None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    if role not in ROLE_BUDGETS:
+        raise BookForgeError(f"Role has no envelope budget: {role}")
+    default_input, output_budget = ROLE_BUDGETS[role]
+    budget = default_input if input_budget is None else input_budget
+    if max_output_tokens <= 0 or max_output_tokens > output_budget:
+        raise BookForgeError(f"Output allowance {max_output_tokens} exceeds {role} budget {output_budget}")
+    prompt_path = Path(__file__).resolve().parents[1] / "assets" / "prompts" / f"{role}.md"
+    if not prompt_path.is_file():
+        raise BookForgeError(f"Missing pinned role prompt: {prompt_path.name}")
+    role_prompt = prompt_path.read_text(encoding="utf-8").strip()
+    clean_task = dict(task_capsule)
+    if role in {"cold-reader", "technical-editor", "canon-auditor", "judge"}:
+        clean_task.pop("author_history", None)
+    index = rebuild_indexes(root)
+    context = []
+    if role != "cold-reader":
+        for block_id in _close_imports(index, imports):
+            context.append({"id": block_id, "hash": index["blocks"][block_id]["hash"], "content": _block_content(root, block_id, index)})
+    payload = {
+        "schema": 1,
+        "model": MODEL,
+        "role": role,
+        "role_prompt": role_prompt,
+        "task": clean_task,
+        "context": context,
+        "state": state,
+        "tools": tools,
+        "max_output_tokens": max_output_tokens,
+    }
+    envelope_bytes = (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    estimate = _estimate_deepseek_tokens(envelope_bytes, include_overhead=True)
+    sections: list[tuple[str, object]] = [
+        ("role_prompt", role_prompt),
+        ("task", clean_task),
+        ("state", state),
+        ("tools", tools),
+    ]
+    sections.extend((f"context:{row['id']}", row) for row in context)
+    contributors = sorted(
+        [
+            {
+                "name": name,
+                "estimated_tokens": _estimate_deepseek_tokens(
+                    json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+                ),
+            }
+            for name, value in sections
+        ],
+        key=lambda row: (-int(row["estimated_tokens"]), str(row["name"])),
+    )
+    if estimate > budget:
+        raise ContextOverflowError(estimate, budget, contributors)
+    return {
+        "payload": payload,
+        "bytes": envelope_bytes,
+        "hash": _sha256_bytes(envelope_bytes),
+        "estimated_input_tokens": estimate,
+        "max_output_tokens": max_output_tokens,
+        "estimated_total_tokens": estimate + max_output_tokens,
+        "input_budget": budget,
+        "output_budget": output_budget,
+        "estimator": "deepseek-v4-flash-conservative-v1",
+        "opencode_overhead_allowance_tokens": 768,
+        "contributors": contributors,
+    }
 
 
 def render_plan(project: Path | str) -> str:

@@ -1,0 +1,1 @@
+Translate the supplied chapter contextually into the requested locale. Preserve meaning, scene structure, voice distinctions, terminology, names, numbers, and formatting; return only the localized contract.

@@ -36,14 +36,14 @@ class RoleTopologyTests(unittest.TestCase):
 
         expected = {
             "book-forge-orchestrator": ("primary", "high"),
-            "designer": ("subagent", "high"),
-            "writer": ("subagent", "low"),
-            "cold-reader": ("subagent", "low"),
-            "technical-editor": ("subagent", "mid"),
-            "reviser": ("subagent", "mid"),
-            "canon-auditor": ("subagent", "high"),
-            "translator": ("subagent", "low"),
-            "judge": ("subagent", "high"),
+            "designer": ("all", "high"),
+            "writer": ("all", "low"),
+            "cold-reader": ("all", "low"),
+            "technical-editor": ("all", "mid"),
+            "reviser": ("all", "mid"),
+            "canon-auditor": ("all", "high"),
+            "translator": ("all", "low"),
+            "judge": ("all", "high"),
             "book-forge-smoke": ("primary", "low"),
         }
         files = {path.stem: path.read_text() for path in (self.project / ".opencode/agents").glob("*.md")}
