@@ -320,3 +320,21 @@
 - [x] Commit & push
 
 **Done when:** A requested locale advances serially with precise dependencies and one normal provider call per chapter.
+
+### M18: Propagate translation changes until boundaries converge ✅
+
+**Depends on:** M9, M17
+
+**Why:** Source, voice, glossary, style, metadata, or prior-boundary edits can affect later translated chapters.
+
+**Approach:** Record every translation input in the artifact DAG. Mark direct consumers stale, recompute each affected boundary, and continue forward only while the boundary hash changes; never overwrite existing translation prose automatically. Refuse publication from stale, missing, or incomplete locale state.
+
+**Tasks:**
+- [x] Add source, canon, locale, glossary, metadata, and boundary dependency edges
+- [x] Implement forward invalidation with boundary-hash convergence
+- [x] Distinguish stale prose from boundary-audit-only work
+- [x] Explain exact invalidation causes before scheduling model calls
+- [x] Test: integration — cover converging and cascading translation edits
+- [x] Commit & push
+
+**Done when:** Each seeded change produces the minimal proven stale suffix and no current translation is regenerated unnecessarily.

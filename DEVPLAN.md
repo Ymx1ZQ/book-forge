@@ -159,24 +159,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase E — Opt-in translation
 
-### M18: Propagate translation changes until boundaries converge
-
-**Depends on:** M9, M17
-
-**Why:** Source, voice, glossary, style, metadata, or prior-boundary edits can affect later translated chapters.
-
-**Approach:** Record every translation input in the artifact DAG. Mark direct consumers stale, recompute each affected boundary, and continue forward only while the boundary hash changes; never overwrite existing translation prose automatically. Refuse publication from stale, missing, or incomplete locale state.
-
-**Tasks:**
-- [ ] Add source, canon, locale, glossary, metadata, and boundary dependency edges
-- [ ] Implement forward invalidation with boundary-hash convergence
-- [ ] Distinguish stale prose from boundary-audit-only work
-- [ ] Explain exact invalidation causes before scheduling model calls
-- [ ] Test: integration — cover converging and cascading translation edits
-- [ ] Commit & push
-
-**Done when:** Each seeded change produces the minimal proven stale suffix and no current translation is regenerated unnecessarily.
-
 ## Phase F — Cross-book assurance and publication
 
 ### M19: Audit continuity from bounded evidence

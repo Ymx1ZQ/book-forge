@@ -2839,6 +2839,17 @@ def _translate_one(
                 "current": True,
             }
         )
+        input_hashes = state.setdefault("input_hashes", {"source": {}, "canon": {}, "global": {}})
+        input_hashes.setdefault("source", {})[chapter_id] = _file_hash(source_path)
+        index = rebuild_indexes(root)
+        input_hashes.setdefault("canon", {})[chapter_id] = {
+            block_id: index["blocks"][block_id]["hash"] for block_id in contract.get("imports", [])
+        }
+        input_hashes["global"] = {
+            "style": _file_hash(locale_root / "style.md"),
+            "glossary": _sha256_bytes(glossary.encode()),
+            "metadata": _file_hash(locale_root / "metadata.yaml"),
+        }
         outputs = {
             f"books/{book_id}/translations/{locale}/chapters/{chapter_id}.md": str(value["translated_markdown"]).rstrip() + "\n",
             f"books/{book_id}/translations/{locale}/state.yaml": _json_bytes(state),
@@ -2905,6 +2916,102 @@ def translate_next(
         "calls": sum(int(result["calls"]) for result in results),
         "chapters": [result["chapter"] for result in results],
     }
+
+
+def translation_impact(project: Path | str, book_id: str, locale: str) -> dict[str, object]:
+    root = _project_root(project)
+    canonical = _canonical_locale(locale)
+    locale_root = root / "books" / book_id / "translations" / canonical
+    state_path = locale_root / "state.yaml"
+    state = _read_json(state_path)
+    chapters = list(state.get("completed_chapters", []))
+    stored = state.get("input_hashes", {})
+    causes: dict[str, list[str]] = {chapter: [] for chapter in chapters}
+    current_global = {
+        "style": _file_hash(locale_root / "style.md"),
+        "glossary": _file_hash(locale_root / "glossary.md"),
+        "metadata": _file_hash(locale_root / "metadata.yaml"),
+    }
+    global_changes = [name for name, value in current_global.items() if stored.get("global", {}).get(name) != value]
+    stale: set[str] = set()
+    if global_changes:
+        for chapter in chapters:
+            stale.add(chapter)
+            causes[chapter].extend(f"locale {name} hash changed" for name in global_changes)
+    index = rebuild_indexes(root)
+    for chapter in chapters:
+        source = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter}.md"
+        if stored.get("source", {}).get(chapter) != _file_hash(source):
+            stale.add(chapter)
+            causes[chapter].append("source hash changed")
+        contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter}.json")
+        for block_id in contract.get("imports", []):
+            current = index["blocks"].get(block_id, {}).get("hash")
+            if stored.get("canon", {}).get(chapter, {}).get(block_id) != current:
+                stale.add(chapter)
+                causes[chapter].append(f"canon import changed: {block_id}")
+    boundary_audit: list[str] = []
+    if stale and not global_changes:
+        first = min(chapters.index(chapter) for chapter in stale)
+        boundary_audit = [chapter for chapter in chapters[first + 1:] if chapter not in stale]
+        for chapter in boundary_audit:
+            causes[chapter].append(f"prior translated boundary may change after {chapters[first]}")
+    state["current"] = not stale
+    state["status"] = "current" if not stale else "stale"
+    state["stale_prose"] = sorted(stale, key=chapters.index)
+    state["boundary_audit"] = boundary_audit
+    state["stale_causes"] = {chapter: values for chapter, values in causes.items() if values}
+    _write_json(state_path, state)
+    return {
+        "book": book_id,
+        "locale": canonical,
+        "stale_prose": state["stale_prose"],
+        "boundary_audit": boundary_audit,
+        "causes": state["stale_causes"],
+    }
+
+
+def converge_translation_boundaries(
+    project: Path | str,
+    book_id: str,
+    locale: str,
+    *,
+    changed_chapter: str,
+    recomputed: dict[str, str],
+) -> dict[str, object]:
+    root = _project_root(project)
+    canonical = _canonical_locale(locale)
+    state_path = root / "books" / book_id / "translations" / canonical / "state.yaml"
+    state = _read_json(state_path)
+    chapters = list(state.get("completed_chapters", []))
+    if changed_chapter not in chapters:
+        raise BookForgeError(f"Unknown completed translated chapter: {changed_chapter}")
+    stale = []
+    boundary_audit = []
+    index = chapters.index(changed_chapter)
+    for position in range(index, len(chapters)):
+        chapter = chapters[position]
+        stale.append(chapter)
+        if position == len(chapters) - 1:
+            break
+        if chapter not in recomputed:
+            boundary_audit.append(chapters[position + 1])
+            break
+        supplied = recomputed[chapter]
+        new_hash = supplied if re.fullmatch(r"[0-9a-f]{64}", supplied) else _sha256_bytes(supplied.encode())
+        old_hash = state.get("boundary_hashes", {}).get(chapter)
+        if new_hash == old_hash:
+            break
+    state["current"] = False
+    state["status"] = "stale"
+    state["stale_prose"] = stale
+    state["boundary_audit"] = boundary_audit
+    state["stale_causes"] = {
+        chapter: ["direct input changed" if chapter == changed_chapter else f"prior boundary changed after {chapters[chapters.index(chapter) - 1]}"]
+        for chapter in stale
+    }
+    _write_json(state_path, state)
+    return {"book": book_id, "locale": canonical, "stale_prose": stale, "boundary_audit": boundary_audit, "causes": state["stale_causes"]}
 
 
 def render_plan(project: Path | str) -> str:
