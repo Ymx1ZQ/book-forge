@@ -1088,6 +1088,177 @@ def promote_task(project: Path | str, attempt_id: str, fence: int, *, fault_hook
     return _read_json(root / completed["receipt"])
 
 
+def _telemetry_bucket() -> dict[str, object]:
+    return {
+        "calls": 0,
+        "estimated_input_tokens": 0,
+        "provider_input_tokens": 0,
+        "output_tokens": 0,
+        "cost": 0.0,
+        "latency_ms": 0,
+    }
+
+
+def _add_telemetry(bucket: dict[str, object], receipt: dict[str, object]) -> None:
+    tokens = receipt.get("tokens") if isinstance(receipt.get("tokens"), dict) else {}
+    bucket["calls"] = int(bucket["calls"]) + 1
+    bucket["estimated_input_tokens"] = int(bucket["estimated_input_tokens"]) + int(receipt.get("estimated_input_tokens", 0) or 0)
+    bucket["provider_input_tokens"] = int(bucket["provider_input_tokens"]) + int(tokens.get("input", 0) or 0)
+    bucket["output_tokens"] = int(bucket["output_tokens"]) + int(tokens.get("output", 0) or 0)
+    bucket["cost"] = float(bucket["cost"]) + float(receipt.get("cost", 0) or 0)
+    bucket["latency_ms"] = int(bucket["latency_ms"]) + int(receipt.get("latency_ms", 0) or 0)
+
+
+def _task_coordinates(task_id: str) -> dict[str, str | None]:
+    book = re.search(r"BOOK-\d+", task_id)
+    chapter = re.search(r"CH-\d+", task_id)
+    locale = None
+    if task_id.startswith("TRANSLATE-") and chapter:
+        suffix = task_id.split(chapter.group(0), 1)[1].lstrip("-")
+        locale = suffix or None
+    return {
+        "book": book.group(0) if book else None,
+        "chapter": chapter.group(0) if chapter else None,
+        "locale": locale,
+    }
+
+
+def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, object]:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    tasks = {str(task["id"]): task for task in plan["tasks"]}
+    attempts = {str(attempt["id"]): attempt for attempt in plan["attempts"]}
+    receipts = []
+    for path in sorted((root / ".book-forge" / "runs").glob("RUN-*/attempts/*/execution-receipt.json")):
+        value = _read_json(path)
+        value["_run"] = path.parts[-4]
+        value["_path"] = str(path.relative_to(root))
+        attempt = attempts.get(str(value.get("attempt")), {})
+        value["_role"] = str(attempt.get("role") or tasks.get(str(value.get("task")), {}).get("role", "unknown"))
+        receipts.append(value)
+
+    by_role: dict[str, dict[str, object]] = {}
+    by_book: dict[str, dict[str, object]] = {}
+    by_locale: dict[str, dict[str, object]] = {}
+    by_run: dict[str, dict[str, object]] = {}
+    usage = _telemetry_bucket()
+    violations = []
+    calls_by_chapter: dict[tuple[str, str], int] = {}
+    calls_by_translation: dict[str, int] = {}
+    calls_by_design: dict[str, int] = {}
+    calls_by_audit: dict[str, int] = {}
+    for receipt in receipts:
+        role = str(receipt["_role"])
+        task_id = str(receipt.get("task", ""))
+        coordinates = _task_coordinates(task_id)
+        _add_telemetry(usage, receipt)
+        for mapping, key in (
+            (by_role, role),
+            (by_book, coordinates["book"]),
+            (by_locale, coordinates["locale"]),
+            (by_run, str(receipt["_run"])),
+        ):
+            if key:
+                bucket = mapping.setdefault(str(key), _telemetry_bucket())
+                _add_telemetry(bucket, receipt)
+        expected = ROLE_SPECS.get(role)
+        if receipt.get("provider") != "openrouter" or str(receipt.get("model")) not in {MODEL, MODEL.split("/", 1)[1]}:
+            violations.append({"code": "model_pin", "task": task_id, "detail": "provider or model differs from the OpenRouter pin"})
+        if expected and receipt.get("variant") != expected[1]:
+            violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected[1]}, found {receipt.get('variant')}"})
+        estimated = int(receipt.get("estimated_input_tokens", 0) or 0)
+        provider_input = int((receipt.get("tokens") or {}).get("input", 0) or 0)
+        if expected and estimated > ROLE_BUDGETS[role][0]:
+            violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{estimated} > {ROLE_BUDGETS[role][0]}"})
+        if estimated and provider_input > int(estimated * 1.25) + 256:
+            violations.append({"code": "provider_overhead", "task": task_id, "detail": f"provider {provider_input}, estimated {estimated}"})
+        if task_id.startswith("TRANSLATE-"):
+            calls_by_translation[task_id] = calls_by_translation.get(task_id, 0) + 1
+        elif task_id.startswith("DESIGN-"):
+            scope = coordinates["book"] or "universe"
+            calls_by_design[str(scope)] = calls_by_design.get(str(scope), 0) + 1
+        elif task_id.startswith("AUDIT-"):
+            calls_by_audit[task_id] = calls_by_audit.get(task_id, 0) + 1
+        elif coordinates["book"] and coordinates["chapter"]:
+            key = (str(coordinates["book"]), str(coordinates["chapter"]))
+            calls_by_chapter[key] = calls_by_chapter.get(key, 0) + 1
+
+    accepted_attempts = [attempt for attempt in plan["attempts"] if attempt.get("provider_accepted")]
+    accepted_by_task: dict[str, int] = {}
+    for attempt in accepted_attempts:
+        task_id = str(attempt["task"])
+        accepted_by_task[task_id] = accepted_by_task.get(task_id, 0) + 1
+    receipt_attempts = {str(receipt.get("attempt")) for receipt in receipts}
+    unattributed = [str(attempt["id"]) for attempt in accepted_attempts if str(attempt["id"]) not in receipt_attempts and attempt.get("state") not in {"outcome_unknown", "orphaned"}]
+    for attempt_id in unattributed:
+        violations.append({"code": "accepted_call_unattributed", "attempt": attempt_id, "detail": "accepted call lacks a receipt or explicit ambiguous state"})
+
+    for (book_id, chapter_id), count in sorted(calls_by_chapter.items()):
+        contract_path = root / "books" / book_id / "chapters" / f"{chapter_id}.json"
+        pivotal = contract_path.is_file() and bool(_read_json(contract_path).get("pivotal"))
+        limit = 7 if pivotal else 5
+        if count > limit:
+            violations.append({"code": "chapter_call_budget", "task": f"{book_id}/{chapter_id}", "detail": f"{count} > {limit}"})
+    for task_id, count in sorted(calls_by_translation.items()):
+        if count > 2:
+            violations.append({"code": "translation_call_budget", "task": task_id, "detail": f"{count} > 2"})
+    for scope, count in sorted(calls_by_design.items()):
+        if count > 3:
+            violations.append({"code": "design_call_budget", "task": scope, "detail": f"{count} > 3"})
+    for task_id, count in sorted(calls_by_audit.items()):
+        if count > 2:
+            violations.append({"code": "audit_call_budget", "task": task_id, "detail": f"{count} > 2"})
+
+    active = [attempt for attempt in plan["attempts"] if attempt.get("state") in {"running", "promotion_pending"}]
+    if len(active) > 2:
+        violations.append({"code": "concurrency", "detail": f"{len(active)} active attempts > 2"})
+    currentness_path = root / ".book-forge" / "currentness.json"
+    currentness = _read_json(currentness_path) if currentness_path.is_file() else {"artifacts": {}}
+    stale = {key: value for key, value in currentness.get("artifacts", {}).items() if not value.get("current", True)}
+    override_path = root / ".book-forge" / "budget-overrides.json"
+    overrides = _read_json(override_path) if override_path.is_file() else {}
+    if len(stale) > 20 and not overrides.get("invalidation_fanout"):
+        violations.append({"code": "invalidation_fanout", "detail": f"{len(stale)} stale artifacts > 20 without override"})
+
+    registry = _artifact_registry(root)
+    missing_edges = []
+    for artifact_id, artifact in registry.get("artifacts", {}).items():
+        if not (root / str(artifact["path"])).is_file():
+            missing_edges.append(f"missing path: {artifact_id}")
+        for dependency in artifact.get("dependencies", []):
+            if "#" not in dependency and dependency not in registry["artifacts"]:
+                missing_edges.append(f"missing dependency: {artifact_id} -> {dependency}")
+    if missing_edges:
+        violations.append({"code": "artifact_dag", "detail": "; ".join(missing_edges)})
+
+    provider = _read_json(root / ".book-forge" / "provider.json")
+    retry_count = sum(max(0, count - 1) for count in accepted_by_task.values())
+    ambiguous = [str(attempt["id"]) for attempt in plan["attempts"] if attempt.get("state") == "outcome_unknown"]
+    stale_causes: dict[str, list[str]] = {key: list(value.get("causes", [])) for key, value in stale.items()}
+    for state_path in sorted((root / "books").glob("*/translations/*/state.yaml")):
+        state = _read_json(state_path)
+        for chapter, causes in state.get("stale_causes", {}).items():
+            stale_causes[f"{state_path.parent.relative_to(root)}:{chapter}"] = list(causes)
+    report = {
+        "valid": not violations,
+        "calls": {"accepted": len(accepted_attempts), "with_receipts": len(receipts), "unattributed": unattributed},
+        "usage": {key: value for key, value in usage.items() if key != "calls"},
+        "by_role": dict(sorted(by_role.items())),
+        "by_book": dict(sorted(by_book.items())),
+        "by_locale": dict(sorted(by_locale.items())),
+        "by_run": dict(sorted(by_run.items())),
+        "retries": retry_count,
+        "ambiguous_calls": ambiguous,
+        "wait": {key: provider.get(key) for key in ("retry_after", "chosen_backoff", "wait_started_at", "eligible_at") if provider.get(key) is not None},
+        "stale_causes": stale_causes,
+        "artifact_dag": {"registered": len(registry.get("artifacts", {})), "missing": missing_edges},
+        "violations": violations,
+    }
+    if strict and violations:
+        raise BookForgeError("Telemetry budget validation failed: " + ", ".join(sorted({str(row["code"]) for row in violations})))
+    return report
+
+
 def status_project(project: Path | str) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -1104,7 +1275,13 @@ def status_project(project: Path | str) -> dict[str, object]:
     run = None
     if control.get("active_run"):
         run = _read_json(root / ".book-forge" / "runs" / str(control["active_run"]) / "run.json")
-    return {"tasks": counts, "transactions": transaction_states, "plan_hash": control["plan_hash"], "run": run}
+    return {
+        "tasks": counts,
+        "transactions": transaction_states,
+        "plan_hash": control["plan_hash"],
+        "run": run,
+        "telemetry": telemetry_report(root),
+    }
 
 
 def _run_path(root: Path, run_id: str) -> Path:

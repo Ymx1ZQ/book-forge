@@ -163,24 +163,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase G — Measured reliability
 
-### M23: Enforce token and workflow telemetry at every route
-
-**Depends on:** M10, M15, M19, M22
-
-**Why:** Efficiency must be measured on complete paid requests and guarded as each expensive workflow lands.
-
-**Approach:** Aggregate immutable receipt telemetry by role, chapter, book, locale, and run. M10, M13, M15, and M17 enforce local budgets when introduced; this milestone adds cross-route regressions, invalidation fan-out reports, latency and retry analysis, and explicit manifest-recorded overrides.
-
-**Tasks:**
-- [ ] Produce status and cost summaries without model calls
-- [ ] Compare estimated and provider-reported input/output usage
-- [ ] Enforce workflow call, concurrency, variant, and invalidation budgets
-- [ ] Report retries, ambiguous calls, waits, and stale causes separately
-- [ ] Test: regression — fail seeded envelope, call, and fan-out budget breaches
-- [ ] Commit & push
-
-**Done when:** Every accepted provider call is attributable and the end-to-end artifact DAG validates all registered source, translation, audit, and publication edges.
-
 ### M24: Prove the recovery and transaction matrix hermetically
 
 **Depends on:** M7, M8, M18, M20, M21, M22

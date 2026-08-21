@@ -413,3 +413,21 @@
 - [x] Commit & push
 
 **Done when:** A requested current locale produces both validated formats and every stale fixture fails before rendering.
+
+### M23: Enforce token and workflow telemetry at every route ✅
+
+**Depends on:** M10, M15, M19, M22
+
+**Why:** Efficiency must be measured on complete paid requests and guarded as each expensive workflow lands.
+
+**Approach:** Aggregate immutable receipt telemetry by role, chapter, book, locale, and run. M10, M13, M15, and M17 enforce local budgets when introduced; this milestone adds cross-route regressions, invalidation fan-out reports, latency and retry analysis, and explicit manifest-recorded overrides.
+
+**Tasks:**
+- [x] Produce status and cost summaries without model calls
+- [x] Compare estimated and provider-reported input/output usage
+- [x] Enforce workflow call, concurrency, variant, and invalidation budgets
+- [x] Report retries, ambiguous calls, waits, and stale causes separately
+- [x] Test: regression — fail seeded envelope, call, and fan-out budget breaches
+- [x] Commit & push
+
+**Done when:** Every accepted provider call is attributable and the end-to-end artifact DAG validates all registered source, translation, audit, and publication edges.
