@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -712,6 +713,11 @@ def _task_depth(task_id: str, tasks: dict[str, dict[str, object]], cache: dict[s
 
 def ready_frontier(project: Path | str) -> list[dict[str, object]]:
     root = _project_root(project)
+    active = _control(root).get("active_run")
+    if active:
+        run_path = root / ".book-forge" / "runs" / str(active) / "run.json"
+        if run_path.exists() and _read_json(run_path).get("state") != "running":
+            return []
     plan = _load_plan(root)
     tasks = {str(task["id"]): task for task in plan["tasks"]}
     succeeded = {task_id for task_id, task in tasks.items() if task["state"] == "succeeded"}
@@ -729,11 +735,27 @@ def ready_frontier(project: Path | str) -> list[dict[str, object]]:
     )
 
 
-def claim_task(project: Path | str, task_id: str, *, request_hash: str) -> dict[str, object]:
+def claim_task(
+    project: Path | str,
+    task_id: str,
+    *,
+    request_hash: str,
+    now: float | None = None,
+    lease_seconds: float = 300,
+) -> dict[str, object]:
     root = _project_root(project)
+    current_time = time.time() if now is None else now
+    if not provider_ready(root, now=current_time):
+        raise BookForgeError("Provider is rate-limited; dispatch is not yet eligible")
+    run = start_run(root, now=current_time)
+    if run["state"] != "running":
+        raise BookForgeError(f"Run does not accept dispatch while {run['state']}")
     if not re.fullmatch(r"[0-9a-f]{64}", request_hash):
         raise BookForgeError("request_hash must be a lowercase SHA-256")
     plan = _load_plan(root)
+    active_attempts = [row for row in plan["attempts"] if row["state"] in {"running", "promotion_pending"}]
+    if len(active_attempts) >= 2:
+        raise BookForgeError("Maximum subagent concurrency is two")
     ready_ids = {str(task["id"]) for task in ready_frontier(root)}
     if task_id not in ready_ids:
         raise BookForgeError(f"Task is not ready: {task_id}")
@@ -751,6 +773,9 @@ def claim_task(project: Path | str, task_id: str, *, request_hash: str) -> dict[
         "fence": fence,
         "request_hash": request_hash,
         "state": "running",
+        "provider_accepted": False,
+        "heartbeat_at": current_time,
+        "lease_expires_at": current_time + lease_seconds,
     }
     plan["attempts"].append(attempt)
     capsule = {"schema": 1, "task": task, "attempt": attempt_id, "fence": fence, "request_hash": request_hash}
@@ -794,6 +819,7 @@ def record_execution(project: Path | str, attempt_id: str, fence: int, *, output
     task["execution_receipt"] = str(receipt_path.relative_to(root))
     _save_plan(root, plan)
     render_plan(root)
+    _settle_run(root)
     return receipt
 
 
@@ -883,6 +909,7 @@ def _complete_promoted_attempt(root: Path, attempt_id: str, receipt_path: Path) 
     task["promotion_receipt"] = str(receipt_path.relative_to(root))
     _save_plan(root, plan)
     render_plan(root)
+    _settle_run(root)
 
 
 def _recover_transaction(root: Path, transaction: Path, *, fault_hook=None) -> dict[str, object]:
@@ -1007,7 +1034,241 @@ def status_project(project: Path | str) -> dict[str, object]:
         for path in transactions.glob("TXN-*/journal.json"):
             state = str(_read_json(path)["state"])
             transaction_states[state] = transaction_states.get(state, 0) + 1
-    return {"tasks": counts, "transactions": transaction_states, "plan_hash": _control(root)["plan_hash"]}
+    control = _control(root)
+    run = None
+    if control.get("active_run"):
+        run = _read_json(root / ".book-forge" / "runs" / str(control["active_run"]) / "run.json")
+    return {"tasks": counts, "transactions": transaction_states, "plan_hash": control["plan_hash"], "run": run}
+
+
+def _run_path(root: Path, run_id: str) -> Path:
+    return root / ".book-forge" / "runs" / run_id / "run.json"
+
+
+def start_run(project: Path | str, *, now: float | None = None) -> dict[str, object]:
+    root = _project_root(project)
+    control = _control(root)
+    if control.get("active_run"):
+        run = _read_json(_run_path(root, str(control["active_run"])))
+        if run["state"] not in {"completed", "cancelled"}:
+            return run
+    runs_root = root / ".book-forge" / "runs"
+    run_id = _next_id([path.name for path in runs_root.glob("RUN-*")], "RUN-")
+    current_time = time.time() if now is None else now
+    run = {
+        "schema": 1,
+        "id": run_id,
+        "state": "running",
+        "desired_state": "running",
+        "desired_generation": int(control.get("desired_generation", 0)) + 1,
+        "started_at": current_time,
+    }
+    _write_json(_run_path(root, run_id), run)
+    control["active_run"] = run_id
+    control["desired_generation"] = run["desired_generation"]
+    _write_json(root / ".book-forge" / "control.json", control)
+    return run
+
+
+def _settle_run(project: Path | str) -> dict[str, object] | None:
+    root = _project_root(project)
+    control = _control(root)
+    if not control.get("active_run"):
+        return None
+    path = _run_path(root, str(control["active_run"]))
+    run = _read_json(path)
+    plan = _load_plan(root)
+    task_states = {str(task["state"]) for task in plan["tasks"]}
+    if run.get("desired_state") == "paused":
+        if "outcome_unknown" in task_states:
+            run["state"] = "blocked"
+        elif task_states & {"running", "validating", "promotion_pending"}:
+            run["state"] = "pausing"
+        else:
+            run["state"] = "paused"
+    elif plan["tasks"] and task_states <= {"succeeded", "cancelled"}:
+        run["state"] = "completed"
+    _write_json(path, run)
+    return run
+
+
+def mark_provider_accepted(
+    project: Path | str, attempt_id: str, session_id: str, *, now: float | None = None
+) -> dict[str, object]:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    if attempt["state"] != "running":
+        raise BookForgeError("Only a running attempt can be marked accepted")
+    attempt["provider_accepted"] = True
+    attempt["session_id"] = session_id
+    attempt["accepted_at"] = time.time() if now is None else now
+    _save_plan(root, plan)
+    intent = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "intent.json"
+    value = _read_json(intent)
+    value["accepted"] = True
+    value["session_id"] = session_id
+    _write_json(intent, value)
+    return attempt
+
+
+def pause_run(project: Path | str, *, emergency: bool = False) -> dict[str, object]:
+    root = _project_root(project)
+    control = _control(root)
+    if not control.get("active_run"):
+        raise BookForgeError("No active run")
+    run_path = _run_path(root, str(control["active_run"]))
+    run = _read_json(run_path)
+    if run["state"] not in {"running", "pausing"}:
+        raise BookForgeError(f"Run cannot pause while {run['state']}")
+    run["desired_state"] = "paused"
+    run["desired_generation"] = int(run["desired_generation"]) + 1
+    run["state"] = "pausing"
+    run["emergency"] = emergency
+    _write_json(run_path, run)
+    control["desired_generation"] = run["desired_generation"]
+    _write_json(root / ".book-forge" / "control.json", control)
+    if emergency:
+        plan = _load_plan(root)
+        for attempt in plan["attempts"]:
+            if attempt["state"] != "running":
+                continue
+            task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+            if attempt.get("provider_accepted"):
+                attempt["state"] = "outcome_unknown"
+                task["state"] = "outcome_unknown"
+            else:
+                attempt["state"] = "orphaned"
+                task["state"] = "pending"
+        _save_plan(root, plan)
+        render_plan(root)
+    return _settle_run(root)
+
+
+def _block_descendants(plan: dict[str, object], task_id: str) -> None:
+    blocked = {task_id}
+    changed = True
+    while changed:
+        changed = False
+        for task in plan["tasks"]:
+            if task["id"] in blocked or set(task["deps"]) & blocked:
+                if task["id"] not in blocked:
+                    blocked.add(str(task["id"]))
+                    changed = True
+                task["state"] = "blocked"
+
+
+def resume_run(project: Path | str, *, resolutions: dict[str, str] | None = None) -> dict[str, object]:
+    root = _project_root(project)
+    control = _control(root)
+    if not control.get("active_run"):
+        raise BookForgeError("No active run")
+    run_path = _run_path(root, str(control["active_run"]))
+    run = _read_json(run_path)
+    if run["state"] not in {"paused", "blocked"}:
+        raise BookForgeError(f"Run cannot resume while {run['state']}")
+    plan = _load_plan(root)
+    unknown_tasks = {str(task["id"]): task for task in plan["tasks"] if task["state"] == "outcome_unknown"}
+    choices = resolutions or {}
+    if set(unknown_tasks) != set(choices):
+        raise BookForgeError("Every outcome_unknown task requires an explicit retry or abandon resolution")
+    for task_id, task in unknown_tasks.items():
+        choice = choices[task_id]
+        if choice not in {"retry", "abandon"}:
+            raise BookForgeError(f"Invalid unknown resolution for {task_id}: {choice}")
+        attempt = _attempt(plan, str(task["attempt"]))
+        if choice == "retry":
+            attempt["state"] = "orphaned"
+            attempt["resolution"] = "retry"
+            task["state"] = "pending"
+            task.pop("attempt", None)
+        else:
+            attempt["resolution"] = "abandon"
+            _block_descendants(plan, task_id)
+    _save_plan(root, plan)
+    render_plan(root)
+    run["state"] = "running"
+    run["desired_state"] = "running"
+    run["desired_generation"] = int(run["desired_generation"]) + 1
+    _write_json(run_path, run)
+    control = _control(root)
+    control["desired_generation"] = run["desired_generation"]
+    _write_json(root / ".book-forge" / "control.json", control)
+    return run
+
+
+def set_rate_limit(project: Path | str, *, retry_after: float, now: float | None = None) -> dict[str, object]:
+    if retry_after < 0:
+        raise BookForgeError("Retry-After cannot be negative")
+    root = _project_root(project)
+    current_time = time.time() if now is None else now
+    data = _read_json(root / ".book-forge" / "provider.json")
+    data.update({"retry_after": retry_after, "chosen_backoff": retry_after, "wait_started_at": current_time, "eligible_at": current_time + retry_after})
+    _write_json(root / ".book-forge" / "provider.json", data)
+    return data
+
+
+def provider_ready(project: Path | str, *, now: float | None = None) -> bool:
+    root = _project_root(project)
+    current_time = time.time() if now is None else now
+    eligible = _read_json(root / ".book-forge" / "provider.json").get("eligible_at")
+    return eligible is None or current_time >= float(eligible)
+
+
+def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, object]:
+    root = _project_root(project)
+    recover_transactions(root)
+    current_time = time.time() if now is None else now
+    plan = _load_plan(root)
+    orphaned = []
+    unknown = []
+    for attempt in plan["attempts"]:
+        if attempt["state"] == "running" and current_time > float(attempt.get("lease_expires_at", current_time + 1)):
+            task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+            if attempt.get("provider_accepted"):
+                attempt["state"] = "outcome_unknown"
+                task["state"] = "outcome_unknown"
+                unknown.append(str(attempt["id"]))
+            else:
+                attempt["state"] = "orphaned"
+                task["state"] = "pending"
+                task.pop("attempt", None)
+                orphaned.append(str(attempt["id"]))
+    _save_plan(root, plan)
+    render_plan(root)
+    if unknown:
+        control = _control(root)
+        if control.get("active_run"):
+            run_path = _run_path(root, str(control["active_run"]))
+            run = _read_json(run_path)
+            run["state"] = "blocked"
+            _write_json(run_path, run)
+    return {"orphaned": orphaned, "outcome_unknown": unknown}
+
+
+def record_late_result(project: Path | str, attempt_id: str, output_hash: str) -> dict[str, object]:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    if not attempt.get("provider_accepted") or attempt["state"] not in {"outcome_unknown", "orphaned"}:
+        raise BookForgeError("Late result is not associated with an ambiguous accepted attempt")
+    attempt["state"] = "orphaned"
+    attempt["late_output_hash"] = output_hash
+    path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "orphaned-result.json"
+    _write_json(path, {"schema": 1, "attempt": attempt_id, "output_hash": output_hash, "state": "orphaned"})
+    _save_plan(root, plan)
+    return attempt
+
+
+def cleanup_attempt(project: Path | str, attempt_id: str) -> None:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    if attempt["state"] in {"running", "validating", "promotion_pending", "outcome_unknown", "orphaned"}:
+        raise BookForgeError(f"Refusing cleanup for {attempt['state']} attempt")
+    path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "staged"
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def render_plan(project: Path | str) -> str:
@@ -1069,6 +1330,17 @@ def build_parser() -> argparse.ArgumentParser:
     collection_remove_command.add_argument("collection")
     migrate = commands.add_parser("migrate")
     migrate.add_argument("mode", choices=("check", "dry-run", "apply", "rollback"))
+    pause = commands.add_parser("pause")
+    pause.add_argument("--run")
+    pause.add_argument("--emergency", action="store_true")
+    resume = commands.add_parser("resume")
+    resume.add_argument("--run")
+    resume.add_argument("--resolve-unknown", action="append", default=[])
+    status = commands.add_parser("status")
+    status.add_argument("--book")
+    status.add_argument("--run")
+    status.add_argument("--locale")
+    status.add_argument("--repair-view", action="store_true")
     return parser
 
 
@@ -1093,6 +1365,20 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"removed": args.collection}, sort_keys=True))
         elif args.command == "migrate":
             print(json.dumps(migrate_project(args.project, args.mode), sort_keys=True))
+        elif args.command == "pause":
+            print(json.dumps(pause_run(args.project, emergency=args.emergency), sort_keys=True))
+        elif args.command == "resume":
+            resolutions = {}
+            for value in args.resolve_unknown:
+                if ":" not in value:
+                    raise BookForgeError("--resolve-unknown must be TASK:retry or TASK:abandon")
+                task, resolution = value.rsplit(":", 1)
+                resolutions[task] = resolution
+            print(json.dumps(resume_run(args.project, resolutions=resolutions), sort_keys=True))
+        elif args.command == "status":
+            if args.repair_view:
+                repair_plan_view(args.project)
+            print(json.dumps(status_project(args.project), sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

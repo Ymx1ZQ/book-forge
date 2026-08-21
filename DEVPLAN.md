@@ -153,27 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M8: Pause, resume, retry, and rate-limit safely
-
-**Depends on:** M6, M7
-
-**Why:** Long model calls must stop and resume predictably without conflating waits, failures, cancellations, and unknown outcomes.
-
-**Approach:** Define run states `planned|running|pausing|paused|blocked|completed|cancelled` and task states `pending|ready|claimed|running|validating|promotion_pending|succeeded|retry_wait|outcome_unknown|orphaned|blocked|cancelled`. Use desired-state generations, leases, heartbeats, fencing, persisted provider-wide eligibility times, and stored OpenCode task/session IDs as best-effort recovery hints.
-
-**Tasks:**
-- [ ] Make graceful pause stop dispatch, finish accepted calls through promotion, then enter paused
-- [ ] Make emergency halt record intent before interrupting and preserve partial output
-- [ ] Persist Retry-After, chosen backoff, wait deadline, and pause-interruptible provider gates
-- [ ] Query stored task/session IDs before blocking accepted-but-unobserved calls as `outcome_unknown`
-- [ ] Move pausing runs with unknown outcomes to blocked while preserving pause intent
-- [ ] Resolve unknowns explicitly: retry re-enters running; abandon blocks descendants; late results become orphans
-- [ ] Refuse cleanup for active, unpromoted, ambiguous, or orphaned attempts
-- [ ] Test: integration — exercise every state transition, expired lease, and concurrent resume
-- [ ] Commit & push
-
-**Done when:** A fresh process reconstructs the exact frontier and exposes every nonterminal attempt without automatic ambiguous retry.
-
 ### M9: Build canon indexing and a generic artifact dependency engine
 
 **Depends on:** M3, M4, M6, M8
