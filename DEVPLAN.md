@@ -153,25 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M7: Promote multi-file results through a recovery journal
-
-**Depends on:** M6
-
-**Why:** Canon, prose, state, and receipts cannot be made safe by claiming multi-file atomicity.
-
-**Approach:** Implement promotion inside the deterministic control plane. Persist and sync a prepare record listing base hashes, target hashes, paths, staging files, fencing token, and transaction ID; install each path by containment-checked temporary rename, journal progress, create a path-scoped commit without `git add -A`, then write the promotion receipt and update plan state.
-
-**Tasks:**
-- [ ] Reject traversal, symlink escape, undeclared paths, and changed base hashes
-- [ ] Persist prepare, per-path install, commit, receipt, and completion journal states
-- [ ] Reconcile partial installs by expected and current hashes without blind rollback
-- [ ] Block all consumers behind recovery or a committed-generation read snapshot
-- [ ] Separate failed Git sync into `sync_pending` without rerunning creative tasks
-- [ ] Test: integration — crash at every journal boundary and recover the same final hashes
-- [ ] Commit & push
-
-**Done when:** Every injected promotion crash completes safely or blocks on a real hash conflict with all staged work preserved.
-
 ### M8: Pause, resume, retry, and rate-limit safely
 
 **Depends on:** M6, M7

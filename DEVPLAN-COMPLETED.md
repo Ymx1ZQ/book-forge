@@ -110,3 +110,22 @@
 - [x] Commit & push
 
 **Done when:** Two disjoint workers can report results while one fenced orchestrator advances each task exactly once.
+
+### M7: Promote multi-file results through a recovery journal ✅
+
+**Depends on:** M6
+
+**Why:** Canon, prose, state, and receipts cannot be made safe by claiming multi-file atomicity.
+
+**Approach:** Implement promotion inside the deterministic control plane. Persist and sync a prepare record listing base hashes, target hashes, paths, staging files, fencing token, and transaction ID; install each path by containment-checked temporary rename, journal progress, create a path-scoped commit without `git add -A`, then write the promotion receipt and update plan state.
+
+**Tasks:**
+- [x] Reject traversal, symlink escape, undeclared paths, and changed base hashes
+- [x] Persist prepare, per-path install, commit, receipt, and completion journal states
+- [x] Reconcile partial installs by expected and current hashes without blind rollback
+- [x] Block all consumers behind recovery or a committed-generation read snapshot
+- [x] Separate failed Git sync into `sync_pending` without rerunning creative tasks
+- [x] Test: integration — crash at every journal boundary and recover the same final hashes
+- [x] Commit & push
+
+**Done when:** Every injected promotion crash completes safely or blocks on a real hash conflict with all staged work preserved.

@@ -797,7 +797,167 @@ def record_execution(project: Path | str, attempt_id: str, fence: int, *, output
     return receipt
 
 
-def promote_task(project: Path | str, attempt_id: str, fence: int) -> dict[str, object]:
+def _safe_relative_target(root: Path, relative: str) -> Path:
+    candidate = Path(relative)
+    if candidate.is_absolute() or not candidate.parts or ".." in candidate.parts or candidate.parts[0] == ".book-forge":
+        raise BookForgeError(f"Unsafe promotion target: {relative}")
+    current = root
+    for part in candidate.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise BookForgeError(f"Symlink escape in promotion target: {relative}")
+    target = root / candidate
+    try:
+        target.resolve(strict=False).relative_to(root.resolve())
+    except ValueError as exc:
+        raise BookForgeError(f"Promotion target escapes project: {relative}") from exc
+    if target.is_symlink():
+        raise BookForgeError(f"Promotion target is a symlink: {relative}")
+    return target
+
+
+def _file_hash(path: Path) -> str | None:
+    return _sha256_bytes(path.read_bytes()) if path.is_file() else None
+
+
+def stage_outputs(project: Path | str, attempt_id: str, outputs: dict[str, str | bytes]) -> dict[str, object]:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    if attempt["state"] != "running":
+        raise BookForgeError("Outputs can be staged only for a running attempt")
+    task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+    declared = set(task.get("outputs", []))
+    if set(outputs) != declared:
+        raise BookForgeError("Staged outputs must exactly match the task's declared outputs")
+    attempt_dir = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id
+    rows = []
+    for relative in sorted(outputs):
+        target = _safe_relative_target(root, relative)
+        value = outputs[relative].encode() if isinstance(outputs[relative], str) else outputs[relative]
+        staged = attempt_dir / "staged" / relative
+        _write_bytes_atomic(staged, value)
+        rows.append(
+            {
+                "path": relative,
+                "base_hash": _file_hash(target),
+                "target_hash": _sha256_bytes(value),
+                "staged": str(staged.relative_to(root)),
+            }
+        )
+    manifest = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "files": rows}
+    _write_json(attempt_dir / "output-manifest.json", manifest)
+    return manifest
+
+
+def _scoped_git_commit(root: Path, paths: list[str], transaction_id: str) -> tuple[str | None, bool]:
+    if not paths or not _inside_git_repo(root):
+        return None, False
+    add = subprocess.run(["git", "-C", str(root), "add", "--", *paths], capture_output=True, text=True, check=False)
+    if add.returncode != 0:
+        return None, True
+    changed = subprocess.run(["git", "-C", str(root), "diff", "--cached", "--quiet", "--", *paths], check=False)
+    if changed.returncode == 0:
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+        return (head.stdout.strip() or None), False
+    commit = subprocess.run(
+        ["git", "-C", str(root), "commit", "-m", f"book-forge: promote {transaction_id}", "--", *paths],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if commit.returncode != 0:
+        return None, True
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+    return head.stdout.strip(), False
+
+
+def _complete_promoted_attempt(root: Path, attempt_id: str, receipt_path: Path) -> None:
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    if attempt["state"] == "succeeded":
+        return
+    attempt["state"] = "succeeded"
+    task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+    task["state"] = "succeeded"
+    task["promotion_receipt"] = str(receipt_path.relative_to(root))
+    _save_plan(root, plan)
+    render_plan(root)
+
+
+def _recover_transaction(root: Path, transaction: Path, *, fault_hook=None) -> dict[str, object]:
+    journal_path = transaction / "journal.json"
+    journal = _read_json(journal_path)
+    if journal.get("state") == "completed":
+        return journal
+    for row in journal["files"]:
+        target = _safe_relative_target(root, str(row["path"]))
+        current = _file_hash(target)
+        if current == row["target_hash"]:
+            if row["path"] not in journal["installed"]:
+                journal["installed"].append(row["path"])
+                _write_json(journal_path, journal)
+            continue
+        if current != row["base_hash"]:
+            journal["state"] = "blocked_conflict"
+            journal["conflict"] = row["path"]
+            _write_json(journal_path, journal)
+            raise BookForgeError(f"Promotion conflict at {row['path']}; staged output was preserved")
+        staged = root / row["staged"]
+        if _file_hash(staged) != row["target_hash"]:
+            raise BookForgeError(f"Staged output hash mismatch at {row['path']}")
+        _write_bytes_atomic(target, staged.read_bytes())
+        journal["installed"].append(row["path"])
+        journal["state"] = "installing"
+        _write_json(journal_path, journal)
+        if fault_hook:
+            fault_hook(f"after_install:{row['path']}")
+
+    if not journal.get("commit_recorded"):
+        commit, sync_pending = _scoped_git_commit(root, [str(row["path"]) for row in journal["files"]], str(journal["id"]))
+        journal["commit"] = commit
+        journal["sync_pending"] = sync_pending
+        journal["commit_recorded"] = True
+        journal["state"] = "committed" if not sync_pending else "sync_pending"
+        _write_json(journal_path, journal)
+        if fault_hook:
+            fault_hook("after_commit")
+
+    receipt_path = root / journal["receipt"]
+    if not receipt_path.exists():
+        receipt = {
+            "schema": 1,
+            "attempt": journal["attempt"],
+            "task": journal["task"],
+            "fence": journal["fence"],
+            "transaction": journal["id"],
+            "promoted": True,
+            "commit": journal.get("commit"),
+            "sync_pending": journal.get("sync_pending", False),
+            "files": [{"path": row["path"], "hash": row["target_hash"]} for row in journal["files"]],
+        }
+        _write_json(receipt_path, receipt)
+        journal["state"] = "receipted"
+        _write_json(journal_path, journal)
+        if fault_hook:
+            fault_hook("after_receipt")
+    _complete_promoted_attempt(root, str(journal["attempt"]), receipt_path)
+    journal["state"] = "completed"
+    _write_json(journal_path, journal)
+    return journal
+
+
+def recover_transactions(project: Path | str) -> list[dict[str, object]]:
+    root = _project_root(project)
+    transactions = root / ".book-forge" / "transactions"
+    results = []
+    if transactions.exists():
+        for path in sorted(transactions.glob("TXN-*")):
+            results.append(_recover_transaction(root, path))
+    return results
+
+
+def promote_task(project: Path | str, attempt_id: str, fence: int, *, fault_hook=None) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
     attempt = _attempt(plan, attempt_id)
@@ -807,15 +967,47 @@ def promote_task(project: Path | str, attempt_id: str, fence: int) -> dict[str, 
     receipt_path = root / ".book-forge" / "runs" / "RUN-0001" / "attempts" / attempt_id / "promotion-receipt.json"
     if receipt_path.exists():
         raise BookForgeError("Promotion receipt is immutable")
-    receipt = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "fence": fence, "promoted": True}
-    _write_json(receipt_path, receipt)
-    attempt["state"] = "succeeded"
-    task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
-    task["state"] = "succeeded"
-    task["promotion_receipt"] = str(receipt_path.relative_to(root))
-    _save_plan(root, plan)
-    render_plan(root)
-    return receipt
+    attempt_dir = receipt_path.parent
+    manifest_path = attempt_dir / "output-manifest.json"
+    manifest = _read_json(manifest_path) if manifest_path.exists() else {"files": []}
+    transaction_root = root / ".book-forge" / "transactions"
+    transaction_root.mkdir(parents=True, exist_ok=True)
+    transaction_id = _next_id([path.name for path in transaction_root.glob("TXN-*")], "TXN-")
+    transaction = transaction_root / transaction_id
+    transaction.mkdir()
+    journal = {
+        "schema": 1,
+        "id": transaction_id,
+        "attempt": attempt_id,
+        "task": attempt["task"],
+        "fence": fence,
+        "files": manifest["files"],
+        "installed": [],
+        "receipt": str(receipt_path.relative_to(root)),
+        "commit_recorded": False,
+        "sync_pending": False,
+        "state": "prepared",
+    }
+    _write_json(transaction / "journal.json", journal)
+    if fault_hook:
+        fault_hook("after_prepare")
+    completed = _recover_transaction(root, transaction, fault_hook=fault_hook)
+    return _read_json(root / completed["receipt"])
+
+
+def status_project(project: Path | str) -> dict[str, object]:
+    root = _project_root(project)
+    plan = _load_plan(root)
+    counts: dict[str, int] = {}
+    for task in plan["tasks"]:
+        counts[str(task["state"])] = counts.get(str(task["state"]), 0) + 1
+    transaction_states: dict[str, int] = {}
+    transactions = root / ".book-forge" / "transactions"
+    if transactions.exists():
+        for path in transactions.glob("TXN-*/journal.json"):
+            state = str(_read_json(path)["state"])
+            transaction_states[state] = transaction_states.get(state, 0) + 1
+    return {"tasks": counts, "transactions": transaction_states, "plan_hash": _control(root)["plan_hash"]}
 
 
 def render_plan(project: Path | str) -> str:
