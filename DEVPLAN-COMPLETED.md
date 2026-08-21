@@ -377,3 +377,21 @@
 - [x] Commit & push
 
 **Done when:** Repeated fixture builds have identical EPUB bytes and a complete verifiable build manifest.
+
+### M21: Export deterministic source PDF editions ✅
+
+**Depends on:** M20
+
+**Why:** PDF has a separate rendering and metadata surface that must not weaken EPUB reproducibility guarantees.
+
+**Approach:** Reuse the normalized publication assembly, pin renderer and font bytes, fix locale, timezone, and source epoch, and normalize document identifiers and metadata. Validate page geometry, typography, breaks, headers, numbering, embedded fonts, and image resolution.
+
+**Tasks:**
+- [x] Render PDF only from a current normalized assembly
+- [x] Pin and hash renderer, dependencies, fonts, styles, and environment inputs
+- [x] Normalize timestamps, identifiers, metadata, and nondeterministic ordering
+- [x] Validate readability, page structure, links, images, and font embedding
+- [x] Test: integration — produce byte-identical rebuilds in the pinned environment
+- [x] Commit & push
+
+**Done when:** Repeated fixture builds have identical PDF bytes and fail closed when any toolchain input drifts.

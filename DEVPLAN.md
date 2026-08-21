@@ -161,24 +161,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase F — Cross-book assurance and publication
 
-### M21: Export deterministic source PDF editions
-
-**Depends on:** M20
-
-**Why:** PDF has a separate rendering and metadata surface that must not weaken EPUB reproducibility guarantees.
-
-**Approach:** Reuse the normalized publication assembly, pin renderer and font bytes, fix locale, timezone, and source epoch, and normalize document identifiers and metadata. Validate page geometry, typography, breaks, headers, numbering, embedded fonts, and image resolution.
-
-**Tasks:**
-- [ ] Render PDF only from a current normalized assembly
-- [ ] Pin and hash renderer, dependencies, fonts, styles, and environment inputs
-- [ ] Normalize timestamps, identifiers, metadata, and nondeterministic ordering
-- [ ] Validate readability, page structure, links, images, and font embedding
-- [ ] Test: integration — produce byte-identical rebuilds in the pinned environment
-- [ ] Commit & push
-
-**Done when:** Repeated fixture builds have identical PDF bytes and fail closed when any toolchain input drifts.
-
 ### M22: Publish current translated editions
 
 **Depends on:** M18, M20, M21

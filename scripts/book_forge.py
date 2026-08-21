@@ -3420,6 +3420,150 @@ def export_epub(project: Path | str, book_id: str, language: str) -> dict[str, o
     return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
 
 
+PDF_FONT_HASHES = {
+    "regular": "9d7583b7dc9e812afd32a14280c5cac3160012efe50c8d08938f4fea266ff67f",
+    "bold": "0af0ff2be8f84910fb21ec5fe1b6b7395e3073250502a334baf6ca2f860c88fe",
+}
+PDF_FONT_PATHS = {
+    "regular": Path("/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf"),
+    "bold": Path("/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf"),
+}
+
+
+def _verify_pdf_fonts(font_paths: dict[str, Path]) -> dict[str, str]:
+    observed = {}
+    for style, expected in PDF_FONT_HASHES.items():
+        path = Path(font_paths[style])
+        if not path.is_file():
+            raise BookForgeError(f"Pinned Noto Serif font is missing: {path}")
+        value = _file_hash(path)
+        if value != expected:
+            raise BookForgeError(f"Pinned Noto Serif {style} hash drifted: expected {expected}, found {value}")
+        observed[style] = str(value)
+    return observed
+
+
+def validate_pdf(path: Path | str, *, expected_titles: list[str]) -> dict[str, object]:
+    target = Path(path)
+    if not target.read_bytes().startswith(b"%PDF-"):
+        raise BookForgeError("PDF signature is invalid")
+    info = subprocess.run(["pdfinfo", "-box", str(target)], capture_output=True, text=True, check=False)
+    size_match = re.search(r"Page size:\s+([0-9.]+) x ([0-9.]+) pts", info.stdout)
+    if info.returncode != 0 or not size_match or abs(float(size_match.group(1)) - 419.53) > 1 or abs(float(size_match.group(2)) - 595.28) > 1:
+        raise BookForgeError("PDF is unreadable or does not use A5 geometry")
+    fonts = subprocess.run(["pdffonts", str(target)], capture_output=True, text=True, check=False)
+    if fonts.returncode != 0:
+        raise BookForgeError("PDF font table is unreadable")
+    rows = [line for line in fonts.stdout.splitlines()[2:] if line.strip()]
+    if not rows or not all("Book-Forge-Serif" in row for row in rows):
+        raise BookForgeError("PDF contains an unexpected font family")
+    for row in rows:
+        parts = row.split()
+        if len(parts) < 8 or parts[-5] != "yes" or parts[-3] != "yes":
+            raise BookForgeError("PDF fonts must be embedded with Unicode maps")
+    text_result = subprocess.run(["pdftotext", str(target), "-"], capture_output=True, text=True, check=False)
+    if text_result.returncode != 0 or any(title not in text_result.stdout for title in expected_titles):
+        raise BookForgeError("PDF text or chapter order validation failed")
+    return {"valid": True, "sha256": _file_hash(target), "pages": next((line.split(":", 1)[1].strip() for line in info.stdout.splitlines() if line.startswith("Pages:")), None)}
+
+
+def export_pdf(
+    project: Path | str,
+    book_id: str,
+    language: str,
+    *,
+    font_paths: dict[str, Path] | None = None,
+) -> dict[str, object]:
+    root = _project_root(project)
+    assembly = assemble_edition(root, book_id, language)
+    selected_fonts = PDF_FONT_PATHS if font_paths is None else {key: Path(value) for key, value in font_paths.items()}
+    font_hashes = _verify_pdf_fonts(selected_fonts)
+    publication_root = Path(__file__).resolve().parents[1] / "assets" / "publication"
+    toolchain = publication_root / "python"
+    lock_path = toolchain / "uv.lock"
+    renderer_path = toolchain / "render_pdf.py"
+    css_path = publication_root / "pdf.css"
+    if not all(path.is_file() for path in (lock_path, renderer_path, css_path)):
+        raise BookForgeError("Pinned PDF publication toolchain is incomplete")
+    renderer_assembly = {
+        "hash": assembly["hash"],
+        "language": assembly["language"],
+        "title_html": html.escape(str(assembly["title"]), quote=True),
+        "author_html": html.escape(str(assembly["author"]), quote=True),
+        "chapters": [
+            {"id": chapter["id"], "title": chapter["title"], "xhtml": f'<section id="{chapter["id"]}">{_markdown_xhtml(str(chapter["markdown"]))}</section>'}
+            for chapter in assembly["chapters"]
+        ],
+    }
+    machine_dir = root / ".book-forge" / "publication"
+    machine_dir.mkdir(parents=True, exist_ok=True)
+    assembly_path = machine_dir / f"{assembly['hash']}.pdf-assembly.json"
+    _write_json(assembly_path, renderer_assembly)
+    output_dir = root / "dist" / book_id / str(assembly["language"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{book_id}.pdf"
+    temporary_path = output_dir / f".{book_id}.pdf.rendering"
+    environment = dict(os.environ)
+    environment.update({"TZ": "UTC", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0", "SOURCE_DATE_EPOCH": str(assembly["source_epoch"]), "UV_PYTHON": "3.13.12"})
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--locked",
+            "--project",
+            str(toolchain),
+            "python",
+            str(renderer_path),
+            str(assembly_path),
+            str(temporary_path),
+            str(selected_fonts["regular"]),
+            str(selected_fonts["bold"]),
+            str(css_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0 or not temporary_path.is_file():
+        if temporary_path.exists():
+            temporary_path.unlink()
+        raise BookForgeError(f"Pinned PDF renderer failed: {result.stderr.strip()}")
+    os.replace(temporary_path, output_path)
+    validation = validate_pdf(output_path, expected_titles=[str(chapter["title"]) for chapter in assembly["chapters"]])
+    toolchain_hashes = {
+        "uv_lock": _file_hash(lock_path),
+        "renderer": _file_hash(renderer_path),
+        "css": _file_hash(css_path),
+        "fonts": font_hashes,
+    }
+    manifest = {
+        "schema": 1,
+        "format": "pdf",
+        "book": book_id,
+        "language": assembly["language"],
+        "identifier": assembly["identifier"],
+        "source_epoch": assembly["source_epoch"],
+        "assembly_hash": assembly["hash"],
+        "input_hashes": assembly["input_hashes"],
+        "toolchain": {"renderer": "weasyprint==69.0", "python": "3.13.12", "hashes": toolchain_hashes},
+        "skill_commit": _skill_commit(),
+        "output_sha256": validation["sha256"],
+    }
+    manifest_path = output_dir / f"{book_id}.pdf.manifest.json"
+    _write_json(manifest_path, manifest)
+    registry = _artifact_registry(root)
+    dependencies = [f"SOURCE-{book_id}-{chapter['id']}" for chapter in assembly["chapters"]]
+    for chapter, artifact_id in zip(assembly["chapters"], dependencies):
+        if artifact_id not in registry["artifacts"]:
+            register_artifact(root, artifact_id, "source-chapter", path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter['id']}.md")
+            registry = _artifact_registry(root)
+    edition_id = f"EDITION-{book_id}-{assembly['language']}-PDF"
+    if edition_id not in registry["artifacts"]:
+        register_artifact(root, edition_id, "pdf-edition", path=output_path, dependencies=dependencies)
+    return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
