@@ -92,3 +92,21 @@
 - [x] Commit & push
 
 **Done when:** Boot validation proves every configured capability and each role can access only its declared task surface.
+
+### M6: Execute a canonical single-writer task graph ✅
+
+**Depends on:** M2, M5
+
+**Why:** Subagents need a common plan without concurrent edits, lost updates, or unsupported completion claims.
+
+**Approach:** Store the canonical DAG in `.book-forge/plan.json` and render Markdown views from it. Define task, attempt, pre-dispatch intent, execution receipt, promotion receipt, and currentness schemas. Derive idempotency from exact inputs, request envelope, model/variant, skill version, and prompt version; let the model orchestrator decide transitions while the deterministic control plane executes them only with its current fencing token.
+
+**Tasks:**
+- [x] Define canonical plan, task, attempt, intent, receipt, and currentness schemas
+- [x] Implement stable frontier selection and attempt-local worker capsules
+- [x] Render active and completed devplans with tamper hashes
+- [x] Distinguish observed execution from committed promotion in skip decisions
+- [x] Test: integration — reject direct plan edits, stale fencing, and duplicate promotion
+- [x] Commit & push
+
+**Done when:** Two disjoint workers can report results while one fenced orchestrator advances each task exactly once.

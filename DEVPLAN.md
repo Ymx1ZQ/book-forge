@@ -153,24 +153,6 @@ dist/<book-id>/<bcp47>/
 
 ## Phase B — Durable orchestration and bounded context
 
-### M6: Execute a canonical single-writer task graph
-
-**Depends on:** M2, M5
-
-**Why:** Subagents need a common plan without concurrent edits, lost updates, or unsupported completion claims.
-
-**Approach:** Store the canonical DAG in `.book-forge/plan.json` and render Markdown views from it. Define task, attempt, pre-dispatch intent, execution receipt, promotion receipt, and currentness schemas. Derive idempotency from exact inputs, request envelope, model/variant, skill version, and prompt version; let the model orchestrator decide transitions while the deterministic control plane executes them only with its current fencing token.
-
-**Tasks:**
-- [ ] Define canonical plan, task, attempt, intent, receipt, and currentness schemas
-- [ ] Implement stable frontier selection and attempt-local worker capsules
-- [ ] Render active and completed devplans with tamper hashes
-- [ ] Distinguish observed execution from committed promotion in skip decisions
-- [ ] Test: integration — reject direct plan edits, stale fencing, and duplicate promotion
-- [ ] Commit & push
-
-**Done when:** Two disjoint workers can report results while one fenced orchestrator advances each task exactly once.
-
 ### M7: Promote multi-file results through a recovery journal
 
 **Depends on:** M6
