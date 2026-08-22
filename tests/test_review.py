@@ -99,7 +99,7 @@ class ReviewTests(unittest.TestCase):
     def test_seeded_undisclosed_consequence_requires_repair_and_verification(self):
         finding = {"id": "F-STATE-1", "dimension": "state", "severity": "blocking", "objective": True, "evidence": "final paragraph", "issue": "Signal knowledge omitted", "fix_required": True}
         consequence = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
-        disposition = {"finding": "F-STATE-1", "action": "repaired", "evidence": "final paragraph", "loss": "none", "supersedes": []}
+        disposition = {"finding": "T-0001", "action": "repaired", "evidence": "final paragraph", "loss": "none", "supersedes": []}
         provider = RoleProvider({
             "cold-reader": [{"findings": []}],
             "technical-editor": [{"findings": [finding], "consequences": [consequence]}, {"verified": True, "findings": []}],
@@ -130,6 +130,75 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(self.bf.BookForgeError):
             self.bf.review_and_close_chapter(second, book, "CH-0001", provider=bad)
         self.assertFalse((second / f"books/{book}/manuscript/chapters/CH-0001.md").exists())
+
+    def test_duplicate_finding_ids_across_reviews_are_disambiguated_for_the_reviser(self):
+        cold_finding = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
+        tech_finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing consequence", "fix_required": True, "objective": False}
+        provider = RoleProvider({
+            "cold-reader": [{"findings": [cold_finding]}],
+            "technical-editor": [{"findings": [tech_finding], "consequences": []}],
+            "reviser": [self.reviser([], [
+                {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
+                {"finding": "T-0001", "action": "accepted-risk", "evidence": "kept", "loss": "none", "supersedes": []},
+            ])],
+        })
+        result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(result["calls"], 3)
+        dispositions = json.loads((self.project / f"books/{self.book}/reviews/CH-0001/dispositions.json").read_text())
+        self.assertEqual([row["finding"] for row in dispositions["dispositions"]], ["F-0001", "F-0001"])
+        self.assertEqual(
+            [row["action"] for row in dispositions["dispositions"]],
+            ["repaired", "accepted-risk"],
+        )
+
+    def test_resume_reuses_materialized_reviews_without_recalling_reviewers(self):
+        cold_finding = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
+        tech_finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing", "fix_required": True, "objective": False}
+        provider = RoleProvider({
+            "cold-reader": [{"findings": [cold_finding]}],
+            "technical-editor": [{"findings": [tech_finding], "consequences": []}],
+            "reviser": [self.reviser([], [
+                {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
+                {"finding": "T-0001", "action": "accepted-risk", "evidence": "kept", "loss": "none", "supersedes": []},
+            ])],
+        })
+        self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(provider.calls.count("cold-reader"), 1)
+        self.assertEqual(provider.calls.count("technical-editor"), 1)
+
+        contract = json.loads((self.project / f"books/{self.book}/chapters/CH-0001.json").read_text())
+        draft = (self.project / f"books/{self.book}/work/CH-0001/draft.md").read_text()
+        writer_consequences = json.loads((self.project / f"books/{self.book}/work/CH-0001/consequences.json").read_text())
+        only_reviser = RoleProvider({
+            "reviser": [self.reviser([], [
+                {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
+                {"finding": "T-0001", "action": "accepted-risk", "evidence": "kept", "loss": "none", "supersedes": []},
+            ])],
+        })
+        cold, technical, receipts = self.bf._call_parallel_reviews(
+            self.project, self.book, "CH-0001", contract, draft, writer_consequences, only_reviser
+        )
+        self.assertEqual(only_reviser.calls, [])
+        self.assertEqual([f["id"] for f in cold["findings"]], ["F-0001"])
+        self.assertEqual([f["id"] for f in technical["findings"]], ["F-0001"])
+
+    def test_revision_with_string_consequences_fails_with_clear_message(self):
+        finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "span", "issue": "missing fact", "fix_required": True, "objective": False}
+        consequence = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
+        provider = RoleProvider({
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"findings": [finding], "consequences": [consequence]}],
+            "reviser": [{
+                "prose_markdown": prose(),
+                "beat_map": [{"beat": "Find signal", "evidence": "found"}],
+                "consequences": ["Mara knows the signal."],
+                "dispositions": [{"finding": "T-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []}],
+                "reader_state": "Mara knows the signal.",
+            }],
+        })
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertIn("consequences must be a list of objects", str(caught.exception))
 
 
 if __name__ == "__main__":

@@ -284,7 +284,7 @@ reaches `design_clean`.
 
 ### M29: Bind design-audit evidence to helper-computed SHA-256 ✅
 
-**Status: done — 2026-08-22**
+**Status: in progress — 2026-08-22**
 
 **Why:** `_validate_audit_output` requires every evidence item to carry a
 SHA-256, but the canon-auditor is a tool-less model: it cannot compute hashes
@@ -322,7 +322,7 @@ and Landfall reaches `design_clean`.
 
 ### M30: Resolve book-scoped proposal evidence locations in the audit binder ✅
 
-**Status: done — 2026-08-22**
+**Status: in progress — 2026-08-22**
 
 **Why:** Observed live on Landfall (ATT-0008): the book design succeeded and
 was promoted (`books/BOOK-0001/design.md`, `chapters/CH-0001.json`,
@@ -382,3 +382,48 @@ succeeds).
 **Done when:** The Landfall book design audit promotes with helper-computed
 hashes (design_clean or findings-with-evidence), and the fixture test proves
 book-scoped locations bind.
+
+### M31: Book design brief — full canon context, author brief gate, no wrap ✅
+
+**Status: done — 2026-08-22**
+
+**Why:** Observed live on Landfall (ATT-0007): the book designer's envelope
+carried only `UNI-0001#kernel` (5 laws) plus the empty relation/obligation
+lists. The worldbuilding bible (§18 "Book 1 Load", 1520 AL, seven
+role-shaped holes, characters, places, factions, timeline, style) never
+reached the designer, so it invented a Landing prequel and an unreviewed
+"sleeper" protagonist — a story the user never agreed to. Additionally the
+user requires: (a) a mandatory author brief for `design book` (characters,
+plot, length, tone) that fails closed when absent instead of inventing;
+(b) no hard-wrapping of prose/lines anywhere in generated artifacts.
+
+**Approach:**
+
+1. **Author brief file.** `design book` now reads
+   `books/<book>/book-brief.json` (`{schema, premise, characters, plot,
+   tone, length_notes}`). If missing, `execute_book_design` fails closed
+   with a message telling the author to create it (mirrors the universe's
+   `design-brief.json` pattern). A CLI `--brief "<json>"` may create it.
+2. **Full canon context.** The designer's envelope for a book now closes
+   imports over the whole canon — `UNI-0001#kernel` plus every indexed
+   block reachable from the universe (LAW/PLC/FAC/CHR/ERA/EVT summaries,
+   style) and the authored `universe/worldbuilding.md` (when present),
+   instead of only the kernel. Budget stays bounded by the existing
+   envelope input budget (context overflow still hard-fails).
+3. **No wrap.** Audited every writer path: helper writes JSON with
+   `indent=2` (canonical, not prose) and markdown as single long lines —
+   no soft wrap is introduced anywhere. The wrap the user saw lives only
+   in hand-authored DEVPLAN-*.md files; the rule is now documented in the
+   skill reference (`design.md`) and in AGENTS conventions: never break a
+   line mid-sentence; one sentence per line; no width limit.
+
+**Tests:** fixture proves (a) missing brief raises a closed failure,
+(b) brief-injected task capsule reaches the designer, (c) book designer
+context includes canon blocks beyond the kernel (e.g. a FAC summary) and
+worldbuilding.md, (d) generated design.md/premise/arc strings contain no
+mid-sentence line breaks (each line ends with punctuation or is a
+structural line).
+
+**Done when:** suite green; Landfall book design passes the new gate
+(brief file exists), and the envelope for DESIGN-BOOK-0001 carries the full
+canon context.

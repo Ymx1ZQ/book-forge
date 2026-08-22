@@ -66,6 +66,11 @@ class BookDesignTests(unittest.TestCase):
         self.project = Path(self.temp.name) / "world"
         self.bf.init_project(self.project, "World")
 
+    def brief(self, book):
+        path = self.project / f"books/{book}/book-brief.json"
+        path.write_text(json.dumps({"schema": 1, "premise": "A diver must decide.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"}))
+        return path
+
     def test_designs_unrelated_sequel_and_parallel_books_with_obligations(self):
         a = self.bf.add_book(self.project, "A")["id"]
         b = self.bf.add_book(self.project, "B")["id"]
@@ -100,6 +105,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_executes_book_design_as_two_paid_receipted_calls(self):
         book = self.bf.add_book(self.project, "Agentic Book")["id"]
+        self.brief(book)
         provider = DesignProvider(proposal())
         result = self.bf.execute_book_design(self.project, book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
@@ -109,6 +115,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_binds_book_scoped_proposal_evidence_to_helper_hashes(self):
         book = self.bf.add_book(self.project, "Bound")["id"]
+        self.brief(book)
         provider = DesignProvider(
             proposal(),
             audit={"findings": [{
@@ -136,6 +143,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_binds_kernel_block_evidence_to_its_file(self):
         book = self.bf.add_book(self.project, "KernelBound")["id"]
+        self.brief(book)
         provider = DesignProvider(
             proposal(),
             audit={"findings": [{
@@ -154,6 +162,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_binds_envelope_scope_evidence_locations(self):
         book = self.bf.add_book(self.project, "EnvelopeBound")["id"]
+        self.brief(book)
         provider = DesignProvider(
             proposal(),
             audit={"findings": [{
@@ -181,6 +190,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_foreign_book_scoped_evidence_still_fails_closed(self):
         book = self.bf.add_book(self.project, "Closed")["id"]
+        self.brief(book)
         provider = DesignProvider(
             proposal(),
             audit={"findings": [{
@@ -196,6 +206,7 @@ class BookDesignTests(unittest.TestCase):
 
     def test_resumes_book_audit_alone_when_design_already_promoted(self):
         book = self.bf.add_book(self.project, "Resumed")["id"]
+        self.brief(book)
         bad = DesignProvider(
             proposal(),
             audit={"findings": [{
@@ -219,6 +230,50 @@ class BookDesignTests(unittest.TestCase):
         self.assertEqual(rerun.calls, ["canon-auditor"])
         audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
         self.assertEqual(audit["findings"], [])
+
+
+    def test_missing_author_brief_fails_closed_before_any_provider_call(self):
+        book = self.bf.add_book(self.project, "NoBrief")["id"]
+        provider = DesignProvider(proposal())
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertIn("book-brief.json", str(caught.exception))
+        self.assertEqual(provider.calls, [])
+
+    def test_book_designer_envelope_carries_brief_and_full_canon_context(self):
+        book = self.bf.add_book(self.project, "FullContext")["id"]
+        self.brief(book)
+        canon = self.project / "universe/canon/factions"
+        canon.mkdir(parents=True, exist_ok=True)
+        (canon / "FAC-0001.md").write_text("---\nid: FAC-0001\ncontinuity: CNT-0001\n---\n\n# Guild\n\n<!-- bf:block summary -->\nThe Guild meters memory in candles.\n")
+        self.bf.rebuild_indexes(self.project)
+        seen = {"capsule": None, "context": [], "worldbuilding": None}
+        original = self.bf.build_envelope
+        def spy(project, **kwargs):
+            envelope = original(project, **kwargs)
+            if kwargs.get("role") == "designer":
+                payload = envelope["payload"]
+                seen["capsule"] = payload["task"]
+                seen["worldbuilding"] = payload["task"].get("worldbuilding")
+                seen["context"] = [row["id"] for row in payload.get("context", [])]
+            return envelope
+        self.bf.build_envelope = spy
+        try:
+            self.bf.execute_book_design(self.project, book, provider=DesignProvider(proposal()))
+        finally:
+            self.bf.build_envelope = original
+        self.assertIsNotNone(seen["capsule"])
+        self.assertEqual(seen["capsule"]["brief"]["premise"], "A diver must decide.")
+        self.assertIn("UNI-0001#kernel", seen["context"])
+        self.assertIn("FAC-0001#summary", seen["context"])
+
+    def test_no_mid_sentence_wrap_in_generated_design_artifacts(self):
+        book = self.bf.add_book(self.project, "Nowrap")["id"]
+        self.brief(book)
+        self.bf.execute_book_design(self.project, book, provider=DesignProvider(proposal()))
+        design = (self.project / f"books/{book}/design.md").read_text()
+        wrapped = self.bf._wrapped_lines(self.project / f"books/{book}/design.md")
+        self.assertEqual(wrapped, [])
 
 
 if __name__ == "__main__":

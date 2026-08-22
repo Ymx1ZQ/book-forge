@@ -1300,6 +1300,46 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
     return report
 
 
+def _wrapped_lines(path: Path) -> list[dict[str, object]]:
+    """Lines that look like soft-wrapped prose: end mid-sentence and the
+    following line continues the same sentence. Authoritative for generated
+    markdown artifacts (design, canon, drafts, reader-state)."""
+    try:
+        text_value = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    lines = text_value.split("\n")
+    wrapped = []
+    for position, line in enumerate(lines[:-1]):
+        content = line.rstrip()
+        if not content or len(content) < 40:
+            continue
+        if content.startswith(("#", "-", ">", "|", "<!--", "{", "[", "---", "```")):
+            continue
+        if not re.search(r"[a-zà-ù]$", content):
+            continue
+        following = lines[position + 1].strip()
+        if not following or following.startswith(("#", "-", ">", "|", "<!--", "{", "[", "---", "```")):
+            continue
+        if re.search(r"^[a-zà-ù]", following):
+            wrapped.append({"line": position + 1, "text": content[:90]})
+    return wrapped
+
+
+def _status_wrapped_lines(root: Path) -> dict[str, list[dict[str, object]]]:
+    candidates = [root / "universe" / "worldbuilding.md", root / "universe" / "style.md"]
+    for block in (root / "universe" / "canon").glob("**/*.md"):
+        candidates.append(block)
+    for book_dir in (root / "books").glob("BOOK-*"):
+        for pattern in ("design.md", "reader-state.md", "work/*/draft.md", "manuscript/chapters/*.md"):
+            candidates.extend(book_dir.glob(pattern))
+    return {
+        str(path.relative_to(root)): wrapped
+        for path in sorted(candidates)
+        if (wrapped := _wrapped_lines(path))
+    }
+
+
 def status_project(
     project: Path | str,
     *,
@@ -1365,6 +1405,9 @@ def status_project(
         "run": run,
         "telemetry": telemetry,
     }
+    wrapped = _status_wrapped_lines(root)
+    if wrapped:
+        result["wrapped_lines"] = wrapped
     if scope:
         result["scope"] = scope
     return result
@@ -2144,6 +2187,52 @@ def schedule_book_design(project: Path | str, book_id: str) -> list[dict[str, ob
     return [next(task for task in plan["tasks"] if task["id"] == task_id) for task_id in (design_id, audit_id)]
 
 
+def _write_book_brief(project: Path | str, book_id: str, brief: str) -> dict[str, object]:
+    root = _project_root(project)
+    books = {str(book["id"]): book for book in list_books(root)}
+    if book_id not in books:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    value = json.loads(brief)
+    if not isinstance(value, dict):
+        raise BookForgeError("book brief must be a JSON object")
+    allowed = {"schema", "premise", "characters", "plot", "tone", "length_notes"}
+    if not allowed & set(value):
+        raise BookForgeError(f"book brief must contain at least one of: {sorted(allowed)}")
+    value.setdefault("schema", 1)
+    path = root / "books" / book_id / "book-brief.json"
+    _write_json(path, value)
+    return value
+
+
+def _book_brief(root: Path, book_id: str) -> dict[str, object]:
+    path = root / "books" / book_id / "book-brief.json"
+    if not path.is_file():
+        raise BookForgeError(
+            f"No author brief for {book_id}: create books/{book_id}/book-brief.json "
+            "(or pass --brief '<json>') with premise, characters, plot, tone, "
+            "length_notes. design book will not invent a story."
+        )
+    return _read_json(path)
+
+
+def _book_canon_context(root: Path, book_id: str, index: dict[str, object]) -> list[dict[str, object]]:
+    blocks = index.get("blocks", {})
+    wanted = ["UNI-0001#kernel"]
+    for block_id in blocks:
+        owner = block_id.split("#", 1)[0]
+        if owner.startswith(("LAW-", "PLC-", "FAC-", "CHR-", "STYLE-")) and block_id.endswith("#summary"):
+            wanted.append(block_id)
+    wanted = sorted(set(wanted))
+    closed = _close_imports(index, wanted)
+    worldbuilding = root / "universe" / "worldbuilding.md"
+    context = []
+    for block_id in closed:
+        context.append({"id": block_id, "hash": index["blocks"][block_id]["hash"], "content": _block_content(root, block_id, index)})
+    if worldbuilding.is_file():
+        context.append({"id": "worldbuilding.md", "hash": _file_hash(worldbuilding), "content": worldbuilding.read_text(encoding="utf-8")})
+    return context
+
+
 def _book_obligations(root: Path, book_id: str) -> tuple[dict[str, dict[str, object]], list[str]]:
     relations = _read_json(root / "universe" / "relations.yaml").get("relations", [])
     obligations = {}
@@ -2524,14 +2613,21 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> 
         )
         return {**audit, "calls": 1}
     book = next(row for row in list_books(root) if row["id"] == book_id)
+    brief = _book_brief(root, book_id)
     obligations, relation_imports = _book_obligations(root, book_id)
-    imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
+    index = rebuild_indexes(root)
+    context = _book_canon_context(root, book_id, index)
+    worldbuilding = next((row["content"] for row in context if row["id"] == "worldbuilding.md"), None)
+    imports = sorted({row["id"] for row in context if row["id"] != "worldbuilding.md"})
+    chapter_imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
     envelope = build_envelope(
         root,
         role="designer",
         task_capsule={
             "scope": "book",
             "book": book,
+            "brief": brief,
+            "worldbuilding": worldbuilding,
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
             "required_output": {
@@ -2548,7 +2644,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> 
                         "plants": [],
                         "reveals": [],
                         "target_words": 2000,
-                        "imports": imports,
+                        "imports": chapter_imports,
                         "obligations": [],
                         "pivotal": None,
                     }
@@ -2971,6 +3067,18 @@ def _call_parallel_reviews(
     writer_consequences: dict[str, object],
     runner,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
+    materialized = {}
+    for role, task_id, output in (
+        ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}", f"books/{book_id}/reviews/{chapter_id}/cold-reader.json"),
+        ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}", f"books/{book_id}/reviews/{chapter_id}/technical-editor.json"),
+    ):
+        review_path = root / output
+        plan = _load_plan(root)
+        task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
+        if review_path.is_file() and task and task["state"] == "succeeded":
+            materialized[role] = _read_json(review_path)
+    if len(materialized) == 2:
+        return materialized["cold-reader"], materialized["technical-editor"], []
     jobs = []
     for role, task_id in (
         ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}"),
@@ -3030,7 +3138,10 @@ def _validate_revision(
             raise BookForgeError(f"Incomplete disposition for {finding['id']}")
         if finding.get("objective") and finding["severity"] == "blocking" and disposition["action"] != "repaired":
             raise BookForgeError(f"Objective blocker {finding['id']} cannot be dismissed")
-    revised_facts = {str(row.get("fact")) for row in value.get("consequences", []) if isinstance(row, dict)}
+    revised_rows = value.get("consequences", [])
+    if not isinstance(revised_rows, list) or not all(isinstance(row, dict) for row in revised_rows):
+        raise BookForgeError("Revision consequences must be a list of objects with fact/scope/entities")
+    revised_facts = {str(row.get("fact")) for row in revised_rows}
     required_facts = {str(row.get("fact")) for row in technical_consequences}
     if not required_facts <= revised_facts:
         raise BookForgeError("Revision omitted an independently extracted shared consequence")
@@ -3056,7 +3167,13 @@ def review_and_close_chapter(
     writer_consequences = _read_json(root / "books" / book_id / "work" / chapter_id / "consequences.json")
     _ensure_review_tasks(root, book_id, chapter_id)
     cold, technical, receipts = _call_parallel_reviews(root, book_id, chapter_id, contract, draft, writer_consequences, runner)
-    findings = list(cold["findings"]) + list(technical["findings"])
+    technical_findings = []
+    for position, finding in enumerate(technical["findings"], start=1):
+        renamed = dict(finding)
+        renamed["id"] = f"T-{position:04d}"
+        renamed["review"] = "technical"
+        technical_findings.append(renamed)
+    findings = list(cold["findings"]) + technical_findings
     reviser_id = f"REVISE-{book_id}-{chapter_id}"
     envelope = build_envelope(
         root,
@@ -3085,11 +3202,18 @@ def review_and_close_chapter(
     state.setdefault("closed_chapters", []).append(chapter_id)
     state.setdefault("consequences", []).extend(value["consequences"])
     state["previous_chapter_tail"] = str(validated["prose_markdown"])[-2000:]
+    stored_dispositions = []
+    for disposition in value["dispositions"]:
+        row = dict(disposition)
+        review = next((finding.get("review") for finding in findings if str(finding["id"]) == str(row.get("finding"))), None)
+        if review == "technical":
+            row["finding"] = f"F-{int(str(row.get('finding')).removeprefix('T-')):04d}"
+        stored_dispositions.append(row)
     outputs = {
         f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
         f"books/{book_id}/state.yaml": _json_bytes(state),
         f"books/{book_id}/reader-state.md": f"# Reader State\n\n{value['reader_state'].strip()}\n",
-        f"books/{book_id}/reviews/{chapter_id}/dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": value["dispositions"]}),
+        f"books/{book_id}/reviews/{chapter_id}/dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": stored_dispositions}),
     }
     manifest = stage_outputs(root, claim["attempt"], outputs)
     revision_receipt = record_execution(
@@ -4378,6 +4502,7 @@ def build_parser() -> argparse.ArgumentParser:
     design = commands.add_parser("design")
     design.add_argument("scope", choices=("universe", "book"))
     design.add_argument("--book")
+    design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
     run = commands.add_parser("run")
     run.add_argument("--book")
     run.add_argument("--task")
@@ -4450,6 +4575,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
+            if args.brief:
+                _write_book_brief(args.project, args.book, args.brief)
             print(json.dumps(execute_book_design(args.project, args.book), sort_keys=True))
         elif args.command == "run":
             print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))

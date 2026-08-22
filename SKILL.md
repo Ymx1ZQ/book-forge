@@ -59,7 +59,7 @@ book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>]
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
-book-forge design <universe|book> [--book <id>]
+book-forge design <universe|book> [--book <id>] [--brief '<json>']
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]

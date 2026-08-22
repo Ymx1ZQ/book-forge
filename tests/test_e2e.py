@@ -110,6 +110,10 @@ class EndToEndTests(unittest.TestCase):
             a, b, c, local = [bf.add_book(project, title)["id"] for title in ("Origin", "Sequel", "Parallel", "Local")]
             alternate = bf.add_continuity(project, "Ash Timeline", fork_from="CNT-0001", imports=["UNI-0001#kernel"])["id"]
             alt_book = bf.add_book(project, "Alternate", continuity=alternate)["id"]
+            for book_id in (a, b, c, local, alt_book):
+                (project / f"books/{book_id}").mkdir(parents=True, exist_ok=True)
+                (project / f"books/{book_id}/book-brief.json").write_text(json.dumps({"schema": 1, "premise": "A diver must decide.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"}))
+            alt_book = bf.add_book(project, "Alternate", continuity=alternate)["id"]
             sequel = bf.add_relation(project, "sequel_of", [b, a], obligations=["Carry the archive choice"])
             bf.add_relation(project, "parallel_to", [a, c])
             bf.add_relation(project, "crossover", [a, b, c])
