@@ -16,6 +16,9 @@ def load_module():
     return module
 
 
+ROLE_VARIANTS = {name: spec[1] for name, spec in load_module().ROLE_SPECS.items()}
+
+
 def clean_proposal():
     return {
         "kernel": [{"id": "LAW-0001", "summary": "Memory cannot be manufactured."}],
@@ -40,7 +43,7 @@ class DesignProvider:
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
         value = self.proposal if role == "designer" else {"findings": []}
-        variant = "high"
+        variant = ROLE_VARIANTS[role]
         return {
             "text": json.dumps(value),
             "provider": "openrouter",

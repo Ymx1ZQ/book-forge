@@ -37,7 +37,8 @@ never bypass a block by editing canonical files.
 - Make the universe the root object and allow it to contain any number of books.
 - Model continuities separately from optional series, sagas, cycles, and reading orders.
 - Relate books explicitly without forcing standalone, trilogy, or fixed-length modes.
-- Pin every OpenCode role to `openrouter/deepseek/deepseek-v4-flash-0731`.
+- Pin every OpenCode role to `openrouter/deepseek/deepseek-v4-flash-0731` on a reasoning
+  effort that model declares: `low`, `high`, or `max`.
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
 - Let one orchestrator decide work while a deterministic control plane performs every state and canonical write.
 - Persist task receipts, hashes, leases, and staged outputs so pause and resume survive process loss.
@@ -52,6 +53,7 @@ Preserve this compact route set while implementing the plan:
 
 ```text
 book-forge init [--title <title>] [--source-language <bcp47>]
+book-forge runtime sync
 book-forge migrate <check|dry-run|apply|rollback>
 book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>] [--import <block>...]
 book-forge add-book <title> [--continuity <id>]

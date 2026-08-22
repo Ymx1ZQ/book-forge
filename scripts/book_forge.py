@@ -23,16 +23,19 @@ from pathlib import Path
 
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 SCHEMA_VERSION = 1
+MODEL_ID = MODEL.split("/", 1)[1]
+VARIANT_EFFORTS = {"low": "low", "high": "high", "max": "max"}
+DEFAULT_EFFORT = "high"
 ROLE_SPECS = {
-    "book-forge-orchestrator": ("primary", "high", 30),
-    "designer": ("all", "high", 10),
+    "book-forge-orchestrator": ("primary", "max", 30),
+    "designer": ("all", "max", 10),
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
-    "technical-editor": ("all", "mid", 7),
-    "reviser": ("all", "mid", 8),
-    "canon-auditor": ("all", "high", 8),
+    "technical-editor": ("all", "high", 7),
+    "reviser": ("all", "high", 8),
+    "canon-auditor": ("all", "max", 8),
     "translator": ("all", "low", 7),
-    "judge": ("all", "high", 6),
+    "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
 
@@ -131,11 +134,11 @@ def _opencode_config() -> dict[str, object]:
         "default_agent": "book-forge-orchestrator",
         "provider": {
             "openrouter": {
-                "whitelist": ["deepseek/deepseek-v4-flash-0731"],
+                "whitelist": [MODEL_ID],
                 "models": {
-                    "deepseek/deepseek-v4-flash-0731": {
+                    MODEL_ID: {
                         "options": {
-                            "reasoningEffort": "medium",
+                            "reasoningEffort": DEFAULT_EFFORT,
                             "provider": {
                                 "order": ["deepseek", "baidu"],
                                 "only": ["deepseek", "baidu"],
@@ -143,10 +146,8 @@ def _opencode_config() -> dict[str, object]:
                             },
                         },
                         "variants": {
-                            "low": {"reasoningEffort": "low"},
-                            "mid": {"reasoningEffort": "medium"},
-                            "high": {"reasoningEffort": "high"},
-                            "xhigh": {"reasoningEffort": "xhigh"},
+                            name: {"reasoningEffort": effort}
+                            for name, effort in VARIANT_EFFORTS.items()
                         },
                     }
                 },
@@ -183,13 +184,18 @@ def _write_agents(stage: Path) -> None:
             f"mode: {mode}\nmodel: {MODEL}\nvariant: {variant}\nsteps: {steps}\n"
             f"{permissions}---\n\n{instruction}\n"
         )
-        (agents / f"{name}.md").write_text(body, encoding="utf-8")
+        _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
+    for stale in agents.glob("*.md"):
+        if stale.stem not in ROLE_SPECS:
+            stale.unlink()
     commands = stage / ".opencode" / "commands"
     commands.mkdir(parents=True, exist_ok=True)
-    (commands / "book-forge.md").write_text(
-        "---\ndescription: Run a Book Forge universe workflow.\nagent: book-forge-orchestrator\n---\n\n"
-        "Load the `book-forge` skill, then execute this request exactly: $ARGUMENTS\n",
-        encoding="utf-8",
+    _write_bytes_atomic(
+        commands / "book-forge.md",
+        (
+            "---\ndescription: Run a Book Forge universe workflow.\nagent: book-forge-orchestrator\n---\n\n"
+            "Load the `book-forge` skill, then execute this request exactly: $ARGUMENTS\n"
+        ).encode("utf-8"),
     )
 
 
@@ -371,6 +377,28 @@ def init_project(
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+
+
+def sync_runtime(project: Path | str) -> dict[str, object]:
+    """Regenerate an existing universe's OpenCode configuration from the pins.
+
+    `init` only validates an already-created project, so a change to the pinned
+    model, variant ladder, or role matrix would otherwise reach existing
+    universes only by hand. This rewrites the generated runtime surface —
+    `opencode.json`, `.opencode/agents/`, `.opencode/commands/` — and touches
+    neither `book-forge.yaml` nor any control-plane or canonical state.
+    """
+    root = _project_root(project)
+    _write_json(root / "opencode.json", _opencode_config())
+    _write_agents(root)
+    return {
+        "synced": True,
+        "project": str(root),
+        "model": MODEL,
+        "default_effort": DEFAULT_EFFORT,
+        "variants": VARIANT_EFFORTS,
+        "roles": {name: spec[1] for name, spec in ROLE_SPECS.items()},
+    }
 
 
 def list_books(project: Path | str) -> list[dict[str, object]]:
@@ -684,7 +712,7 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
     return {
         "version": version,
         "model": MODEL,
-        "variants": ["low", "mid", "high", "xhigh"],
+        "variants": list(VARIANT_EFFORTS),
         "json_events": "--format" in help_text,
         "session_resume": "--session" in help_text,
     }
@@ -4150,6 +4178,9 @@ def build_parser() -> argparse.ArgumentParser:
     collection_order_command.add_argument("books", nargs="+")
     collection_remove_command = collection_commands.add_parser("remove")
     collection_remove_command.add_argument("collection")
+    runtime = commands.add_parser("runtime")
+    runtime_commands = runtime.add_subparsers(dest="runtime_command", required=True)
+    runtime_commands.add_parser("sync")
     migrate = commands.add_parser("migrate")
     migrate.add_argument("mode", choices=("check", "dry-run", "apply", "rollback"))
     pause = commands.add_parser("pause")
@@ -4209,6 +4240,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "collection" and args.collection_command == "remove":
             collection_remove(args.project, args.collection)
             print(json.dumps({"removed": args.collection}, sort_keys=True))
+        elif args.command == "runtime" and args.runtime_command == "sync":
+            print(json.dumps(sync_runtime(args.project), sort_keys=True))
         elif args.command == "migrate":
             print(json.dumps(migrate_project(args.project, args.mode), sort_keys=True))
         elif args.command == "pause":

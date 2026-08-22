@@ -30,20 +30,24 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertEqual(config["small_model"], MODEL)
         self.assertEqual(config["default_agent"], "book-forge-orchestrator")
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
-        self.assertEqual(model["options"]["reasoningEffort"], "medium")
+        self.assertEqual(model["options"]["reasoningEffort"], "high")
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
-        self.assertEqual(set(model["variants"]), {"low", "mid", "high", "xhigh"})
+        self.assertEqual(model["variants"], {
+            "low": {"reasoningEffort": "low"},
+            "high": {"reasoningEffort": "high"},
+            "max": {"reasoningEffort": "max"},
+        })
 
         expected = {
-            "book-forge-orchestrator": ("primary", "high"),
-            "designer": ("all", "high"),
+            "book-forge-orchestrator": ("primary", "max"),
+            "designer": ("all", "max"),
             "writer": ("all", "low"),
             "cold-reader": ("all", "low"),
-            "technical-editor": ("all", "mid"),
-            "reviser": ("all", "mid"),
-            "canon-auditor": ("all", "high"),
+            "technical-editor": ("all", "high"),
+            "reviser": ("all", "high"),
+            "canon-auditor": ("all", "max"),
             "translator": ("all", "low"),
-            "judge": ("all", "high"),
+            "judge": ("all", "max"),
             "book-forge-smoke": ("primary", "low"),
         }
         files = {path.stem: path.read_text() for path in (self.project / ".opencode/agents").glob("*.md")}
@@ -65,7 +69,7 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertEqual(report["model"], MODEL)
         self.assertTrue(report["json_events"])
         self.assertTrue(report["session_resume"])
-        self.assertEqual(set(report["variants"]), {"low", "mid", "high", "xhigh"})
+        self.assertEqual(set(report["variants"]), {"low", "high", "max"})
 
 
 if __name__ == "__main__":

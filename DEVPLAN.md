@@ -35,7 +35,7 @@ IDs and explicit imports over semantic retrieval.
 - Books are discovered from their `book.yaml`; `universe.yaml` does not duplicate a manual book list.
 - Relations are explicit and typed; obligations and imports are stable addressable blocks.
 - Every model role is pinned to `openrouter/deepseek/deepseek-v4-flash-0731` through OpenRouter.
-- Routine roles use explicit low or mid reasoning; high is reserved for integration, canon, and judgement.
+- Role reasoning uses the pinned model's own effort tiers: routine roles run `low`, editorial roles run `high`, and `max` is reserved for integration, canon, and judgement.
 - `source_language` defaults to `en`, may be selected at init, and becomes immutable after the first source chapter closes.
 - Translation workspaces are absent until the user explicitly requests a target locale.
 - Graphify is excluded from v1 setup, correctness, retrieval, and audit coverage.
@@ -162,6 +162,42 @@ dist/<book-id>/<bcp47>/
 ## Phase F — Cross-book assurance and publication
 
 ## Phase G — Measured reliability
+
+## Phase H — Reasoning-effort ladder correction ✅
+
+### M26: Pin every role to an effort the model actually supports ✅
+
+**Depends on:** M5
+
+**Why:** OpenRouter reports `supported_efforts: ["max", "high", "low"]` for
+`deepseek/deepseek-v4-flash-0731`, while the generated configuration pinned a
+`low`/`mid`/`high`/`xhigh` ladder over `low`/`medium`/`high`/`xhigh` and a
+`medium` default. OpenRouter accepts the unsupported values without an error and
+does not honour them, so `technical-editor` and `reviser` ran at the provider
+default instead of their pinned tier, and the `xhigh` rung was never reachable.
+The defect is invisible at runtime: no request fails.
+
+**Approach:** Rename the ladder to the model's own tiers — `low`, `high`, `max`
+— and set the configuration default to `high`. Keep routine roles on `low`,
+move the editorial roles to `high`, and reserve `max` for integration, canon,
+and judgement. Because `init` only validates an existing project and never
+rewrites generated runtime configuration, add an explicit `runtime sync`
+command so an already-created universe can be brought to the corrected pin
+without hand-editing its files.
+
+**Tasks:**
+- [x] Remap `ROLE_SPECS` onto the `low`/`high`/`max` ladder
+- [x] Replace the generated `variants` block and default effort in `_opencode_config`
+- [x] Report the corrected ladder from `verify_runtime`
+- [x] Repin the installed global orchestrator asset to `max`
+- [x] Rewrite the routine-reasoning binding decision
+- [x] Add `runtime sync` to regenerate an existing project's OpenCode configuration
+- [x] Test: unit — role pins, generated config, and `runtime sync` convergence
+- [x] Commit & push
+
+**Done when:** Every generated role carries an effort the pinned model declares,
+and an existing universe reaches that state by running a command rather than by
+hand.
 
 ## Out of scope
 

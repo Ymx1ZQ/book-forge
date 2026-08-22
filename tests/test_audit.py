@@ -16,6 +16,9 @@ def load_module():
     return module
 
 
+ROLE_VARIANTS = {name: spec[1] for name, spec in load_module().ROLE_SPECS.items()}
+
+
 class AuditProvider:
     def __init__(self):
         self.calls = []
@@ -24,7 +27,7 @@ class AuditProvider:
         job = envelope["payload"]["task"]["job"]
         evidence = job["evidence"][0]
         value = {"findings": [{"id": f"F-{job['id']}", "severity": "blocking", "issue": "Seeded boundary mismatch", "evidence": [{"location": evidence["location"], "hash": evidence["hash"]}], "repair_scope": job["books"]}]}
-        return {"text": json.dumps(value), "provider": "openrouter", "model": MODEL, "variant": "high", "session_id": f"ses-{len(self.calls)}", "tokens": {}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+        return {"text": json.dumps(value), "provider": "openrouter", "model": MODEL, "variant": ROLE_VARIANTS[role], "session_id": f"ses-{len(self.calls)}", "tokens": {}, "cost": 0, "latency_ms": 1, "finish": "stop"}
 
 
 class AuditTests(unittest.TestCase):

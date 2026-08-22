@@ -16,6 +16,9 @@ def load_module():
     return module
 
 
+ROLE_VARIANTS = {name: spec[1] for name, spec in load_module().ROLE_SPECS.items()}
+
+
 def proposal(obligation=None):
     chapters = [
         {"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["A choice opens the conflict"], "plants": ["signal"], "reveals": [], "target_words": 1800, "imports": ["UNI-0001#kernel"], "pivotal": "opener"},
@@ -45,7 +48,7 @@ class DesignProvider:
             "text": json.dumps(payload),
             "provider": "openrouter",
             "model": MODEL,
-            "variant": "high",
+            "variant": ROLE_VARIANTS[role],
             "session_id": f"ses-{len(self.calls)}",
             "tokens": {"input": envelope["estimated_input_tokens"], "output": 300},
             "cost": 0.001,

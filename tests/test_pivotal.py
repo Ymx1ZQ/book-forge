@@ -45,7 +45,7 @@ class PivotalProvider:
                 payload = {"prose_markdown": prose("tide"), "beat_map": [{"beat": "Choose", "evidence": "chosen"}], "consequences": [], "dispositions": [], "reader_state": "The choice is made."}
             else:
                 raise AssertionError(role)
-        variants = {"writer": "low", "judge": "high", "cold-reader": "low", "technical-editor": "mid", "reviser": "mid"}
+        variants = {"writer": "low", "judge": "max", "cold-reader": "low", "technical-editor": "high", "reviser": "high"}
         return {"text": json.dumps(payload), "provider": "openrouter", "model": MODEL, "variant": variants[role], "session_id": f"ses-{number}", "tokens": {"input": envelope["estimated_input_tokens"], "output": 300}, "cost": .001, "latency_ms": 10, "finish": "stop"}
 
 
