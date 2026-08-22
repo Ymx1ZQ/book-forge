@@ -10,6 +10,9 @@ Use this route for `status`, `pause`, and `resume`.
   `outcome_unknown`.
 - Resume only with an explicit decision for every unknown task:
   `--resolve-unknown TASK:retry` or `TASK:abandon`.
+- A task blocked by a failed contract validation requires an explicit
+  `--resolve-blocked TASK:retry` before the run resumes; `abandon` is not
+  offered for these tasks.
 - A retry acknowledges possible duplicate provider cost. Abandon blocks
   dependent tasks. Explain that tradeoff before executing the resolution.
 - Use `status --repair-view` only to rebuild the human plan from verified

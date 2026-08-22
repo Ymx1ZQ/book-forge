@@ -1269,6 +1269,11 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
     provider = _read_json(root / ".book-forge" / "provider.json")
     retry_count = sum(max(0, count - 1) for count in accepted_by_task.values())
     ambiguous = [str(attempt["id"]) for attempt in plan["attempts"] if attempt.get("state") == "outcome_unknown"]
+    resolved_attempts = {
+        str(attempt["id"]): str(attempt["resolution"])
+        for attempt in plan["attempts"]
+        if attempt.get("resolution") is not None
+    }
     stale_causes: dict[str, list[str]] = {key: list(value.get("causes", [])) for key, value in stale.items()}
     for state_path in sorted((root / "books").glob("*/translations/*/state.yaml")):
         state = _read_json(state_path)
@@ -1284,6 +1289,7 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
         "by_run": dict(sorted(by_run.items())),
         "retries": retry_count,
         "ambiguous_calls": ambiguous,
+        "resolutions": resolved_attempts,
         "wait": {key: provider.get(key) for key in ("retry_after", "chosen_backoff", "wait_started_at", "eligible_at") if provider.get(key) is not None},
         "stale_causes": stale_causes,
         "artifact_dag": {"registered": len(registry.get("artifacts", {})), "missing": missing_edges},
@@ -1483,11 +1489,20 @@ def _block_descendants(plan: dict[str, object], task_id: str) -> None:
                 task["state"] = "blocked"
 
 
+def _last_validation_failure(plan: dict[str, object], task_id: str) -> dict[str, object] | None:
+    rows = [row for row in plan["attempts"] if row.get("task") == task_id]
+    if not rows:
+        return None
+    last = rows[-1]
+    return last if last.get("state") == "validation_failed" else None
+
+
 def resume_run(
     project: Path | str,
     *,
     run_id: str | None = None,
     resolutions: dict[str, str] | None = None,
+    blocked_resolutions: dict[str, str] | None = None,
 ) -> dict[str, object]:
     root = _project_root(project)
     control = _control(root)
@@ -1517,6 +1532,25 @@ def resume_run(
         else:
             attempt["resolution"] = "abandon"
             _block_descendants(plan, task_id)
+    retryable_blocked: dict[str, dict[str, object]] = {}
+    for task in plan["tasks"]:
+        if task["state"] != "blocked":
+            continue
+        failure = _last_validation_failure(plan, str(task["id"]))
+        if failure is not None:
+            retryable_blocked[str(task["id"])] = failure
+    blocked_choices = blocked_resolutions or {}
+    if set(retryable_blocked) != set(blocked_choices):
+        raise BookForgeError("Every validation-blocked task requires an explicit retry resolution")
+    for task_id, attempt in retryable_blocked.items():
+        choice = blocked_choices[task_id]
+        if choice != "retry":
+            raise BookForgeError(f"Invalid blocked resolution for {task_id}: {choice} (only retry is supported)")
+        attempt["state"] = "orphaned"
+        attempt["resolution"] = "retry"
+        task = next(row for row in plan["tasks"] if row["id"] == task_id)
+        task["state"] = "pending"
+        task.pop("attempt", None)
     _save_plan(root, plan)
     render_plan(root)
     run["state"] = "running"
@@ -4187,6 +4221,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume = commands.add_parser("resume")
     resume.add_argument("--run")
     resume.add_argument("--resolve-unknown", action="append", default=[])
+    resume.add_argument("--resolve-blocked", action="append", default=[])
     status = commands.add_parser("status")
     status.add_argument("--book")
     status.add_argument("--run")
@@ -4251,7 +4286,13 @@ def main(argv: list[str] | None = None) -> int:
                     raise BookForgeError("--resolve-unknown must be TASK:retry or TASK:abandon")
                 task, resolution = value.rsplit(":", 1)
                 resolutions[task] = resolution
-            print(json.dumps(resume_run(args.project, run_id=args.run, resolutions=resolutions), sort_keys=True))
+            blocked = {}
+            for value in args.resolve_blocked:
+                if ":" not in value:
+                    raise BookForgeError("--resolve-blocked must be TASK:retry")
+                task, resolution = value.rsplit(":", 1)
+                blocked[task] = resolution
+            print(json.dumps(resume_run(args.project, run_id=args.run, resolutions=resolutions, blocked_resolutions=blocked), sort_keys=True))
         elif args.command == "status":
             if args.repair_view:
                 repair_plan_view(args.project)
