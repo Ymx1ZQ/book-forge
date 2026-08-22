@@ -36,13 +36,14 @@ def clean_proposal():
 
 
 class DesignProvider:
-    def __init__(self, proposal):
+    def __init__(self, proposal, audit=None):
         self.proposal = proposal
+        self.audit = audit if audit is not None else {"findings": []}
         self.calls = []
 
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
-        value = self.proposal if role == "designer" else {"findings": []}
+        value = self.proposal if role == "designer" else self.audit
         variant = ROLE_VARIANTS[role]
         return {
             "text": json.dumps(value),
@@ -95,6 +96,67 @@ class UniverseDesignTests(unittest.TestCase):
         self.assertEqual(provider.calls, ["designer", "canon-auditor"])
         report = self.bf.telemetry_report(self.project, strict=True)
         self.assertEqual(report["calls"]["with_receipts"], 2)
+
+    def test_binds_audit_evidence_to_helper_computed_hashes(self):
+        provider = DesignProvider(
+            clean_proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [
+                    {"location": "proposal.places.PLC-0001", "hash": "0" * 64},
+                    {"location": "proposal.eras.ERA-0001"},
+                ],
+                "repair_scope": ["PLC-0001"],
+            }]},
+        )
+        result = self.bf.execute_universe_design(self.project, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        audit = json.loads((self.project / "universe/design-audit.json").read_text())
+        evidence = audit["findings"][0]["evidence"]
+        place = self.project / "universe/canon/places/PLC-0001.md"
+        eras = self.project / "universe/timeline/eras.yaml"
+        self.assertEqual(evidence[0]["hash"], self.bf._file_hash(place))
+        self.assertEqual(evidence[0]["location"], "proposal.places.PLC-0001")
+        self.assertEqual(evidence[1]["hash"], self.bf._file_hash(eras))
+
+    def test_unresolvable_audit_evidence_blocks_the_design(self):
+        provider = DesignProvider(
+            clean_proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [{"location": "nowhere/not-a-file.md"}],
+                "repair_scope": ["PLC-0001"],
+            }]},
+        )
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_universe_design(self.project, provider=provider)
+
+    def test_resumes_audit_alone_when_design_already_promoted(self):
+        bad = DesignProvider(
+            clean_proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [{"location": "nowhere/not-a-file.md"}],
+                "repair_scope": ["PLC-0001"],
+            }]},
+        )
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_universe_design(self.project, provider=bad)
+        plan = self.bf._load_plan(self.project)
+        design_task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-UNI-0001")
+        self.assertEqual(design_task["state"], "succeeded")
+
+        self.bf.resume_run(self.project, blocked_resolutions={"AUDIT-UNI-0001": "retry"})
+        rerun = DesignProvider(clean_proposal(), audit={"findings": []})
+        result = self.bf.execute_universe_design(self.project, provider=rerun)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(rerun.calls, ["canon-auditor"])
 
 
 if __name__ == "__main__":

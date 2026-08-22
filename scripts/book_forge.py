@@ -2279,6 +2279,69 @@ def _run_design_role(
     return claim, result
 
 
+_EVIDENCE_ROW_RE = re.compile(r"\b(LAW|PLC|FAC|CHR|CH)-\d{4}\b")
+_ERA_EVENT_RE = re.compile(r"\b(ERA|EVT)-\d{4}\b")
+_CANON_DIRECTORIES = {"LAW": "topics", "PLC": "places", "FAC": "factions", "CHR": "characters"}
+
+
+def _design_artifact_path(root: Path, scope: dict[str, object]) -> Path:
+    if scope.get("scope") == "book" and scope.get("book"):
+        return root / "books" / str(scope["book"]) / "design.md"
+    return root / "universe" / "design.json"
+
+
+def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: Path, location: str) -> Path | None:
+    for match in _EVIDENCE_ROW_RE.finditer(location):
+        prefix, row_id = match.group(1), match.group(0)
+        if prefix == "CH":
+            if book_id:
+                path = root / "books" / book_id / "chapters" / f"{row_id}.json"
+                if path.is_file():
+                    return path
+            continue
+        path = root / "universe" / "canon" / _CANON_DIRECTORIES[prefix] / f"{row_id}.md"
+        if path.is_file():
+            return path
+    for match in _ERA_EVENT_RE.finditer(location):
+        prefix = match.group(1)
+        path = root / "universe" / "timeline" / ("eras.yaml" if prefix == "ERA" else "events.yaml")
+        if path.is_file():
+            return path
+    if location.startswith("proposal"):
+        return design_artifact if design_artifact.is_file() else None
+    candidate = root / location
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def _bind_audit_evidence(root: Path, scope: dict[str, object], value: dict[str, object]) -> dict[str, object]:
+    findings = value.get("findings")
+    if not isinstance(findings, list):
+        return value
+    book_id = str(scope.get("book")) if scope.get("scope") == "book" and scope.get("book") else None
+    design_artifact = _design_artifact_path(root, scope)
+    bound: list[dict[str, object]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        evidence = finding.get("evidence")
+        if not isinstance(evidence, list):
+            continue
+        fixed = []
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            location = str(item.get("location", ""))
+            target = _resolve_evidence_target(root, book_id, design_artifact, location)
+            if target is None:
+                raise BookForgeError(f"Audit evidence location is not a stable artifact: {location}")
+            fixed.append({**item, "location": location, "hash": _file_hash(target)})
+        finding["evidence"] = fixed
+        bound.append(finding)
+    return {"findings": bound}
+
+
 def _design_audit_record(
     root: Path,
     task_id: str,
@@ -2299,7 +2362,7 @@ def _design_audit_record(
     claim, result = _run_design_role(root, task_id, "canon-auditor", envelope, runner)
     try:
         value = _parse_contract_json(str(result["text"]))
-        findings = _validate_audit_output(value)
+        findings = _validate_audit_output(_bind_audit_evidence(root, scope, value))
     except BookForgeError as exc:
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
@@ -2320,6 +2383,19 @@ def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, 
     tasks = schedule_universe_design(root)
     if all(task["state"] == "succeeded" for task in tasks):
         return {**_read_json(root / "universe" / "design-audit.json"), "calls": 0}
+    plan = _load_plan(root)
+    design_task = next(task for task in plan["tasks"] if task["id"] == "DESIGN-UNI-0001")
+    if design_task["state"] == "succeeded":
+        proposal = _read_json(root / "universe" / "design.json")
+        audit = _design_audit_record(
+            root,
+            "AUDIT-UNI-0001",
+            {"scope": "universe", "proposal": proposal},
+            ["UNI-0001#kernel"],
+            runner,
+            "universe/design-audit.json",
+        )
+        return {**audit, "calls": 1}
     brief = _read_json(root / "universe" / "design-brief.json")
     envelope = build_envelope(
         root,

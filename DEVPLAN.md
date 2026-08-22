@@ -74,7 +74,7 @@ book-forge collection <add|remove|order> ...
 book-forge design <universe|book> [--book <id>]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
-book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>]
+book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
 book-forge status [--book <id>|--run <id>|--locale <tag>] [--repair-view]
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
 book-forge translate <add|next|run|status> <book> <locale>
@@ -238,3 +238,84 @@ intact.
 - Changing source language after the first source chapter closes.
 - Audiobook or cover generation, ISBN procurement, DRM, storefront upload, or print-on-demand integration.
 - Automatic source-prose rewriting after canon changes; the system schedules evidence-backed repair tasks.
+
+## Unassigned milestones
+
+### M28: Let a validation-blocked design task be explicitly retried ✅
+
+**Status: done — 2026-08-22**
+
+**Why:** When a designer or canon-auditor contract fails validation,
+`_set_attempt_failure(..., block=True)` sets the task to `blocked` and the run
+to `blocked`. `resume` reopens the run but leaves the task `blocked`, and
+`ready_frontier` only dispatches `pending` tasks, so the design route can never
+be retried after a validation failure: `design universe` fails with
+`Task is not ready`. There is no supported recovery path for the most common
+failure class (incomplete model contract). Observed live on the Landfall
+project: the first designer attempt returned empty `eras/events/places/
+factions/characters/themes` (`creative-contract.incomplete`) and the universe
+design has been stuck blocked ever since.
+
+**Approach:** Add an explicit, receipted retry resolution that mirrors the
+existing `outcome_unknown` handling:
+
+1. `resume --resolve-blocked TASK:retry` — for tasks whose last attempt is
+   `validation_failed`: mark that attempt `orphaned` with
+   `resolution: retry`, set the task back to `pending`, and clear `attempt`.
+2. `ready_frontier` and `claim_task` are untouched; the task re-enters the
+   frontier naturally once `pending`.
+3. `status` reports the resolution in the attempt telemetry.
+
+**Out of scope:** automatic retry, editing plan.json by hand, changing the
+validation rules themselves.
+
+**Tasks:**
+- [x] Add `--resolve-blocked` to the `resume` parser and `resume_run`
+- [x] Validate the attempted task state is `validation_failed` before resolving
+- [x] Cover the new resolution in `tests/test_lifecycle.py`
+- [x] Re-run the full test suite in the dev tree
+- [x] Deploy with `install.sh --force`
+- [x] Then on Landfall: `resume --resolve-blocked DESIGN-UNI-0001:retry` and
+      re-run `design universe`
+
+**Done when:** A fixture design that failed validation becomes retryable via
+one explicit `resume --resolve-blocked` call, and the Landfall universe design
+reaches `design_clean`.
+
+### M29: Bind design-audit evidence to helper-computed SHA-256 ✅
+
+**Status: done — 2026-08-22**
+
+**Why:** `_validate_audit_output` requires every evidence item to carry a
+SHA-256, but the canon-auditor is a tool-less model: it cannot compute hashes
+and omits or hallucinates them. Observed live on Landfall (ATT-0005): the
+designer contract passed and was promoted, then the audit failed validation
+with `Audit evidence requires a stable location and SHA-256`, blocking
+`design_clean` even though the findings were substantive.
+
+**Approach:** The control plane binds the hashes, never the model. In
+`_design_audit_record`, after parsing the auditor's findings, replace each
+evidence item's `hash` with a helper-computed SHA-256 resolved from the
+`location` string against the promoted artifacts:
+
+- `LAW-####/PLC-####/FAC-####/CHR-####` (+ optional `#fragment`) → the canon
+  file `universe/canon/<topics|places|factions|characters>/<id>.md`
+- `ERA-####` → `universe/timeline/eras.yaml`; `EVT-####` → `events.yaml`
+- `CH-####` (book design) → `books/<book>/chapters/<id>.json`
+- `proposal.*` → the promoted design artifact (`universe/design.json` or
+  `books/<book>/design.json`)
+- any other relative path that exists → that file
+- otherwise → raise (fail closed; evidence must be stable)
+
+The model-supplied `hash` is always discarded and recomputed.
+
+**Tasks:**
+- [x] Add `_bind_audit_evidence` and call it in `_design_audit_record` (universe and book design share it)
+- [x] Test: auditor returns findings with hallucinated/absent hashes → promoted audit carries real SHA-256 of the resolved files; unresolvable location raises
+- [x] Re-run the full test suite in the dev tree
+- [x] Deploy with `install.sh --force`
+- [x] On Landfall: `resume --resolve-blocked AUDIT-UNI-0001:retry` + `design universe`
+
+**Done when:** A design audit whose model output carries no trustworthy hashes
+still promotes a `design_clean` record with helper-computed SHA-256 evidence,
+and Landfall reaches `design_clean`.
