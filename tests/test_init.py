@@ -36,10 +36,8 @@ class InitProjectTests(unittest.TestCase):
         self.assertNotIn("enabled_providers", opencode)
         self.assertEqual(opencode["model"], config["model"])
         self.assertEqual(opencode["small_model"], config["model"])
-        self.assertEqual(
-            opencode["provider"]["openrouter"]["whitelist"],
-            ["deepseek/deepseek-v4-flash-0731"],
-        )
+        self.assertNotIn("whitelist", opencode["provider"]["openrouter"])
+        self.assertNotIn("default_agent", opencode)
         self.assertEqual(list((project / "books").iterdir()), [])
         self.assertTrue((project / "universe" / "kernel.md").is_file())
         self.assertTrue((project / ".book-forge" / "project.json").is_file())

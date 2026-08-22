@@ -131,10 +131,8 @@ def _opencode_config() -> dict[str, object]:
         "$schema": "https://opencode.ai/config.json",
         "model": MODEL,
         "small_model": MODEL,
-        "default_agent": "book-forge-orchestrator",
         "provider": {
             "openrouter": {
-                "whitelist": [MODEL_ID],
                 "models": {
                     MODEL_ID: {
                         "options": {

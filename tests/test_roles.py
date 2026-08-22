@@ -28,7 +28,9 @@ class RoleTopologyTests(unittest.TestCase):
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config["model"], MODEL)
         self.assertEqual(config["small_model"], MODEL)
-        self.assertEqual(config["default_agent"], "book-forge-orchestrator")
+        # Neither the opening agent nor the catalogue is narrowed: the roles carry their own pins.
+        self.assertNotIn("default_agent", config)
+        self.assertNotIn("whitelist", config["provider"]["openrouter"])
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
         self.assertEqual(model["options"]["reasoningEffort"], "high")
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])

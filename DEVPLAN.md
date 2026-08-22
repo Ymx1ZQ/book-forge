@@ -199,6 +199,35 @@ without hand-editing its files.
 and an existing universe reaches that state by running a command rather than by
 hand.
 
+### M27: Stop the generated configuration from narrowing model choice ✅
+
+**Depends on:** M26
+
+**Why:** The generated `opencode.json` pinned `whitelist` to the single
+production model and forced `default_agent` onto the orchestrator, whose
+frontmatter also pins model and variant. Together these left a project session
+opening on an agent whose model cannot be changed, over a catalogue narrowed to
+one entry, so the TUI model picker had nothing to offer. Role pinning does not
+depend on either setting: each role carries its own `model` and `variant`, and
+`record_execution` verifies the observed pin from provider telemetry.
+
+**Approach:** Drop `whitelist` and `default_agent` from the generated
+configuration. A project then inherits whatever catalogue the user's global
+configuration exposes and opens on the ordinary build agent, while
+`model`/`small_model` still default to the pinned production model and every
+Book Forge role stays pinned through its own agent file. Reaching the
+orchestrator stays a deliberate act through the `/book-forge` command.
+
+**Tasks:**
+- [x] Remove `whitelist` from the generated OpenCode configuration
+- [x] Remove `default_agent` from the generated OpenCode configuration
+- [x] Test: unit — generated config narrows neither the catalogue nor the opening agent
+- [x] Commit & push
+
+**Done when:** A generated project exposes the user's full configured model
+catalogue and opens on an agent whose model can be changed, with every role pin
+intact.
+
 ## Out of scope
 
 - Graphify or semantic graph retrieval in the v1 execution path.
