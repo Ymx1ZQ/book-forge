@@ -2290,7 +2290,40 @@ def _design_artifact_path(root: Path, scope: dict[str, object]) -> Path:
     return root / "universe" / "design.json"
 
 
+def _book_proposal_from_artifacts(root: Path, book_id: str) -> dict[str, object]:
+    book_root = root / "books" / book_id
+    design_text = (book_root / "design.md").read_text(encoding="utf-8")
+    arc_match = re.search(r"## Arc\s*\n+\s*(\[.*\])", design_text, re.DOTALL)
+    if not arc_match:
+        raise BookForgeError(f"Promoted book design lacks an Arc section: books/{book_id}/design.md")
+    outline = _read_json(book_root / "outline.yaml")
+    reader = (book_root / "reader-state.md").read_text(encoding="utf-8")
+    entry_match = re.search(r"^Entry: (\{.*\})$", reader, re.MULTILINE)
+    exit_match = re.search(r"^Intended exit: (\{.*\})$", reader, re.MULTILINE)
+    premise_match = re.search(r"<!--\s*bf:block\s+premise\s*-->([\s\S]*?)(?=\n##\s|<!--)", design_text)
+    return {
+        "premise": premise_match.group(1).strip() if premise_match else "",
+        "entry_state": json.loads(entry_match.group(1)) if entry_match else {},
+        "arc": json.loads(arc_match.group(1)),
+        "exit_boundary": json.loads(exit_match.group(1)) if exit_match else {},
+        "chapters": outline.get("chapters", []),
+    }
+
+
 def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: Path, location: str) -> Path | None:
+    book_scoped = re.match(r"^BOOK-\d{4}#(.+)$", location)
+    if book_scoped:
+        if not book_id or location.split("#", 1)[0] != book_id:
+            return None
+        suffix = book_scoped.group(1)
+        chapter = re.match(r"^proposal/chapters/(CH-\d{4})(?:/|$)", suffix)
+        if chapter:
+            path = root / "books" / book_id / "chapters" / f"{chapter.group(1)}.json"
+            if path.is_file():
+                return path
+        if suffix.startswith("proposal"):
+            return design_artifact if design_artifact.is_file() else None
+        return None
     for match in _EVIDENCE_ROW_RE.finditer(location):
         prefix, row_id = match.group(1), match.group(0)
         if prefix == "CH":
@@ -2309,6 +2342,30 @@ def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: P
             return path
     if location.startswith("proposal"):
         return design_artifact if design_artifact.is_file() else None
+    envelope_scope = re.search(r"design_scope\.(.+)", location)
+    if envelope_scope:
+        if not book_id:
+            return None
+        suffix = envelope_scope.group(1)
+        chapter = re.search(r"(?:^|\.)chapters(?:\[|\.)(CH-\d{4})\b", suffix)
+        if chapter:
+            path = root / "books" / book_id / "chapters" / f"{chapter.group(1)}.json"
+            if path.is_file():
+                return path
+            return None
+        if re.match(r"(entry_state|exit_boundary)", suffix):
+            path = root / "books" / book_id / "reader-state.md"
+            return path if path.is_file() else None
+        if re.match(r"proposal", suffix):
+            return design_artifact if design_artifact.is_file() else None
+        return None
+    block_match = re.fullmatch(r"[A-Z][A-Z0-9]*-\d{4}#[a-z0-9][a-z0-9-]*", location)
+    if block_match:
+        index = rebuild_indexes(root)
+        block = index["blocks"].get(location)
+        if block:
+            return root / str(block["path"])
+        return None
     candidate = root / location
     if candidate.is_file():
         return candidate
@@ -2451,6 +2508,21 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> 
     tasks = schedule_book_design(root, book_id)
     if all(task["state"] == "succeeded" for task in tasks):
         return {**_read_json(root / "books" / book_id / "design-audit.json"), "calls": 0}
+    plan = _load_plan(root)
+    design_task = next(task for task in plan["tasks"] if task["id"] == f"DESIGN-{book_id}")
+    if design_task["state"] == "succeeded":
+        obligations, relation_imports = _book_obligations(root, book_id)
+        imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
+        proposal = _book_proposal_from_artifacts(root, book_id)
+        audit = _design_audit_record(
+            root,
+            f"AUDIT-{book_id}",
+            {"scope": "book", "book": book_id, "proposal": proposal},
+            imports,
+            runner,
+            f"books/{book_id}/design-audit.json",
+        )
+        return {**audit, "calls": 1}
     book = next(row for row in list_books(root) if row["id"] == book_id)
     obligations, relation_imports = _book_obligations(root, book_id)
     imports = sorted(set(["UNI-0001#kernel", *relation_imports]))

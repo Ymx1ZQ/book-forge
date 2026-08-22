@@ -37,13 +37,14 @@ def proposal(obligation=None):
 
 
 class DesignProvider:
-    def __init__(self, value):
+    def __init__(self, value, audit=None):
         self.value = value
+        self.audit = audit if audit is not None else {"findings": []}
         self.calls = []
 
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
-        payload = self.value if role == "designer" else {"findings": []}
+        payload = self.value if role == "designer" else self.audit
         return {
             "text": json.dumps(payload),
             "provider": "openrouter",
@@ -105,6 +106,119 @@ class BookDesignTests(unittest.TestCase):
         self.assertEqual(result["calls"], 2)
         self.assertEqual(provider.calls, ["designer", "canon-auditor"])
         self.assertTrue((self.project / f"books/{book}/chapters/CH-0001.json").is_file())
+
+    def test_binds_book_scoped_proposal_evidence_to_helper_hashes(self):
+        book = self.bf.add_book(self.project, "Bound")["id"]
+        provider = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [
+                    {"location": f"{book}#proposal/turns/TURN-0001", "hash": "0" * 64},
+                    {"location": f"{book}#proposal/chapters/CH-0001/beats/BEAT-0001"},
+                    {"location": f"{book}#proposal/chapters/CH-0001"},
+                ],
+                "repair_scope": [book],
+            }]},
+        )
+        result = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        evidence = audit["findings"][0]["evidence"]
+        design_md = self.project / f"books/{book}/design.md"
+        chapter = self.project / f"books/{book}/chapters/CH-0001.json"
+        self.assertEqual(evidence[0]["hash"], self.bf._file_hash(design_md))
+        self.assertEqual(evidence[0]["location"], f"{book}#proposal/turns/TURN-0001")
+        self.assertEqual(evidence[1]["hash"], self.bf._file_hash(chapter))
+        self.assertEqual(evidence[2]["hash"], self.bf._file_hash(chapter))
+
+    def test_binds_kernel_block_evidence_to_its_file(self):
+        book = self.bf.add_book(self.project, "KernelBound")["id"]
+        provider = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [{"location": "UNI-0001#kernel"}],
+                "repair_scope": [book],
+            }]},
+        )
+        result = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        kernel = self.project / "universe/kernel.md"
+        self.assertEqual(audit["findings"][0]["evidence"][0]["hash"], self.bf._file_hash(kernel))
+
+    def test_binds_envelope_scope_evidence_locations(self):
+        book = self.bf.add_book(self.project, "EnvelopeBound")["id"]
+        provider = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [
+                    {"location": "task.design_scope.proposal.premise"},
+                    {"location": "task.design_scope.chapters.CH-0001.beats.BEAT-0001.cause"},
+                    {"location": "task.design_scope.exit_boundary.sleeper"},
+                ],
+                "repair_scope": [book],
+            }]},
+        )
+        result = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        evidence = audit["findings"][0]["evidence"]
+        design_md = self.project / f"books/{book}/design.md"
+        chapter = self.project / f"books/{book}/chapters/CH-0001.json"
+        reader_state = self.project / f"books/{book}/reader-state.md"
+        self.assertEqual(evidence[0]["hash"], self.bf._file_hash(design_md))
+        self.assertEqual(evidence[1]["hash"], self.bf._file_hash(chapter))
+        self.assertEqual(evidence[2]["hash"], self.bf._file_hash(reader_state))
+
+    def test_foreign_book_scoped_evidence_still_fails_closed(self):
+        book = self.bf.add_book(self.project, "Closed")["id"]
+        provider = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [{"location": "BOOK-0009#proposal/turns/TURN-0001"}],
+                "repair_scope": [book],
+            }]},
+        )
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_book_design(self.project, book, provider=provider)
+
+    def test_resumes_book_audit_alone_when_design_already_promoted(self):
+        book = self.bf.add_book(self.project, "Resumed")["id"]
+        bad = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [{"location": "nowhere/not-a-file.md"}],
+                "repair_scope": [book],
+            }]},
+        )
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_book_design(self.project, book, provider=bad)
+        plan = self.bf._load_plan(self.project)
+        design_task = next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{book}")
+        self.assertEqual(design_task["state"], "succeeded")
+
+        self.bf.resume_run(self.project, blocked_resolutions={f"AUDIT-{book}": "retry"})
+        rerun = DesignProvider(proposal(), audit={"findings": []})
+        result = self.bf.execute_book_design(self.project, book, provider=rerun)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(rerun.calls, ["canon-auditor"])
+        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        self.assertEqual(audit["findings"], [])
 
 
 if __name__ == "__main__":

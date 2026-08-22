@@ -319,3 +319,66 @@ The model-supplied `hash` is always discarded and recomputed.
 **Done when:** A design audit whose model output carries no trustworthy hashes
 still promotes a `design_clean` record with helper-computed SHA-256 evidence,
 and Landfall reaches `design_clean`.
+
+### M30: Resolve book-scoped proposal evidence locations in the audit binder ✅
+
+**Status: done — 2026-08-22**
+
+**Why:** Observed live on Landfall (ATT-0008): the book design succeeded and
+was promoted (`books/BOOK-0001/design.md`, `chapters/CH-0001.json`,
+`outline.yaml`), then the canon-auditor's findings failed binding with
+`Audit evidence location is not a stable artifact:
+BOOK-0001#proposal/turns/TURN-0004`. M29's `_resolve_evidence_target` accepts
+`proposal.*` (bare prefix) for both scopes, but for book design the auditor
+naturally cites book-prefixed locations —
+`BOOK-#### #proposal/turns/TURN-####` and
+`BOOK-#### #proposal/chapters/CH-####[#/beats/...]` — which fall through to
+the `root / location` branch and raise.
+
+**Approach:** Extend `_resolve_evidence_target` so book-scoped proposal
+locations resolve to stable artifacts:
+
+- `BOOK-#### #proposal/...` (the prefix matches the scope book) → the book's
+  promoted design artifact `books/<book>/design.md`; if the suffix names a
+  chapter (`chapters/CH-####`, with or without `/beats/...`) and that chapter
+  contract exists, resolve to `books/<book>/chapters/CH-####.json` instead.
+- `UNI-#### #<block>` or any indexed `<owner>#<block>` address → the file the
+  index maps that block to (observed live: `UNI-0001#kernel`).
+- `task.design_scope...` / `design_scope...` envelope paths, anywhere in the
+  location string (observed live on the retried book audit, including
+  prose-annotated forms like `BEAT-0003 (design_scope.proposal.chapters[0]
+  .beats[2], unhashed in envelope)`): `proposal...` → the design artifact;
+  `chapters.CH-####...` → that chapter contract; `entry_state...` /
+  `exit_boundary...` → `reader-state.md`.
+- Any other `BOOK-#### #...` location that does not match the scope book →
+  still unresolved (fail closed).
+- Universe scope unchanged; `proposal.*` keeps its current meaning.
+
+Also give `execute_book_design` the audit-only resume path that
+`execute_universe_design` already has (M29): when `DESIGN-{book}` is
+`succeeded`, rebuild the proposal from the promoted artifacts
+(`design.md`, `outline.yaml`, `reader-state.md`) and run only the audit.
+Without it, a blocked book audit can never be retried — the route re-enters
+the designer task, which is not in the ready frontier (`Task is not ready`).
+Observed live on Landfall (RUN-0002).
+
+**Tasks:**
+- [x] Parse `BOOK-\d{4}#proposal...` in `_resolve_evidence_target`
+- [x] Add audit-only resume to `execute_book_design` with `_book_proposal_from_artifacts`
+- [x] Test: auditor cites `BOOK-0001#proposal/turns/TURN-0004` and
+      `BOOK-0001#proposal/chapters/CH-0001/beats/BEAT-0004` → hashes bound
+      from `design.md` / `chapters/CH-0001.json`; a foreign `BOOK-0009#...`
+      still raises; book audit retries alone after design promotion
+- [x] Re-run the full test suite in the dev tree
+- [x] Deploy with `install.sh --force`
+- [x] On Landfall: `resume --resolve-blocked AUDIT-BOOK-0001:retry` +
+      `design book --book BOOK-0001`
+
+**Out of scope:** changing the auditor prompt, re-designing the book, the
+warning content of ATT-0008's findings (the design's own duty/obligation
+inconsistency is a separate project-side fix if it persists after the audit
+succeeds).
+
+**Done when:** The Landfall book design audit promotes with helper-computed
+hashes (design_clean or findings-with-evidence), and the fixture test proves
+book-scoped locations bind.
