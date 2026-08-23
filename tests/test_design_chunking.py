@@ -79,6 +79,64 @@ class DesignChunkingTests(unittest.TestCase):
         self.assertIn("outcome_unknown", src)
         # Ensure failed_length is used for length exhaustion, not outcome_unknown
         self.assertIn("length", src.lower())
+        # Zero-output length truncation must surface as finish="length" for
+        # caller retry, never as ProviderOutcomeUnknown.
+        self.assertIn('finish": "length"', src)
+
+    def test_length_finish_retries_then_fails_length(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "world"
+            bf.init_project(root, "World")
+            plan = bf._load_plan(root)
+            bf.add_task(root, "DESIGN-UNI-0001", "designer", priority=10)
+            envelope = bf.build_envelope(
+                root, role="designer", task_capsule={"scope": "universe", "brief": {}},
+                imports=[], state={}, tools=[], max_output_tokens=3000,
+            )
+            calls = {"n": 0}
+            def always_length(role, env, attempt_dir):
+                calls["n"] += 1
+                return {
+                    "text": "", "provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731",
+                    "variant": "max", "session_id": f"ses-len-{calls['n']}",
+                    "tokens": {"input": 100, "output": 0, "reasoning": 32000}, "cost": 0.001,
+                    "latency_ms": 5, "finish": "length",
+                }
+            with self.assertRaises(bf.BookForgeError) as cm:
+                bf._run_with_length_retry(root, "DESIGN-UNI-0001", "designer", envelope, always_length)
+            self.assertEqual(calls["n"], 3)
+            self.assertIn("failed_length", str(cm.exception))
+            plan = bf._load_plan(root)
+            task = next(t for t in plan["tasks"] if t["id"] == "DESIGN-UNI-0001")
+            self.assertEqual(task["state"], "blocked")
+            failed = [a for a in plan["attempts"] if a["state"] == "failed_length"]
+            self.assertEqual(len(failed), 3)
+
+    def test_length_finish_retries_then_succeeds(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "world"
+            bf.init_project(root, "World")
+            bf.add_task(root, "DESIGN-UNI-0001", "designer", priority=10)
+            envelope = bf.build_envelope(
+                root, role="designer", task_capsule={"scope": "universe", "brief": {}},
+                imports=[], state={}, tools=[], max_output_tokens=3000,
+            )
+            calls = {"n": 0}
+            def length_then_stop(role, env, attempt_dir):
+                calls["n"] += 1
+                finish = "length" if calls["n"] < 3 else "stop"
+                return {
+                    "text": "{}" if finish == "stop" else "", "provider": "openrouter",
+                    "model": "deepseek/deepseek-v4-flash-0731", "variant": "max",
+                    "session_id": f"ses-{calls['n']}", "tokens": {"input": 100, "output": 10},
+                    "cost": 0.001, "latency_ms": 5, "finish": finish,
+                }
+            claim, result = bf._run_with_length_retry(root, "DESIGN-UNI-0001", "designer", envelope, length_then_stop)
+            self.assertEqual(calls["n"], 3)
+            self.assertEqual(result["finish"], "stop")
+            self.assertIsNotNone(claim)
 
     def test_design_prompt_mentions_per_chunk(self):
         prompt = (pathlib.Path(bf.__file__).resolve().parents[1] / "assets/prompts/designer.md").read_text()

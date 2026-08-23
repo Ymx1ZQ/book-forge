@@ -3631,6 +3631,20 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         receipt = None
     texts = [event["part"]["text"] for event in events if event.get("type") == "text" and isinstance(event.get("part", {}).get("text"), str)]
     if not texts:
+        if raw_finish.get("reason") == "length":
+            # M1: zero-output length truncation — surface finish="length" so the
+            # caller retries; do not map to outcome_unknown. length != unknown.
+            return {
+                "text": "",
+                "provider": "openrouter",
+                "model": expected_model_id,
+                "variant": resolved["variant"],
+                "session_id": session_id,
+                "tokens": raw_finish.get("tokens", {}),
+                "cost": raw_finish.get("cost", 0),
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "finish": "length",
+            }
         raise ProviderOutcomeUnknown(session_id, "Accepted call produced no observable text")
     if receipt is not None:
         info = receipt["info"]
