@@ -3363,6 +3363,8 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     _chorus_default = _chorus_models_from_config(config)
     _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
     should_chorus = (not no_chorus) and _chorus_enabled(config)
+    last_failure = _last_validation_failure(plan, f"DESIGN-{book_id}")
+    repair_context = {"repair": {"validation_error": str(last_failure.get("failure"))}} if last_failure else {}
     envelope = build_envelope(
         root,
         role="designer",
@@ -3371,6 +3373,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             "book": book,
             "brief": brief,
             "worldbuilding": worldbuilding,
+            **repair_context,
             **({"chorus_report": _latest_chorus_report(root, f"book-{book_id}")} if with_chorus_context and _latest_chorus_report(root, f"book-{book_id}") else {}),
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
