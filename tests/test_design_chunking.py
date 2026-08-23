@@ -85,5 +85,45 @@ class DesignChunkingTests(unittest.TestCase):
         self.assertIn("15KB", prompt)
         self.assertIn("chunk", prompt.lower())
 
+    def test_parse_chunked_contract_merges_multiple_objects(self):
+        # Designer emits 7 per-category objects; merge must combine them.
+        text = "\n".join([
+            json.dumps({"kernel": [{"id": "LAW-0001", "summary": "a"}]}),
+            json.dumps({"eras": [{"id": "ERA-0001", "summary": "b"}]}),
+            json.dumps({"places": [{"id": "PLC-0001", "summary": "c"}]}),
+            json.dumps({"characters": [{"id": "CHR-0001", "summary": "d"}]}),
+            json.dumps({"characters": [{"id": "CHR-0002", "summary": "e"}]}),
+            json.dumps({"themes": ["t"], "style": {"tense": "past"}}),
+            json.dumps({"continuity_material": {"CNT-0001": ["CHR-0001"]}}),
+        ])
+        merged = bf._parse_chunked_contract(text)
+        self.assertEqual(len(merged["kernel"]), 1)
+        self.assertEqual(len(merged["eras"]), 1)
+        self.assertEqual(len(merged["characters"]), 2)  # concatenated sub-chunks
+        self.assertEqual(merged["characters"][1]["id"], "CHR-0002")
+        self.assertEqual(merged["style"], {"tense": "past"})
+        self.assertEqual(merged["continuity_material"], {"CNT-0001": ["CHR-0001"]})
+
+    def test_parse_chunked_contract_single_object_ok(self):
+        text = json.dumps({"kernel": [{"id": "LAW-0001", "summary": "a"}]})
+        merged = bf._parse_chunked_contract(text)
+        self.assertEqual(len(merged["kernel"]), 1)
+
+    def test_parse_chunked_contract_rejects_huge_chunk(self):
+        huge = json.dumps({"kernel": [{"id": "LAW-0001", "summary": "x" * 20000}]})
+        with self.assertRaises(bf.BookForgeError):
+            bf._parse_chunked_contract(huge)
+
+    def test_parse_chunked_contract_no_json(self):
+        with self.assertRaises(bf.BookForgeError):
+            bf._parse_chunked_contract("no json here")
+
+    def test_designer_capsule_m4_tiers(self):
+        # The universe designer capsule must carry the M4 tier contract.
+        src = pathlib.Path(bf.__file__).read_text()
+        self.assertIn('tiered cast (M4)', src)
+        self.assertIn('total named characters >= 22', src)
+        self.assertIn('tier', src)
+
 if __name__ == "__main__":
     unittest.main()

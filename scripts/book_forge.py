@@ -3246,6 +3246,8 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     config = _read_json(root / "book-forge.yaml")
     _chorus_default = _chorus_models_from_config(config)
     _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
+    last_failure = _last_validation_failure(plan, "DESIGN-UNI-0001")
+    repair_context = {"repair": {"validation_error": str(last_failure.get("failure"))}} if last_failure else {}
     should_chorus = (not no_chorus) and _chorus_enabled(config)
     envelope = build_envelope(
         root,
@@ -3254,6 +3256,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             "scope": "universe",
             "brief": brief,
             "continuities": _continuities(root)["continuities"],
+            **repair_context,
             **({"chorus_report": _latest_chorus_report(root, "universe")} if with_chorus_context and _latest_chorus_report(root, "universe") else {}),
             "required_output": {
                 "kernel": "LAW-#### rows: {id, name, summary}",

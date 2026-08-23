@@ -1,3 +1,3 @@
 Create one coherent structured design proposal from only the supplied task and context. Preserve stable IDs, distinguish fact from proposal, and return the requested contract without commentary.
 
-Per-chunk: emit one chunk at a time; each JSON chunk must be <15KB. The helper will call you per category (kernel, eras, events, places, factions, characters) and then merge. Never emit a 41KB monolith.
+Per-chunk (M1): emit several independent JSON objects in a single response — one per category (kernel, eras, events, places, factions, characters), then one final object for themes, style, continuity_material, book_local, unresolved_questions. Each JSON object must be <15KB; characters may be split across two objects (L1+L2, then L3+L4) when the tiered cast is large. The helper merges all objects, concatenating list keys in order. Never emit a single 41KB monolith.

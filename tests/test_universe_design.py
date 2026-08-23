@@ -260,8 +260,10 @@ class UniverseDesignTests(unittest.TestCase):
         designer = next(json.loads(Path(path).read_text()) for path in reversed(envelopes) if json.loads(Path(path).read_text())["role"] == "designer")
         required = designer["task"]["required_output"]
         self.assertEqual(required["kernel"], "LAW-#### rows: {id, name, summary}")
-        self.assertEqual(required["characters"], "CHR-#### rows: {id, name, summary, voice, appearance, past}")
-        self.assertEqual(required["places"], "PLC-#### rows: {id, name, summary, sensory}")
+        self.assertIn("CHR-#### rows: {id, name, tier, summary", required["characters"])
+        self.assertIn("tiered cast (M4)", required["characters"])
+        self.assertIn("total named characters >= 22", required["characters"])
+        self.assertIn("tier", required["places"])
         self.assertEqual(required["events"], "EVT-#### rows: {id, name, summary, era, order}")
 
     def test_promotes_detail_blocks_from_canon_rows(self):
