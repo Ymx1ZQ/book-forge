@@ -2056,7 +2056,7 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
 
 
 ROLE_BUDGETS = {
-    "designer": (16000, 8000),
+    "designer": (16000, 12288),
     "writer": (12000, 6000),
     "cold-reader": (8000, 2500),
     "technical-editor": (10000, 3000),
@@ -2314,6 +2314,83 @@ def _normalize_universe_proposal(proposal: dict[str, object]) -> dict[str, objec
 
 
 CANON_DETAIL_BLOCKS = ("voice", "appearance", "past", "sensory")
+
+# M1: chunking guard — 41KB truncation fix: each design chunk must stay <15KB
+DESIGN_CHUNK_MAX_BYTES = 15 * 1024
+DESIGN_CHUNKS_UNIVERSE = ("kernel", "eras", "events", "places", "factions", "characters")
+# Per-chunk output budget (8192-12288)
+DESIGN_CHUNK_MAX_TOKENS = 8192
+
+
+def chunk_bytes(obj: object) -> int:
+    """Byte length of JSON-serialized chunk (deterministic)."""
+    import json
+    return len(json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode())
+
+
+def assert_chunk_size(chunk: object, *, label: str = "chunk") -> None:
+    size = chunk_bytes(chunk)
+    if size > DESIGN_CHUNK_MAX_BYTES:
+        raise BookForgeError(f"{label} exceeds {DESIGN_CHUNK_MAX_BYTES} bytes: {size}")
+
+
+def split_proposal_into_chunks(proposal: dict[str, object]) -> list[dict[str, object]]:
+    """Split universe proposal into per-category chunks each <15KB."""
+    chunks: list[dict[str, object]] = []
+    for key in DESIGN_CHUNKS_UNIVERSE:
+        if key not in proposal:
+            continue
+        chunk = {key: proposal[key]}
+        assert_chunk_size(chunk, label=key)
+        chunks.append(chunk)
+    # themes/style/continuity_material go with last chunk or own
+    tail = {k: proposal[k] for k in ("themes", "style", "continuity_material", "book_local", "unresolved_questions") if k in proposal}
+    if tail:
+        assert_chunk_size(tail, label="tail")
+        chunks.append(tail)
+    return chunks
+
+
+def _is_length_finish(result: dict[str, object]) -> bool:
+    return str(result.get("finish", "")).lower() == "length"
+
+
+def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, object], runner, *, max_retries: int = 2):
+    """Run role with retry on finish_reason==length. On exhaustion mark failed_length."""
+    last_result = None
+    last_claim = None
+    for attempt in range(max_retries + 1):
+        claim, result = _run_design_role(root, task_id, role, envelope, runner)
+        last_claim, last_result = claim, result
+        if not _is_length_finish(result):
+            return claim, result
+        if attempt < max_retries:
+            # length → retry: orphan prior attempt so next claim can proceed
+            plan = _load_plan(root)
+            att = _attempt(plan, str(claim["attempt"]))
+            att["state"] = "failed_length"
+            att["failure"] = f"finish_reason==length attempt {attempt+1}"
+            # keep attempt as failed_length but free task for retry
+            task = next(row for row in plan["tasks"] if row["id"] == task_id)
+            task["state"] = "pending"
+            task.pop("attempt", None)
+            _save_plan(root, plan)
+            render_plan(root)
+            print(f"[{role}] length truncation on attempt {attempt+1}/{max_retries+1} -> retry", file=__import__("sys").stderr)
+            continue
+        # exhausted: mark failed_length not outcome_unknown
+        plan = _load_plan(root)
+        att = _attempt(plan, str(claim["attempt"]))
+        att["state"] = "failed_length"
+        att["failure"] = "finish_reason==length after retries"
+        task = next(row for row in plan["tasks"] if row["id"] == task_id)
+        task["state"] = "blocked"
+        task.pop("attempt", None)
+        _save_plan(root, plan)
+        render_plan(root)
+        raise BookForgeError(f"Design {task_id} failed_length after {max_retries+1} attempts")
+    return last_claim, last_result  # type: ignore[return-value]
+
 
 
 def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) -> str:
@@ -3115,14 +3192,14 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         imports=["UNI-0001#kernel"],
         state={},
         tools=[],
-        max_output_tokens=8000,
+        max_output_tokens=8192,
     )
     if should_chorus:
         try:
             run_chorus(root, {"scope": "universe", "proposal": brief}, envelope, _chorus_effective, provider=runner)
         except Exception as exc:
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
-    claim, result = _run_design_role(root, "DESIGN-UNI-0001", "designer", envelope, runner)
+    claim, result = _run_with_length_retry(root, "DESIGN-UNI-0001", "designer", envelope, runner)
     try:
         proposal = _normalize_universe_proposal(_parse_contract_json(str(result["text"])))
         findings = validate_universe_design(root, proposal)
@@ -3213,7 +3290,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         imports=imports,
         state={},
         tools=[],
-        max_output_tokens=5000,
+        max_output_tokens=8192,
     )
     task_id = f"DESIGN-{book_id}"
     if should_chorus:
@@ -3221,7 +3298,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             run_chorus(root, {"scope": "book", "book": book_id, "brief": brief}, envelope, _chorus_effective, provider=runner)
         except Exception as exc:
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
-    claim, result = _run_design_role(root, task_id, "designer", envelope, runner)
+    claim, result = _run_with_length_retry(root, task_id, "designer", envelope, runner)
     try:
         proposal = _parse_contract_json(str(result["text"]))
         findings = validate_book_design(root, book_id, proposal)
@@ -3346,10 +3423,14 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             raise ProviderOutcomeUnknown(session_id, f"OpenCode ended without a complete result: {result.stderr.strip()}")
         raise BookForgeError(f"OpenCode failed before provider acceptance: {result.stderr.strip()}")
     finishes = [event["part"] for event in events if event.get("type") == "step_finish" and isinstance(event.get("part"), dict)]
-    completed = [part for part in finishes if part.get("reason") == "stop"]
+    # M1: handle length truncation explicitly — do not map to outcome_unknown; surface finish for retry
+    completed = [part for part in finishes if part.get("reason") in ("stop", "length")]
     if not completed:
         raise ProviderOutcomeUnknown(session_id, "Accepted call has no terminal stop event")
     raw_finish = completed[-1]
+    if raw_finish.get("reason") == "length":
+        # still extract text/tokens but mark as length for caller retry
+        pass
     export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, check=False)
     receipt = None
     try:

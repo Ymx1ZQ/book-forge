@@ -73,8 +73,6 @@ book-forge translate <add|next|run|status> <book> <locale>
 book-forge export <book> --lang <tag> --format <epub|pdf|all>
 ```
 
-Make `run` compose task-specific roles rather than duplicate their instructions.
-
 ## Operational invariants
 
 - Let subagents consume task capsules derived from the shared plan; never let them edit it.

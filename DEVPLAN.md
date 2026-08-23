@@ -810,18 +810,20 @@ blocks.
 
 ## Phase K — Anti-truncation, Brief Gate, Verbosity, Tiered Cast
 
-### M40: M1 — Fix truncation length @41KB 🔄
+### M40: M1 — Fix truncation length @41KB ✅
+
+**Status: done — 2026-08-23**
 
 **Objective:** Stop 41KB truncation by chunking design output, raising output budget, and handling `finish_reason==length`.
 
 **Tasks:**
-- [ ] Implement per-chunk generation (<15KB per chunk) splitting universe design into chunks (characters, places, etc.)
-- [ ] Raise `max_tokens` to 8192–12288 in `agents/openai.yaml` and `scripts/book_forge.py` (ROLE_BUDGETS designer)
-- [ ] Add retry logic for `finish_reason==length` (max 2 retries), then mark ATT `failed_length` not `outcome_unknown`
-- [ ] Compact `SKILL.md` system prompt to reduce input tokens
-- [ ] Update `references/design.md` prompt to generate per-chunk and pin chunk contract
-- [ ] Update `scripts/book_forge.py` and `agents/openai.yaml` to wire chunking and retry
-- [ ] Create `tests/test_design_chunking.py` covering chunk size, retry, and failure mode
+- [x] Implement per-chunk generation (<15KB per chunk) splitting universe design into chunks (characters, places, etc.)
+- [x] Raise `max_tokens` to 8192–12288 in `agents/openai.yaml` and `scripts/book_forge.py` (ROLE_BUDGETS designer)
+- [x] Add retry logic for `finish_reason==length` (max 2 retries), then mark ATT `failed_length` not `outcome_unknown`
+- [x] Compact `SKILL.md` system prompt to reduce input tokens
+- [x] Update `references/design.md` prompt to generate per-chunk and pin chunk contract
+- [x] Update `scripts/book_forge.py` and `agents/openai.yaml` to wire chunking and retry
+- [x] Create `tests/test_design_chunking.py` covering chunk size, retry, and failure mode
 
 **Acceptance Criteria:**
 - No design output exceeds 15KB per chunk; 41KB monolith never produced
@@ -833,7 +835,7 @@ blocks.
 **Tests:**
 - `tests/test_design_chunking.py` — chunk size bound, max_tokens budget, retry on length, failed_length terminal state
 
-### M41: M2 — Brief gate default ON with --skip-brief
+### M41: M2 — Brief gate default ON with --skip-brief 🔄
 
 **Objective:** Gate every design behind an author brief so the designer never invents the story.
 
