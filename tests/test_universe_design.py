@@ -321,6 +321,25 @@ class UniverseDesignTests(unittest.TestCase):
         self.assertEqual(result["calls"], 0)
         self.assertEqual(again.calls, [])
 
+    def test_retry_capsule_carries_validation_failure_as_repair(self):
+        # A validation-blocked attempt must feed the failure back into the
+        # designer's retry capsule so the model can tighten word counts/tiers.
+        bad = clean_proposal()
+        bad["kernel"] = [{"id": "LAW-0001"}]  # no summary -> canon-row.content-missing blocking
+        provider = DesignProvider(bad)
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_universe_design(self.project, provider=provider)
+        self.bf.resume_run(self.project, blocked_resolutions={"DESIGN-UNI-0001": "retry"})
+        retry = DesignProvider(clean_proposal())
+        self.bf.execute_universe_design(self.project, provider=retry)
+        import glob
+        envelopes = sorted(glob.glob(str(self.project / ".book-forge/runs/*/attempts/ATT-*/envelope.json")))
+        designer = next(json.loads(Path(path).read_text()) for path in reversed(envelopes) if json.loads(Path(path).read_text())["role"] == "designer")
+        repair = designer["task"].get("repair")
+        self.assertIsNotNone(repair, "retry envelope must carry repair context")
+        self.assertIn("validation_error", repair)
+        self.assertIn("kernel", str(repair["validation_error"]))
+
 
 if __name__ == "__main__":
     unittest.main()

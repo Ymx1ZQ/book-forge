@@ -87,7 +87,7 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(estimate_for("designer"), 48000)
         self.assertEqual(estimate_for("advisor-grok-4-6"), 48000)
         self.assertEqual(self.bf._envelope_input_budget(self.project, "writer"), 12000)
-        self.assertEqual(self.bf._envelope_input_budget(self.project, "canon-auditor"), 16000)
+        self.assertEqual(self.bf._envelope_input_budget(self.project, "canon-auditor"), 32000)
         self.assertEqual(self.bf._envelope_input_budget(self.project, "designer"), 48000)
 
     def test_design_budget_override_fails_closed_on_malformed_value(self):

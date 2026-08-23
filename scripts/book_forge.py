@@ -1770,8 +1770,15 @@ def _last_validation_failure(plan: dict[str, object], task_id: str) -> dict[str,
     rows = [row for row in plan["attempts"] if row.get("task") == task_id]
     if not rows:
         return None
-    last = rows[-1]
-    return last if last.get("state") == "validation_failed" else None
+    # Most recent first: an active validation failure, or an orphaned retry
+    # that still carries the recorded failure (the capsule reuses it as
+    # repair context once the task is pending again).
+    for row in reversed(rows):
+        if row.get("state") == "validation_failed":
+            return row
+        if row.get("state") == "orphaned" and row.get("resolution") == "retry" and row.get("failure"):
+            return row
+    return None
 
 
 def resume_run(
