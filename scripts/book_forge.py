@@ -193,7 +193,7 @@ class ContextOverflowError(BookForgeError):
         self.budget = budget
         self.contributors = contributors
         summary = ", ".join(f"{row['name']}={row['estimated_tokens']}" for row in contributors[:5])
-        super().__init__(f"Context estimate {estimated} exceeds budget {budget}; contributors: {summary}")
+        super().__init__(f"Context estimate {estimated} exceeds budget {budget} (estimated_input {estimated} > budget {budget}); contributors: {summary}")
 
 
 class ProviderOutcomeUnknown(BookForgeError):
@@ -515,6 +515,7 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "source_language": source_language,
         "model": MODEL,
         "context": {"writer_max_input_tokens": 12000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
+        "audit": {"input_budget": 32000},
         "chorus": {"enabled": True, "models": list(CHORUS_DEFAULT_MODELS), "synthesizer": CHORUS_SYNTHESIZER},
     }
     _write_json(stage / "book-forge.yaml", config)
@@ -2106,7 +2107,7 @@ ROLE_BUDGETS = {
     "cold-reader": (8000, 2500),
     "technical-editor": (10000, 3000),
     "reviser": (14000, 6000),
-    "canon-auditor": (16000, 3500),
+    "canon-auditor": (32000, 3500),
     "translator": (14000, 6000),
     "judge": (10000, 2000),
 }
@@ -2121,8 +2122,9 @@ def _envelope_input_budget(root: Path, role: str) -> int:
 
     `book-forge.yaml` may raise the design envelope ceiling under
     `context.design_max_input_tokens` (applies to the designer and to chorus
-    advisors, which share the same context contract). Defaults to the fixed
-    role budget. Fail closed on a malformed override value."""
+    advisors, which share the same context contract) and the audit envelope
+    ceiling under `audit.input_budget` (applies to the canon-auditor). Defaults
+    to the fixed role budget. Fail closed on a malformed override value."""
     default_input, _ = ROLE_BUDGETS[role]
     config_path = root / "book-forge.yaml"
     if config_path.is_file():
@@ -2135,6 +2137,14 @@ def _envelope_input_budget(root: Path, role: str) -> int:
                     return int(knob)
                 except (TypeError, ValueError):
                     raise BookForgeError(f"context.design_max_input_tokens must be an integer, got {knob!r}")
+        audit_cfg = config.get("audit")
+        if isinstance(audit_cfg, dict) and role == "canon-auditor":
+            knob = audit_cfg.get("input_budget")
+            if knob is not None:
+                try:
+                    return int(knob)
+                except (TypeError, ValueError):
+                    raise BookForgeError(f"audit.input_budget must be an integer, got {knob!r}")
     return default_input
 
 
@@ -2365,7 +2375,7 @@ def _normalize_universe_proposal(proposal: dict[str, object]) -> dict[str, objec
     return proposal
 
 
-CANON_DETAIL_BLOCKS = ("voice", "appearance", "past", "sensory")
+CANON_DETAIL_BLOCKS = ("voice", "appearance", "past", "sensory", "want", "need", "flaw", "wound", "arc", "secret")
 
 # M1: chunking guard — 41KB truncation fix: each design chunk must stay <15KB
 DESIGN_CHUNK_MAX_BYTES = 15 * 1024
@@ -3249,9 +3259,9 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
                 "kernel": "LAW-#### rows: {id, name, summary}",
                 "eras": "ERA-#### rows: {id, name, summary}",
                 "events": "EVT-#### rows: {id, name, summary, era, order}",
-                "places": "PLC-#### rows: {id, name, summary, sensory}",
+                "places": "PLC-#### rows: {id, name, summary, sensory, tier} — tiered: L1 3-5, L2 5-8, L3 6-12, total >= 14 places",
                 "factions": "FAC-#### rows: {id, name, summary}",
-                "characters": "CHR-#### rows: {id, name, summary, voice, appearance, past}",
+                "characters": "CHR-#### rows: {id, name, tier, summary, voice, appearance, past, want, need, flaw, wound, arc, secret} — tiered cast (M4): L1 1-3 protagonists 250-350 words each with want/need/flaw/wound/arc/voice/secret, L2 4-7 secondaries 150-200 words, L3 6-12 recurring 60-90 words, L4 10-20 walk-ons one line (<20 words), total named characters >= 22; emit characters in at most two sub-chunks (L1+L2, then L3+L4) if needed to stay <15KB each",
                 "themes": ["theme"],
                 "style": {"tense": "past", "person": "third-limited"},
                 "continuity_material": {"CNT-0001": ["stable IDs"]},
@@ -3285,7 +3295,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         _log_step(4, 7, "designer call", "✓")
     _log_step(5, 7, "validate", "→")
     try:
-        proposal = _normalize_universe_proposal(_parse_contract_json(str(result["text"])))
+        proposal = _normalize_universe_proposal(_parse_chunked_contract(str(result["text"])))
         findings = validate_universe_design(root, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             _log_step(5, 7, "validate", "✗")
@@ -3408,7 +3418,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         _log_step(4, 7, "designer call", "✓")
     _log_step(5, 7, "validate", "→")
     try:
-        proposal = _parse_contract_json(str(result["text"]))
+        proposal = _parse_chunked_contract(str(result["text"]))
         findings = validate_book_design(root, book_id, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             _log_step(5, 7, "validate", "✗")
@@ -3453,6 +3463,58 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise BookForgeError("Model output contract must be an object")
     return value
+
+
+def _parse_chunked_contract(text_value: str) -> dict[str, object]:
+    """Parse a designer response that may contain multiple top-level JSON
+    objects — one per category (M1 per-chunk generation) — and merge them
+    into a single proposal.
+
+    Each top-level object is treated as a chunk and must stay below
+    DESIGN_CHUNK_MAX_BYTES (M1). List keys are concatenated in order (e.g.
+    characters emitted in two sub-chunks L1+L2 / L3+L4), dict keys are
+    shallow-updated, and scalar keys take the last non-conflicting value.
+    A single monolithic object is also accepted but is still size-checked.
+    """
+    stripped = text_value.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1])
+            if stripped.lstrip().startswith("json\n"):
+                stripped = stripped.lstrip()[5:]
+    start = stripped.find("{")
+    if start < 0:
+        raise BookForgeError("Model output contains no JSON object")
+    decoder = json.JSONDecoder()
+    merged: dict[str, object] = {}
+    pos = start
+    found = 0
+    length = len(stripped)
+    while pos < length:
+        while pos < length and stripped[pos] in " \t\r\n,;":
+            pos += 1
+        if pos >= length or stripped[pos] != "{":
+            break
+        try:
+            value, end = decoder.raw_decode(stripped, pos)
+        except json.JSONDecodeError as exc:
+            raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
+        if not isinstance(value, dict):
+            raise BookForgeError("Model output contract must be an object")
+        found += 1
+        chunk_size = len(json.dumps(value, ensure_ascii=False))
+        if chunk_size > DESIGN_CHUNK_MAX_BYTES:
+            raise BookForgeError(f"Design chunk exceeds {DESIGN_CHUNK_MAX_BYTES} bytes: {chunk_size}")
+        for key, chunk_value in value.items():
+            if key in merged and isinstance(merged[key], list) and isinstance(chunk_value, list):
+                merged[key] = merged[key] + chunk_value
+            else:
+                merged[key] = chunk_value
+        pos = end
+    if found == 0:
+        raise BookForgeError("Model output contains no JSON object")
+    return merged
 
 
 def validate_writer_output(contract: dict[str, object], text_value: str) -> dict[str, object]:

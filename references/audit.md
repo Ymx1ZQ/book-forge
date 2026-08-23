@@ -15,3 +15,15 @@ all-pairs manuscript comparison.
   repair tasks but never rewrites prose automatically.
 
 Report blocking and warning findings first, then notes and scheduled repairs.
+
+### Input budget
+
+The canon-auditor envelope is bounded by `audit.input_budget` in `book-forge.yaml` (default `32000`). The helper enforces this as a hard-fail: when the estimated input exceeds the budget it raises `ContextOverflowError` with message `estimated_input X > budget Y` (e.g. `estimated_input 19800 > budget 16000` or `estimated_input 33000 > budget 32000`). Raise the knob or reduce context and retry. Example:
+
+```yaml
+audit:
+  input_budget: 32000
+```
+
+Validation is strict: a non-integer `audit.input_budget` fails closed with `audit.input_budget must be an integer`. `max_output_tokens` budgets are unchanged by this knob.
+

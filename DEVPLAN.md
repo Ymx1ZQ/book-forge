@@ -899,21 +899,21 @@ blocks.
 **Tests:**
 - `tests/test_validate_tiers.py` — tier counts, word ranges, scaled totals, connectivity, sub-chunk split
 
-## Milestone 5 — Audit input budget 32k configurable (canon-auditor) 🔄
+## Milestone 5 — Audit input budget 32k configurable (canon-auditor) ✅ Done
 
-**Status:** 🔄 In Progress
+**Status:** ✅ Done
 
 **Problem:** AUDIT-BOOK-0001 hard-fail: capsule 19.8k (10.3k proposal + 9.5k canon) > 16k fixed budget.
 
 **Solution:** Raise default audit input budget from 16k to 32k and make it configurable via book-forge.yaml (`audit.input_budget`, default 32000). Keep hard-fail with explicit error `estimated_input > budget`. No change to imports (full canon visible).
 
 **Tasks:**
-- [ ] Add knob `audit.input_budget` to book-forge.yaml with default 32000 and validation
-- [ ] Update canon-auditor budget check in scripts/book_forge.py (or where budget enforced) to read knob, default 32k, hard-fail with clear message
-- [ ] Update references/audit.md to document knob and error
-- [ ] Update agents/openai.yaml if needed for audit role budget
-- [ ] Test: capsule 19.8k passes, 33k fails with hard-fail, knob override works
-- [ ] install.sh --force and re-run `design book` audit only
+- [x] Add knob `audit.input_budget` to book-forge.yaml with default 32000 and validation
+- [x] Update canon-auditor budget check in scripts/book_forge.py (or where budget enforced) to read knob, default 32k, hard-fail with clear message
+- [x] Update references/audit.md to document knob and error
+- [x] Update agents/openai.yaml if needed for audit role budget
+- [x] Test: capsule 19.8k passes, 33k fails with hard-fail, knob override works
+- [x] install.sh --force and re-run `design book` audit only
 
 **Acceptance:**
 - AUDIT-BOOK-0001 passes with 19.8k capsule, hard-fail still triggers when estimated > 32k, knob override verified.
