@@ -300,7 +300,7 @@ intact.
 - [x] Deduplica + ranking + patch proposte con evidence hash binding
 - [x] `status` chorus state
 - [x] Test: synthesis deduplica, ranking corretto, apply non auto-scrive canon (mock)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** `chorus synthesize` produce `chorus-synthesis.json` con patch rankate e hash binding; `apply`/`status` coerenti; suite green.
 
@@ -374,6 +374,28 @@ intact.
 - [ ] Commit & push
 
 **Done when:** Nessun file in book-forge menziona Graphify; cold-reader gira con sola sintesi pregressa e suite green.
+
+
+### M38: Persisti la sintesi pregressa a ogni capitolo ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M37
+
+**Why:** La `previous_synthetic` per il cold-reader è oggi costruita al volo leggendo `reader-state.md` + ultime 2 boundary e messa solo in `task_capsule`. Se non è scritta come artifact, si perde tra i run, non è versionata, non è auditabile e non è riusabile da `design --with-chorus-context` o da un `coldread` standalone.
+
+**Approach:**
+- Dopo ogni `reviser` (chiusura capitolo), genera un file persistito `books/<book>/reviews/<chapter>/previous-synthetic.md` (o `coldread-state/<book>-<chapter>.md`) con sinossi compatta 2-3 frasi per capitolo (derivata da `reader-state.md` + `boundary`), registralo come artifact con hash e dipendenze, e usalo come sorgente per il prossimo `cold-reader` invece di ricostruirlo al volo.
+- Il `cold-reader` legge quell'artifact (se presente) + `reader-state.md`, non ricostruisce da `manuscript/chapters` a mano.
+- `status` mostra `coldread_state: current/stale`.
+
+**Tasks:**
+- [x] Generare e registrare `previous-synthetic.md` dopo ogni reviser
+- [x] Far leggere al cold-reader l'artifact persistito invece di ricostruirlo
+- [x] Test: dopo chiusura capitolo, artifact esiste e cold-reader lo usa (manuale, 89 passed)
+- [ ] Commit & push
+
+**Done when:** Dopo ogni capitolo chiuso esiste un artifact sintesi persistito, versionato e usato dal cold-reader successivo; suite green.
 
 
 ## Out of scope

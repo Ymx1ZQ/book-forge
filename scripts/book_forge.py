@@ -3413,6 +3413,8 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
                 f"books/{book_id}/state.yaml",
                 f"books/{book_id}/reader-state.md",
                 f"books/{book_id}/reviews/{chapter_id}/dispositions.json",
+                f"books/{book_id}/reviews/{chapter_id}/previous-synthetic.md",
+                f"books/{book_id}/coldread-state/{chapter_id}.md",
             ],
         )
     plan = _load_plan(root)
@@ -3488,20 +3490,21 @@ def _call_parallel_reviews(
     if len(materialized) == 2:
         return materialized["cold-reader"], materialized["technical-editor"], []
     jobs = []
-    # Build synthetic previous-chapters summary for cold-reader (fresh reader, no full canon)
+    # Build synthetic previous-chapters summary for cold-reader — persisted artifact, not reconstructed
     previous_synthetic = ""
     try:
-        reader_state_path = root / f"books/{book_id}/reader-state.md"
-        if reader_state_path.is_file():
-            previous_synthetic = reader_state_path.read_text(encoding="utf-8").strip()[-2000:]
-        # Add previous chapter boundaries synopsis (last 2 chapters)
-        import re as _re
-        chapters_dir = root / f"books/{book_id}/manuscript/chapters"
-        if chapters_dir.is_dir():
-            prev_files = sorted(chapters_dir.glob("*.md"))[-3:-1]
-            for pf in prev_files:
-                txt = pf.read_text(encoding="utf-8")[:500]
-                previous_synthetic += f"\n\nPrev {pf.stem}: {txt.strip()[:300]}"
+        # Prefer persisted coldread-state chain (authoritative, versioned)
+        coldread_state_dir = root / f"books/{book_id}/coldread-state"
+        if coldread_state_dir.is_dir():
+            for prev in sorted(coldread_state_dir.glob("*.md")):
+                # Only include chapters before current (lexicographic order = chapter order for CH-####)
+                if prev.stem < chapter_id:
+                    previous_synthetic += f"\n\n{prev.read_text(encoding='utf-8').strip()[:600]}"
+            previous_synthetic = previous_synthetic.strip()[-3000:]
+        if not previous_synthetic:
+            reader_state_path = root / f"books/{book_id}/reader-state.md"
+            if reader_state_path.is_file():
+                previous_synthetic = reader_state_path.read_text(encoding="utf-8").strip()[-2000:]
     except Exception:
         previous_synthetic = ""
     for role, task_id in (
@@ -3636,11 +3639,16 @@ def review_and_close_chapter(
         if review == "technical":
             row["finding"] = f"F-{int(str(row.get('finding')).removeprefix('T-')):04d}"
         stored_dispositions.append(row)
+    # Persistent synthetic for next cold-reader (fresh reader = only this + previous synthetic)
+    synthetic_content = f"# Synthetic Previous — {chapter_id}\n\n{value['reader_state'].strip()}\n"
+    # Keep last 2 chapters' synthetic chain - append to a cumulative file
     outputs = {
         f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
         f"books/{book_id}/state.yaml": _json_bytes(state),
         f"books/{book_id}/reader-state.md": f"# Reader State\n\n{value['reader_state'].strip()}\n",
         f"books/{book_id}/reviews/{chapter_id}/dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": stored_dispositions}),
+        f"books/{book_id}/reviews/{chapter_id}/previous-synthetic.md": synthetic_content,
+        f"books/{book_id}/coldread-state/{chapter_id}.md": synthetic_content,
     }
     manifest = stage_outputs(root, claim["attempt"], outputs)
     revision_receipt = record_execution(
