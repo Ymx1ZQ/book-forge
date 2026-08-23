@@ -13,3 +13,6 @@ Use this route only for `init`.
 Initialization is idempotent only for matching identity. Never create a
 translation, book count mode, graph, provider key, `CLAUDE.md`, or project shell
 pipeline during setup.
+## 00-BRIEF gate (default ON)
+
+After `init`, answer the 00-BRIEF 7 questions (see `references/brief.md`) before `design`. Default ON; bypass with `--skip-brief` or answer "usa default". The helper enforces the gate (`scripts/brief.py`).

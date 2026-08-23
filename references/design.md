@@ -55,4 +55,7 @@ and `split_proposal_into_chunks` groups kernel/eras/events/places/factions/chara
 plus tail (themes/style/continuity_material) into per-category chunks. `max_output_tokens`
 is 8192–12288 (see `ROLE_BUDGETS` designer 12288 and envelope 8192). On `finish_reason==length`
 the helper retries up to 2 times, then marks the attempt `failed_length` (not `outcome_unknown`).
+## Brief gate
+
+`design` is gated by 00-BRIEF (7 questions) — default ON. Provide `universe/design-brief.json` or `books/<book>/book-brief.json` with all 7 answers, or pass `--skip-brief` / "usa default" to bypass. See `references/brief.md`.
 

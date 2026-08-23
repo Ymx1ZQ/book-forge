@@ -20,6 +20,7 @@ reference before acting:
 | `init` | `references/init.md` |
 | `migrate`, `continuity`, `add-book`, `relate`, `collection` | `references/catalog.md` |
 | `design` | `references/design.md` |
+| `brief` | `references/brief.md` |
 | `run` | `references/run.md` |
 | `pause`, `resume`, `status` | `references/lifecycle.md` |
 | `audit` | `references/audit.md` |
@@ -63,7 +64,8 @@ book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>]
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
-book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--no-chorus] [--chorus-models <csv> [--with-chorus-context]]
+book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--skip-brief] [--no-chorus] [--chorus-models <csv> [--with-chorus-context]]
+book-forge brief <universe|book> [--book <id>] [--skip-brief]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]

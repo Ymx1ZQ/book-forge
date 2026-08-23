@@ -835,17 +835,19 @@ blocks.
 **Tests:**
 - `tests/test_design_chunking.py` — chunk size bound, max_tokens budget, retry on length, failed_length terminal state
 
-### M41: M2 — Brief gate default ON with --skip-brief 🔄
+### M41: M2 — Brief gate default ON with --skip-brief ✅
+
+**Status: done — 2026-08-23**
 
 **Objective:** Gate every design behind an author brief so the designer never invents the story.
 
 **Tasks:**
-- [ ] Create `references/brief.md` documenting the 00-BRIEF gate
-- [ ] Create `scripts/brief.py` implementing gate logic and validation
-- [ ] Add 00-BRIEF gate with 7 questions: length/format, genre/world, protagonists, premise/conflict/ending, themes, style/POV/register, constraints/audience
-- [ ] Default ON; bypass only via `--skip-brief` or answer "usa default"
-- [ ] Wire gate into `references/init.md` and `references/design.md`
-- [ ] Update `SKILL.md` route table to expose brief route and flags
+- [x] Create `references/brief.md` documenting the 00-BRIEF gate
+- [x] Create `scripts/brief.py` implementing gate logic and validation
+- [x] Add 00-BRIEF gate with 7 questions: length/format, genre/world, protagonists, premise/conflict/ending, themes, style/POV/register, constraints/audience
+- [x] Default ON; bypass only via `--skip-brief` or answer "usa default"
+- [x] Wire gate into `references/init.md` and `references/design.md`
+- [x] Update `SKILL.md` route table to expose brief route and flags
 
 **Acceptance Criteria:**
 - `design universe` and `design book` block without brief unless bypass flag/value present
@@ -856,7 +858,7 @@ blocks.
 **Tests:**
 - Unit — gate blocks without brief, passes with brief, bypass via flag and via "usa default", 7-question shape
 
-### M42: M3 — Verbosity step-by-step
+### M42: M3 — Verbosity step-by-step 🔄
 
 **Objective:** Make long design runs observable with deterministic step logging.
 

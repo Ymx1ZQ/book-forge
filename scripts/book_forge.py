@@ -16,6 +16,21 @@ import tempfile
 import time
 import unicodedata
 import uuid
+# M2: brief gate import — robust for both package and direct-file execution
+def _load_brief_gate():
+    try:
+        import importlib.util
+        from pathlib import Path as _P
+        bf_path = _P(__file__).parent / "brief.py"
+        if bf_path.is_file():
+            spec = importlib.util.spec_from_file_location("_bf_brief", bf_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.should_gate, mod.BRIEF_QUESTIONS
+    except Exception:
+        pass
+    return (lambda *a, **kw: False), []
+_should_brief_gate, BRIEF_QUESTIONS = _load_brief_gate()
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -3141,7 +3156,7 @@ def _sweep_orphaned_canon(root: Path, proposal: dict[str, object]) -> list[str]:
     return swept
 
 
-def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False) -> dict[str, object]:
+def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False, skip_brief: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_universe_design(root)
@@ -3162,6 +3177,9 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             "universe/design-audit.json",
         )
         return {**audit, "calls": 1}
+    # 00-BRIEF gate default ON (M2)
+    if _should_brief_gate(root, "universe", skip_flag=skip_brief):
+        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design universe — answer 7 questions or pass --skip-brief / usa default")
     brief = _read_json(root / "universe" / "design-brief.json")
     config = _read_json(root / "book-forge.yaml")
     _chorus_default = _chorus_models_from_config(config)
@@ -3222,7 +3240,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     return {**audit, "calls": 2}
 
 
-def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False) -> dict[str, object]:
+def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_book_design(root, book_id)
@@ -3243,6 +3261,8 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             f"books/{book_id}/design-audit.json",
         )
         return {**audit, "calls": 1}
+    if _should_brief_gate(root, "book", book_id=book_id, skip_flag=skip_brief):
+        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design book {book_id} — answer 7 questions or pass --skip-brief / usa default")
     book = next(row for row in list_books(root) if row["id"] == book_id)
     brief = _book_brief(root, book_id)
     obligations, relation_imports = _book_obligations(root, book_id)
@@ -5183,6 +5203,7 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this chorus run")
     design.add_argument("--with-chorus-context", action="store_true", help="Inject latest chorus report into designer capsule")
     design.add_argument("--refresh", action="store_true", help="Universe only: re-run the design cycle against the current brief (pre-book only)")
+    design.add_argument("--skip-brief", action="store_true", help="Bypass 00-BRIEF gate (or answer usa default)")
     run = commands.add_parser("run")
     run.add_argument("--book")
     run.add_argument("--task")
@@ -5266,13 +5287,13 @@ def main(argv: list[str] | None = None) -> int:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh), sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh, skip_brief=args.skip_brief), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
             if args.brief:
                 _write_book_brief(args.project, args.book, args.brief)
-            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context), sort_keys=True))
+            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, skip_brief=args.skip_brief), sort_keys=True))
         elif args.command == "chorus" and args.chorus_command == "run":
             # Standalone chorus without designer
             if args.no_chorus:
