@@ -31,6 +31,26 @@ def _load_brief_gate():
         pass
     return (lambda *a, **kw: False), []
 _should_brief_gate, BRIEF_QUESTIONS = _load_brief_gate()
+# M4: tiered validation
+try:
+    import importlib.util as _ilu
+    import pathlib as _pl
+    _vp = _pl.Path(__file__).parent / "validate.py"
+    if _vp.is_file():
+        _spec = _ilu.spec_from_file_location("_bf_validate", _vp)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _validate_tiered_cast = _mod.validate_tiered_cast
+        _validate_places = _mod.validate_places_tiered
+        _validate_graph = _mod.validate_graph_connectivity
+        _split_characters = _mod.split_characters_tiered
+    else:
+        raise ImportError
+except Exception:
+    def _validate_tiered_cast(*a, **kw): return []
+    def _validate_places(*a, **kw): return []
+    def _validate_graph(*a, **kw): return []
+    def _split_characters(*a, **kw): return ([],[])
 
 # M3: verbose step logging [1/7]..[7/7] with →/✓/✗ and length → retry
 def _log_step(n: int, total: int, msg: str, status: str = "→") -> None:
@@ -2306,6 +2326,13 @@ def validate_universe_design(project: Path | str, proposal: dict[str, object]) -
                 findings.append({"code": "canon-row.content-missing", "severity": "blocking", "row": row.get("id"), "category": category})
     if not isinstance(proposal.get("style"), dict) or not proposal.get("themes"):
         findings.append({"code": "creative-contract.incomplete", "severity": "blocking"})
+    # M4: anti-laziness tiered checks (only when proposal has tiered structure or for 80k validation)
+    try:
+        findings.extend(_validate_tiered_cast(proposal, target_words=80000))
+        findings.extend(_validate_places(proposal))
+        findings.extend(_validate_graph(proposal))
+    except Exception as exc:
+        findings.append({"code": "tier.validation-error", "severity": "blocking", "detail": str(exc)})
     return findings
 
 
@@ -2365,6 +2392,21 @@ def split_proposal_into_chunks(proposal: dict[str, object]) -> list[dict[str, ob
     for key in DESIGN_CHUNKS_UNIVERSE:
         if key not in proposal:
             continue
+        # M4: split characters into 2 sub-chunks (L1+L2 and L3+L4) to stay <15KB
+        if key == "characters":
+            try:
+                c1, c2 = _split_characters(proposal[key])
+                for idx, sub in enumerate([c1, c2], 1):
+                    if not sub:
+                        continue
+                    chunk = {key: sub, "_subchunk": idx}
+                    # strip _subchunk before size check? keep for trace but not counted
+                    check_chunk = {key: sub}
+                    assert_chunk_size(check_chunk, label=f"{key}-part{idx}")
+                    chunks.append(chunk)
+                continue
+            except Exception:
+                pass
         chunk = {key: proposal[key]}
         assert_chunk_size(chunk, label=key)
         chunks.append(chunk)

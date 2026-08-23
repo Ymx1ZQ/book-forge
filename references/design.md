@@ -59,3 +59,14 @@ the helper retries up to 2 times, then marks the attempt `failed_length` (not `o
 
 `design` is gated by 00-BRIEF (7 questions) — default ON. Provide `universe/design-brief.json` or `books/<book>/book-brief.json` with all 7 answers, or pass `--skip-brief` / "usa default" to bypass. See `references/brief.md`.
 
+## Anti-laziness tiered cast/places (M4)
+
+The designer must produce a dense, non-lazy canon:
+
+- **Characters tiered**: L1 1–3 protagonists 250–350w each (must include want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w, L3 6–12 ricorrenti 60–90w, L4 10–20 comparse 1 line (<20w). Total named characters >=22 for 80k (scaled linearly with `length_notes`), e.g. 40k→11, 120k→33.
+- **Places tiered**: L1 3–5, L2 5–8, L3 6–12, total >=14.
+- **Validation**: `scripts/validate.py` asserts each tier count and word range, checks total thresholds, and runs graph connectivity (every character/place must be reachable via `continuity_material` or textual reference; otherwise `graph.disconnected`).
+- **Chunking**: Characters are split into 2 sub-chunks (L1+L2 and L3+L4) each <15KB, validated by `split_proposal_into_chunks` and `split_characters_tiered`.
+
+Proposals failing any tier or graph check are blocked (`tier.*`, `graph.disconnected`).
+

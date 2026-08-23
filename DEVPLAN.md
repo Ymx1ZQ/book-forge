@@ -877,16 +877,18 @@ blocks.
 **Tests:**
 - Unit — log sequence [1/7]..[7/7], retry marker on length, summary contains artifact paths
 
-### M43: M4 — Anti-laziness tiered cast/locations 🔄
+### M43: M4 — Anti-laziness tiered cast/locations ✅
+
+**Status: done — 2026-08-23**
 
 **Objective:** Enforce rich tiered canon so the model cannot be lazy on cast and places.
 
 **Tasks:**
-- [ ] Implement tiered schema: L1 1–3 protagonists 250–350w (want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w, L3 6–12 ricorrenti 60–90w, L4 10–20 comparse 1 line, total_named >=22 for 80k scaled with length; places L1 3–5, L2 5–8, L3 6–12, total >=14
-- [ ] Update `references/design.md` prompt to enforce tier counts and word ranges
-- [ ] Create `scripts/validate.py` with asserts for each tier and graph connectivity check
-- [ ] Split characters into 2 sub-chunks (L1+L2 and L3+L4) to stay within per-chunk budget
-- [ ] Create `tests/test_validate_tiers.py` covering tier counts, word ranges, total thresholds, and connectivity
+- [x] Implement tiered schema: L1 1–3 protagonists 250–350w (want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w, L3 6–12 ricorrenti 60–90w, L4 10–20 comparse 1 line, total_named >=22 for 80k scaled with length; places L1 3–5, L2 5–8, L3 6–12, total >=14
+- [x] Update `references/design.md` prompt to enforce tier counts and word ranges
+- [x] Create `scripts/validate.py` with asserts for each tier and graph connectivity check
+- [x] Split characters into 2 sub-chunks (L1+L2 and L3+L4) to stay within per-chunk budget
+- [x] Create `tests/test_validate_tiers.py` covering tier counts, word ranges, total thresholds, and connectivity
 
 **Acceptance Criteria:**
 - Universe proposal with <22 named characters (at 80k) or <14 places fails validation
