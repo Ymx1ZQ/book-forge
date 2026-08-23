@@ -2056,7 +2056,7 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
 
 
 ROLE_BUDGETS = {
-    "designer": (16000, 5000),
+    "designer": (16000, 8000),
     "writer": (12000, 6000),
     "cold-reader": (8000, 2500),
     "technical-editor": (10000, 3000),
@@ -2275,9 +2275,45 @@ def validate_universe_design(project: Path | str, proposal: dict[str, object]) -
     material = proposal.get("continuity_material", {})
     if not isinstance(material, dict) or not set(material) <= continuity_ids:
         findings.append({"code": "continuity.unknown", "severity": "blocking"})
+    for category in ("kernel", "places", "factions", "characters"):
+        for row in proposal.get(category, []):
+            if not _row_summary(row):
+                findings.append({"code": "canon-row.content-missing", "severity": "blocking", "row": row.get("id"), "category": category})
     if not isinstance(proposal.get("style"), dict) or not proposal.get("themes"):
         findings.append({"code": "creative-contract.incomplete", "severity": "blocking"})
     return findings
+
+
+def _row_summary(row: dict[str, object]) -> str:
+    explicit = row.get("summary")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit
+    parts = [row.get(key) for key in ("fact", "description", "invariant", "statement", "law")]
+    return " ".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+
+
+def _normalize_universe_proposal(proposal: dict[str, object]) -> dict[str, object]:
+    for category in ("kernel", "eras", "events", "places", "factions", "characters"):
+        value = proposal.get(category)
+        if not isinstance(value, dict):
+            continue
+        rows = []
+        for key, row in value.items():
+            if isinstance(row, dict):
+                merged = dict(row)
+                merged["id"] = str(key)
+                if "name" not in merged and isinstance(merged.get("label"), str):
+                    merged["name"] = merged["label"]
+                rows.append(merged)
+            elif isinstance(row, str):
+                rows.append({"id": str(key), "summary": row})
+            else:
+                rows.append({"id": str(key)})
+        proposal[category] = rows
+    return proposal
+
+
+CANON_DETAIL_BLOCKS = ("voice", "appearance", "past", "sensory")
 
 
 def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) -> str:
@@ -2286,9 +2322,11 @@ def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) ->
         metadata += f"continuity: {continuity}\n"
     metadata += "---\n\n"
     name = row.get("name", row["id"])
-    body = f"# {name}\n\n<!-- bf:block summary -->\n{row.get('summary', '')}\n"
-    if row.get("voice"):
-        body += f"\n<!-- bf:block voice -->\n{row['voice']}\n"
+    body = f"# {name}\n\n<!-- bf:block summary -->\n{_row_summary(row)}\n"
+    for block in CANON_DETAIL_BLOCKS:
+        value = row.get(block)
+        if isinstance(value, str) and value.strip():
+            body += f"\n<!-- bf:block {block} -->\n{value.strip()}\n"
     return metadata + body
 
 
@@ -2980,11 +3018,59 @@ def _latest_chorus_report(project: Path | str, scope_id: str) -> dict[str, objec
         findings.extend(data.get("findings", []))
     return {"findings": findings, "patches": []} if findings else None
 
-def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False) -> dict[str, object]:
+def _reset_universe_design_tasks(root: Path) -> None:
+    """Receipted reset of the universe design cycle for an explicit refresh.
+
+    Orphans every prior attempt (resolution: refresh) and returns both tasks
+    to pending. Fail closed when any book exists: post-book canon changes
+    flow through artifact currentness and repair, never wholesale redesign.
+    """
+    if list_books(root):
+        raise BookForgeError("Universe redesign is refused once books exist; canon changes must flow through audit and repair")
+    plan = _load_plan(root)
+    for task_id in ("DESIGN-UNI-0001", "AUDIT-UNI-0001"):
+        task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
+        if task is None or task["state"] == "pending":
+            continue
+        attempt_id = task.get("attempt")
+        if attempt_id:
+            attempt = _attempt(plan, str(attempt_id))
+            if attempt["state"] not in {"orphaned"}:
+                attempt["state"] = "orphaned"
+                attempt["resolution"] = "refresh"
+        for attempt in plan["attempts"]:
+            if attempt["task"] == task_id and attempt["state"] in {"running", "succeeded", "validation_failed", "outcome_unknown", "blocked"}:
+                attempt["state"] = "orphaned"
+                attempt["resolution"] = "refresh"
+        task["state"] = "pending"
+        task.pop("attempt", None)
+        task["outputs"] = []
+    _save_plan(root, plan)
+    render_plan(root)
+
+
+def _sweep_orphaned_canon(root: Path, proposal: dict[str, object]) -> list[str]:
+    """Remove canon files whose IDs the refreshed proposal no longer declares."""
+    live_ids = {str(row["id"]) for category in ("kernel", "places", "factions", "characters") for row in proposal.get(category, [])}
+    swept: list[str] = []
+    for directory in ("topics", "places", "factions", "characters"):
+        folder = root / "universe" / "canon" / directory
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.glob("*.md")):
+            if path.stem not in live_ids:
+                path.unlink()
+                swept.append(str(path.relative_to(root)))
+    return swept
+
+
+def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_universe_design(root)
-    if all(task["state"] == "succeeded" for task in tasks):
+    if refresh:
+        _reset_universe_design_tasks(root)
+    elif all(task["state"] == "succeeded" for task in tasks):
         return {**_read_json(root / "universe" / "design-audit.json"), "calls": 0}
     plan = _load_plan(root)
     design_task = next(task for task in plan["tasks"] if task["id"] == "DESIGN-UNI-0001")
@@ -3013,12 +3099,12 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             "continuities": _continuities(root)["continuities"],
             **({"chorus_report": _latest_chorus_report(root, "universe")} if with_chorus_context and _latest_chorus_report(root, "universe") else {}),
             "required_output": {
-                "kernel": "LAW-#### rows",
-                "eras": "ERA-#### rows",
-                "events": "EVT-#### rows with era and order",
-                "places": "PLC-#### rows",
-                "factions": "FAC-#### rows",
-                "characters": "CHR-#### rows",
+                "kernel": "LAW-#### rows: {id, name, summary}",
+                "eras": "ERA-#### rows: {id, name, summary}",
+                "events": "EVT-#### rows: {id, name, summary, era, order}",
+                "places": "PLC-#### rows: {id, name, summary, sensory}",
+                "factions": "FAC-#### rows: {id, name, summary}",
+                "characters": "CHR-#### rows: {id, name, summary, voice, appearance, past}",
                 "themes": ["theme"],
                 "style": {"tense": "past", "person": "third-limited"},
                 "continuity_material": {"CNT-0001": ["stable IDs"]},
@@ -3029,7 +3115,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         imports=["UNI-0001#kernel"],
         state={},
         tools=[],
-        max_output_tokens=5000,
+        max_output_tokens=8000,
     )
     if should_chorus:
         try:
@@ -3038,7 +3124,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
     claim, result = _run_design_role(root, "DESIGN-UNI-0001", "designer", envelope, runner)
     try:
-        proposal = _parse_contract_json(str(result["text"]))
+        proposal = _normalize_universe_proposal(_parse_contract_json(str(result["text"])))
         findings = validate_universe_design(root, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             raise BookForgeError(f"Universe design has blocking findings: {json.dumps(findings, sort_keys=True)}")
@@ -3046,6 +3132,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
     _complete_model_task(root, "DESIGN-UNI-0001", claim, _universe_design_outputs(proposal), result, envelope)
+    _sweep_orphaned_canon(root, proposal)
     rebuild_indexes(root)
     audit = _design_audit_record(
         root,
@@ -5014,6 +5101,7 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
     design.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this chorus run")
     design.add_argument("--with-chorus-context", action="store_true", help="Inject latest chorus report into designer capsule")
+    design.add_argument("--refresh", action="store_true", help="Universe only: re-run the design cycle against the current brief (pre-book only)")
     run = commands.add_parser("run")
     run.add_argument("--book")
     run.add_argument("--task")
@@ -5097,7 +5185,7 @@ def main(argv: list[str] | None = None) -> int:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context), sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
