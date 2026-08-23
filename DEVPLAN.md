@@ -254,7 +254,7 @@ intact.
 - [x] Aggiornare `verify_runtime` / `sync_runtime` per convergenza catalogo
 - [x] Aggiornare `SKILL.md` contract + `DEVPLAN.md` binding decisions
 - [x] Test: unit — `opencode.json` espone 7 modelli, ogni `advisor-*` ha pin diverso, ruoli storici restano su flash, `runtime sync` converge
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** Un progetto nuovo espone 7 modelli in `opencode.json` e 7 `advisor-*` agents con pin diversi; `runtime sync` su Landfall porta lo stesso stato senza toccare canon/control-plane; suite green.
 
