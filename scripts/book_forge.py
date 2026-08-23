@@ -31,6 +31,16 @@ def _load_brief_gate():
         pass
     return (lambda *a, **kw: False), []
 _should_brief_gate, BRIEF_QUESTIONS = _load_brief_gate()
+
+# M3: verbose step logging [1/7]..[7/7] with →/✓/✗ and length → retry
+def _log_step(n: int, total: int, msg: str, status: str = "→") -> None:
+    import sys
+    print(f"[{n}/{total}] {msg} {status}", file=sys.stderr)
+
+def _log_summary(artifacts: list[str]) -> None:
+    import sys
+    print(f"Summary: artifacts {', '.join(sorted(artifacts))}", file=sys.stderr)
+
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -3179,7 +3189,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         return {**audit, "calls": 1}
     # 00-BRIEF gate default ON (M2)
     if _should_brief_gate(root, "universe", skip_flag=skip_brief):
-        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design universe — answer 7 questions or pass --skip-brief / usa default")
+        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design universe — answer 7 questions in universe/design-brief.json or pass --skip-brief / usa default")
     brief = _read_json(root / "universe" / "design-brief.json")
     config = _read_json(root / "book-forge.yaml")
     _chorus_default = _chorus_models_from_config(config)
@@ -3212,23 +3222,42 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         tools=[],
         max_output_tokens=8192,
     )
+    _log_step(1, 7, "brief gate", "→")
+    _log_step(1, 7, "brief gate", "✓")
+    _log_step(2, 7, "chorus", "→")
     if should_chorus:
         try:
             run_chorus(root, {"scope": "universe", "proposal": brief}, envelope, _chorus_effective, provider=runner)
+            _log_step(2, 7, "chorus", "✓")
         except Exception as exc:
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
+            _log_step(2, 7, "chorus", "✗")
+    else:
+        _log_step(2, 7, "chorus", "✓ (skipped)")
+    _log_step(3, 7, "designer envelope", "✓")
+    _log_step(4, 7, "designer call", "→")
     claim, result = _run_with_length_retry(root, "DESIGN-UNI-0001", "designer", envelope, runner)
+    if _is_length_finish(result):
+        _log_step(4, 7, "designer call", "✗ length → retry")
+    else:
+        _log_step(4, 7, "designer call", "✓")
+    _log_step(5, 7, "validate", "→")
     try:
         proposal = _normalize_universe_proposal(_parse_contract_json(str(result["text"])))
         findings = validate_universe_design(root, proposal)
         if any(row["severity"] == "blocking" for row in findings):
+            _log_step(5, 7, "validate", "✗")
             raise BookForgeError(f"Universe design has blocking findings: {json.dumps(findings, sort_keys=True)}")
+        _log_step(5, 7, "validate", "✓")
     except BookForgeError as exc:
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
+    _log_step(6, 7, "promote", "→")
     _complete_model_task(root, "DESIGN-UNI-0001", claim, _universe_design_outputs(proposal), result, envelope)
     _sweep_orphaned_canon(root, proposal)
     rebuild_indexes(root)
+    _log_step(6, 7, "promote", "✓")
+    _log_step(7, 7, "audit", "→")
     audit = _design_audit_record(
         root,
         "AUDIT-UNI-0001",
@@ -3237,6 +3266,10 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         runner,
         "universe/design-audit.json",
     )
+    _log_step(7, 7, "audit", "✓")
+    # M3 summary
+    arts = list(_universe_design_outputs(proposal).keys()) + ["universe/design-audit.json"]
+    _log_summary(arts)
     return {**audit, "calls": 2}
 
 
@@ -3262,7 +3295,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         )
         return {**audit, "calls": 1}
     if _should_brief_gate(root, "book", book_id=book_id, skip_flag=skip_brief):
-        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design book {book_id} — answer 7 questions or pass --skip-brief / usa default")
+        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design book {book_id} — answer 7 questions in books/{book_id}/book-brief.json or pass --skip-brief / usa default")
     book = next(row for row in list_books(root) if row["id"] == book_id)
     brief = _book_brief(root, book_id)
     obligations, relation_imports = _book_obligations(root, book_id)
@@ -3313,21 +3346,39 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         max_output_tokens=8192,
     )
     task_id = f"DESIGN-{book_id}"
+    _log_step(1, 7, "brief gate", "✓")
+    _log_step(2, 7, "chorus", "→")
     if should_chorus:
         try:
             run_chorus(root, {"scope": "book", "book": book_id, "brief": brief}, envelope, _chorus_effective, provider=runner)
+            _log_step(2, 7, "chorus", "✓")
         except Exception as exc:
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
+            _log_step(2, 7, "chorus", "✗")
+    else:
+        _log_step(2, 7, "chorus", "✓ (skipped)")
+    _log_step(3, 7, "designer envelope", "✓")
+    _log_step(4, 7, "designer call", "→")
     claim, result = _run_with_length_retry(root, task_id, "designer", envelope, runner)
+    if _is_length_finish(result):
+        _log_step(4, 7, "designer call", "✗ length → retry")
+    else:
+        _log_step(4, 7, "designer call", "✓")
+    _log_step(5, 7, "validate", "→")
     try:
         proposal = _parse_contract_json(str(result["text"]))
         findings = validate_book_design(root, book_id, proposal)
         if any(row["severity"] == "blocking" for row in findings):
+            _log_step(5, 7, "validate", "✗")
             raise BookForgeError(f"Book design has blocking findings: {json.dumps(findings, sort_keys=True)}")
+        _log_step(5, 7, "validate", "✓")
     except BookForgeError as exc:
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
+    _log_step(6, 7, "promote", "→")
     _complete_model_task(root, task_id, claim, _book_design_outputs(root, book_id, proposal), result, envelope)
+    _log_step(6, 7, "promote", "✓")
+    _log_step(7, 7, "audit", "→")
     audit = _design_audit_record(
         root,
         f"AUDIT-{book_id}",
@@ -3336,6 +3387,9 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         runner,
         f"books/{book_id}/design-audit.json",
     )
+    _log_step(7, 7, "audit", "✓")
+    arts = list(_book_design_outputs(root, book_id, proposal).keys()) + [f"books/{book_id}/design-audit.json"]
+    _log_summary(arts)
     return {**audit, "calls": 2}
 
 

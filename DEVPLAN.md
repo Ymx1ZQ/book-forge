@@ -858,14 +858,16 @@ blocks.
 **Tests:**
 - Unit — gate blocks without brief, passes with brief, bypass via flag and via "usa default", 7-question shape
 
-### M42: M3 — Verbosity step-by-step 🔄
+### M42: M3 — Verbosity step-by-step ✅
+
+**Status: done — 2026-08-23**
 
 **Objective:** Make long design runs observable with deterministic step logging.
 
 **Tasks:**
-- [ ] Add verbose logging in `scripts/book_forge.py` for design: [1/7]..[7/7] with →/✓/✗, length → retry
-- [ ] Update `assets/opencode/book-forge-orchestrator.md` to emit same step log
-- [ ] Emit final summary with artifact paths for every design run
+- [x] Add verbose logging in `scripts/book_forge.py` for design: [1/7]..[7/7] with →/✓/✗, length → retry
+- [x] Update `assets/opencode/book-forge-orchestrator.md` to emit same step log
+- [x] Emit final summary with artifact paths for every design run
 
 **Acceptance Criteria:**
 - Every design run prints [1/7]..[7/7] steps with →/✓/✗ markers
@@ -875,7 +877,7 @@ blocks.
 **Tests:**
 - Unit — log sequence [1/7]..[7/7], retry marker on length, summary contains artifact paths
 
-### M43: M4 — Anti-laziness tiered cast/locations
+### M43: M4 — Anti-laziness tiered cast/locations 🔄
 
 **Objective:** Enforce rich tiered canon so the model cannot be lazy on cast and places.
 
