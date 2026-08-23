@@ -51,6 +51,7 @@ CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/moonshotai/kimi-k3",
     "openrouter/x-ai/grok-4.6",
     "openrouter/google/gemini-3.7-flash",
+    "openrouter/openai/gpt-5.6-luna",
 ]
 # Per-model provider pin and reasoning ladder — taken from the global config.
 # Each entry mirrors provider.openrouter.models[<id>] in ~/.config/opencode/opencode.json.
@@ -89,6 +90,11 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high"},
+    },
+    "openrouter/openai/gpt-5.6-luna": {
+        "provider": {"order": ["openai"], "only": ["openai"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
     },
 }
 

@@ -398,6 +398,29 @@ intact.
 **Done when:** Dopo ogni capitolo chiuso esiste un artifact sintesi persistito, versionato e usato dal cold-reader successivo; suite green.
 
 
+
+### M39: Aggiungi Luna al default chorus e ai modelli globali ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M32
+
+**Why:** Luna (`openai/gpt-5.6-luna`) aggiunge diversità OpenAI con buon mix qualità/costo (46.9/71.4, 0.156/mtok) — provider assente nel default 7.
+
+**Approach:**
+- `CHORUS_DEFAULT_MODELS` 7 → 8 aggiungendo `openrouter/openai/gpt-5.6-luna` con `provider openai` e varianti `low/medium/high/max`
+- `~/.config/opencode/opencode.json` whitelist + `models[openai/gpt-5.6-luna]`
+- Prompt `advisor-openai-gpt-5-6-luna.md` (da `chorus-bestseller`)
+
+**Tasks:**
+- [x] Aggiungere Luna a `CHORUS_DEFAULT_MODELS` e `CHORUS_MODEL_CONFIGS`
+- [x] Aggiungere a global opencode whitelist/models
+- [x] Test: 8 modelli default, 8 advisor (89 passed)
+- [ ] Commit & push
+
+**Done when:** Default 8, global config con Luna, suite green.
+
+
 ## Out of scope
 
 - Guaranteed detection of undeclared facts that both writer disclosure and technical review miss.
