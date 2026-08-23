@@ -50,8 +50,11 @@ def is_brief_complete(path: Path) -> bool:
     # Legacy autonomous brief from init/schedule is considered complete for backward compat
     if isinstance(data, dict) and data.get("mode") == "autonomous":
         return True
-    # Legacy book brief (premise/characters/plot/tone) — pre-M2, considered complete
-    if isinstance(data, dict) and any(k in data for k in ("premise", "characters", "plot", "tone", "length_notes")):
+    # Legacy briefs — pre-M2, considered complete
+    if isinstance(data, dict) and any(k in data for k in ("premise", "characters", "plot", "tone", "length_notes", "kernel", "chronology", "places", "factions", "themes", "style")):
+        return True
+    answers_legacy = data.get("answers", {}) if isinstance(data, dict) else {}
+    if isinstance(answers_legacy, dict) and any(k in answers_legacy for k in ("premise", "characters", "plot", "tone", "kernel", "chronology", "places", "factions", "themes", "style")):
         return True
     answers = data.get("answers", data)
     if _is_bypass_value(answers) or _is_bypass_value(data):
@@ -77,7 +80,8 @@ def should_gate(project: Path, scope: str, book_id: str | None = None, skip_flag
             if _is_bypass_value(data) or _is_bypass_value(data.get("answers", {})):
                 return False
             # Legacy briefs are not gated (backward compat for tests)
-            if isinstance(data, dict) and (data.get("mode") == "autonomous" or any(k in data for k in ("premise", "characters", "plot", "tone"))):
+            answers = data.get("answers", {}) if isinstance(data, dict) else {}
+            if isinstance(data, dict) and (data.get("mode") == "autonomous" or any(k in data for k in ("premise", "characters", "plot", "tone", "kernel", "chronology", "places", "factions", "themes", "style")) or any(k in answers for k in ("premise", "characters", "plot", "tone", "kernel", "chronology", "places", "factions", "themes", "style"))):
                 return False
         except Exception:
             pass
