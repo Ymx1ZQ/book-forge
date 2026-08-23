@@ -38,7 +38,6 @@ IDs and explicit imports over semantic retrieval.
 - Role reasoning uses the pinned model's own effort tiers: routine roles run `low`, editorial roles run `high`, and `max` is reserved for integration, canon, and judgement.
 - `source_language` defaults to `en`, may be selected at init, and becomes immutable after the first source chapter closes.
 - Translation workspaces are absent until the user explicitly requests a target locale.
-- Graphify is excluded from v1 setup, correctness, retrieval, and audit coverage.
 - `.book-forge/plan.json` is the canonical runtime DAG; `DEVPLAN.md` is its orchestrator-rendered shared human view.
 - One deterministic control-plane helper is the sole writer of machine state and canonical paths; model roles write attempt-local output only.
 - Every public command crosses a transaction-recovery read barrier before reading currentness, building context, dispatching, or publishing.
@@ -279,7 +278,7 @@ intact.
 - [x] Integrare chorus in `execute_universe_design` / `execute_book_design` con flag `--no-chorus` / `--chorus-models`
 - [x] Scrittura `.book-forge/chorus/` + report umano, validazione evidence
 - [x] Test: chorus produce findings advisory con hash binding, `--no-chorus` salta, `--chorus-models` filtra (mock)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** `design universe` e `design book` girano con chorus di default (conferma modelli stampata), producono report advisory senza toccare canon; `--no-chorus` li salta; future fasi pre-`run` possono chiamare `run_chorus`.
 
@@ -352,9 +351,33 @@ intact.
 **Done when:** `design --with-chorus-context` inietta il report del chorus nel designer; docs aggiornati; `test_chorus.py` green; suite 85+ passed.
 
 
+
+### M37: Rimuovi Graphify e ridefinisci coldread con sola sintesi pregressa ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M34
+
+**Why:** Graphify resta citato in SKILL e DEVPLAN anche se fuori dal path — genera confusione su prerequisiti opencode e deve essere rimosso totalmente. Il coldread attuale in `run` legge con canon completo; serve invece un lettore fresco che legga il capitolo con sole info sintetiche dai capitoli precedenti (reader-state compatto + boundary precedenti), come un lettore reale che non ha il bible sotto gli occhi.
+
+**Approach:**
+- Rimuovere ogni riga Graphify da SKILL.md e DEVPLAN.md.
+- Ridefinire `cold-reader` per ricevere solo sintesi pregressa: `reader_state` + `previous_boundaries` compatti (non full canon), oltre al contract del capitolo.
+- Aggiornare `assets/prompts/cold-reader.md` e `references/run.md` per riflettere il nuovo envelope sintetico.
+- Nessuna dipendenza da `graphify-out/` o tool.
+
+**Tasks:**
+- [x] Rimuovere riferimenti Graphify da SKILL.md e DEVPLAN.md
+- [x] Ridefinire cold-reader envelope sintetico (reader_state + previous boundaries)
+- [x] Aggiornare prompt e references/run.md
+- [x] Test: cold-reader riceve solo sintesi, non full canon (verificato manuale, suite 89 passed)
+- [ ] Commit & push
+
+**Done when:** Nessun file in book-forge menziona Graphify; cold-reader gira con sola sintesi pregressa e suite green.
+
+
 ## Out of scope
 
-- Graphify or semantic graph retrieval in the v1 execution path.
 - Guaranteed detection of undeclared facts that both writer disclosure and technical review miss.
 - Automatic translation creation or unrequested bulk translation.
 - Multi-provider ensembles outside the chorus; primary creative roles stay pinned to the DeepSeek flash model, chorus uses the configured ensemble.

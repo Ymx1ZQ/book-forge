@@ -48,7 +48,7 @@ never bypass a block by editing canonical files.
 - Write source manuscripts in English by default.
 - Create context-aware translations only when the user explicitly requests a target language.
 - Generate EPUB and PDF editions deterministically without model calls.
-- Keep Graphify outside the correctness path; use explicit IDs and dependency indexes instead.
+- Use explicit IDs and dependency indexes for all correctness; no graph retrieval.
 
 ## Public command surface
 

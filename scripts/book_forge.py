@@ -3488,11 +3488,30 @@ def _call_parallel_reviews(
     if len(materialized) == 2:
         return materialized["cold-reader"], materialized["technical-editor"], []
     jobs = []
+    # Build synthetic previous-chapters summary for cold-reader (fresh reader, no full canon)
+    previous_synthetic = ""
+    try:
+        reader_state_path = root / f"books/{book_id}/reader-state.md"
+        if reader_state_path.is_file():
+            previous_synthetic = reader_state_path.read_text(encoding="utf-8").strip()[-2000:]
+        # Add previous chapter boundaries synopsis (last 2 chapters)
+        import re as _re
+        chapters_dir = root / f"books/{book_id}/manuscript/chapters"
+        if chapters_dir.is_dir():
+            prev_files = sorted(chapters_dir.glob("*.md"))[-3:-1]
+            for pf in prev_files:
+                txt = pf.read_text(encoding="utf-8")[:500]
+                previous_synthetic += f"\n\nPrev {pf.stem}: {txt.strip()[:300]}"
+    except Exception:
+        previous_synthetic = ""
     for role, task_id in (
         ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}"),
         ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}"),
     ):
         capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft}
+        if role == "cold-reader":
+            capsule["previous_synthetic"] = previous_synthetic
+            capsule["has_full_canon"] = False
         if role == "technical-editor":
             capsule["writer_consequences"] = writer_consequences.get("consequences", [])
         envelope = build_envelope(

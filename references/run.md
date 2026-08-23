@@ -17,5 +17,4 @@ workflow.
 - Never retry an `outcome_unknown` call. Never exceed one validated repair call
   or two concurrent review workers.
 
-Do not load a whole manuscript. Context packets contain the chapter contract,
-explicit canon imports, current state, and only the required previous boundary.
+Do not load a whole manuscript. Context packets contain the chapter contract, explicit canon imports, current state, and only the required previous boundary. The cold-reader receives only the synthetic previous-chapters summary (reader_state compact + previous boundaries synopsis), not the full canon — exactly what a fresh linear reader knows.
