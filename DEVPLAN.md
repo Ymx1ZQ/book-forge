@@ -705,3 +705,188 @@ vestigial (never read by `build_envelope`).
 **Done when:** suite green; `book-forge chorus run` (universe, 8 models)
 completes and writes `.book-forge/chorus/<scope>/<ts>/` artifacts, followed by
 `chorus synthesize`.
+
+## Fix: canon promotion loses designer row content (2026-08-23)
+
+**Bug:** Observed live on Margherita (RUN-0001, ATT-0003): the universe
+designer's proposal rows carry content under `invariant` (places, factions,
+characters) and `law` (kernel), but `_canon_markdown` reads only
+`row['summary']`. Promotion therefore wrote canon files whose
+`<!-- bf:block summary -->` blocks are empty: 16 hollow files, the kernel's
+`bf:import` targets point at empty law summaries (the auditor's F-0001
+warning), and any full-canon consumer (book design, M31) would close over
+contentless canon. The run still promoted as `design_clean` because nothing
+fail-closes on contentless rows.
+
+**Fix:**
+1. `_row_summary` helper resolves row content by ordered fallback
+   `summary` → `invariant` → `law` (first non-empty string);
+   `_canon_markdown` promotes that text verbatim into the summary block.
+2. `validate_universe_design` fail-closes with `canon-row.content-missing`
+   (blocking) when a kernel/place/faction/character row carries no content
+   in any accepted key, so hollow canon can never promote silently again.
+3. Tests: promotion maps `invariant`/`law` rows into non-empty summary
+   blocks (explicit `summary` still wins, `voice` still honored); a
+   contentless row blocks validation.
+
+**Second bug (same run):** the designer's row shape is not pinned — one run
+emits lists of `{id, name, summary}` rows, the next emits ID-keyed dicts
+(`"characters": {"CHR-0001": {...}}`), kernel laws as plain strings, and
+character names under `label` with content split across `fact` and
+`invariant`. `_validate_id_rows` fail-closes on the dict shape
+("Universe proposal field kernel must be a list"), and the list shape drops
+`fact` content at promotion. Both shapes are reasonable readings of the
+contract's "CHR-#### rows", so the control plane normalizes them instead of
+trusting one spelling.
+
+**Fix:**
+4. `_normalize_universe_proposal` converts ID-keyed dict categories
+   (kernel/eras/events/places/factions/characters) into row lists: dict
+   values merge with the key as `id` (`label` maps to `name`), plain string
+   values become `{"id", "summary"}` rows. Applied where raw designer output
+   enters, in `execute_universe_design`.
+5. `_row_summary` preserves more designer content: an explicit `summary`
+   wins; otherwise the non-empty prose fields `fact`, `invariant`, `law`
+   join in that fixed order, so character fact+invariant pairs promote
+   whole instead of losing `fact`.
+
+**Third bug (same run):** the retried designer emitted a third row shape —
+lists again, but content under `statement` (kernel) and `description`
+(places/factions/characters). The fail-closed check from part 2 caught it
+precisely (one `canon-row.content-missing` per hollow row) instead of
+promoting silently, which is the guard working as designed; the residual
+defect is that the envelope's `required_output` never pinned the row keys,
+so every run re-rolls them.
+
+**Fix:**
+6. `_row_summary` accepts the full observed key family: explicit `summary`
+   wins; otherwise the non-empty prose fields join in fixed order
+   `fact`, `description`, `invariant`, `statement`, `law`.
+7. The universe designer envelope's `required_output` pins each row shape
+   explicitly (`{id, name, summary}` plus `era`/`order` for events), so a
+   compliant model needs no guessing while the tolerant fallback stays as
+   defense.
+
+**Done when:** suite green; on Margherita a re-run `design universe` promotes
+canon files with real content and non-empty kernel law imports.
+
+## Fix: canon depth and pre-book redesign (2026-08-23)
+
+**Bug:** Observed live on Margherita: the promoted canon carries one short
+summary per entity — no physical characterization, no speech patterns, no
+backstory, no sensory texture for places — because (a) `_canon_markdown`
+emits only `summary` plus a `voice` block the designer never produces,
+(b) the designer's `required_output` pins bare `{id, name, summary}` rows,
+and (c) once `DESIGN-UNI-0001` succeeds, `execute_universe_design`
+early-returns forever, so the cast can never be enlarged or enriched with an
+updated brief. The writer therefore cannot receive character depth through
+any channel: chapter contracts close imports over canon blocks only, and
+`worldbuilding.md` reaches the book designer but never the writer.
+
+**Fix:**
+1. `_canon_markdown` promotes a whitelisted family of optional detail
+   blocks — `voice`, `appearance`, `past` (characters), `sensory`
+   (places) — each a non-empty row field becoming its own addressable
+   `<!-- bf:block X -->`, importable per chapter by the book designer.
+2. The universe designer envelope pins the richer row shapes
+   (`characters: {id, name, summary, voice, appearance, past}`,
+   `places: {id, name, summary, sensory}`) and its output allowance rises
+   5000 → 8000 (designer output budget cap 5000 → 8000) so depth fits.
+3. New `design universe --refresh`: resets the design and audit tasks
+   (attempts orphaned with `resolution: refresh`), re-runs the full
+   designer/auditor cycle against the current brief, and sweeps canon
+   files whose IDs the new proposal no longer contains. Fail closed when
+   any book exists — post-book canon growth flows through the artifact
+   currentness/repair machinery, not wholesale redesign.
+
+**Status: done — 2026-08-23.** Suite 107 passed; deployed with
+`install.sh --force`. Live verification on Margherita (enriched brief →
+`--refresh` → canon with voice/appearance/past/sensory blocks) still
+pending — next project session.
+
+**Done when:** suite green; on Margherita a `--refresh` run against an
+enriched brief promotes a larger cast with voice/appearance/past/sensory
+blocks.
+
+## Phase K — Anti-truncation, Brief Gate, Verbosity, Tiered Cast
+
+### M40: M1 — Fix truncation length @41KB 🔄
+
+**Objective:** Stop 41KB truncation by chunking design output, raising output budget, and handling `finish_reason==length`.
+
+**Tasks:**
+- [ ] Implement per-chunk generation (<15KB per chunk) splitting universe design into chunks (characters, places, etc.)
+- [ ] Raise `max_tokens` to 8192–12288 in `agents/openai.yaml` and `scripts/book_forge.py` (ROLE_BUDGETS designer)
+- [ ] Add retry logic for `finish_reason==length` (max 2 retries), then mark ATT `failed_length` not `outcome_unknown`
+- [ ] Compact `SKILL.md` system prompt to reduce input tokens
+- [ ] Update `references/design.md` prompt to generate per-chunk and pin chunk contract
+- [ ] Update `scripts/book_forge.py` and `agents/openai.yaml` to wire chunking and retry
+- [ ] Create `tests/test_design_chunking.py` covering chunk size, retry, and failure mode
+
+**Acceptance Criteria:**
+- No design output exceeds 15KB per chunk; 41KB monolith never produced
+- Designer output budget 8192–12288; envelope respects new limit
+- On `length` finish, helper retries up to 2 times; after exhaustion attempt is `failed_length` (not `outcome_unknown`)
+- `SKILL.md` remains <300 lines after compaction
+- `references/design.md` documents per-chunk generation
+
+**Tests:**
+- `tests/test_design_chunking.py` — chunk size bound, max_tokens budget, retry on length, failed_length terminal state
+
+### M41: M2 — Brief gate default ON with --skip-brief
+
+**Objective:** Gate every design behind an author brief so the designer never invents the story.
+
+**Tasks:**
+- [ ] Create `references/brief.md` documenting the 00-BRIEF gate
+- [ ] Create `scripts/brief.py` implementing gate logic and validation
+- [ ] Add 00-BRIEF gate with 7 questions: length/format, genre/world, protagonists, premise/conflict/ending, themes, style/POV/register, constraints/audience
+- [ ] Default ON; bypass only via `--skip-brief` or answer "usa default"
+- [ ] Wire gate into `references/init.md` and `references/design.md`
+- [ ] Update `SKILL.md` route table to expose brief route and flags
+
+**Acceptance Criteria:**
+- `design universe` and `design book` block without brief unless bypass flag/value present
+- `00-BRIEF` asks exactly 7 questions covering the required axes
+- `--skip-brief` and "usa default" both bypass the gate
+- `references/brief.md` and `scripts/brief.py` exist and are installed
+
+**Tests:**
+- Unit — gate blocks without brief, passes with brief, bypass via flag and via "usa default", 7-question shape
+
+### M42: M3 — Verbosity step-by-step
+
+**Objective:** Make long design runs observable with deterministic step logging.
+
+**Tasks:**
+- [ ] Add verbose logging in `scripts/book_forge.py` for design: [1/7]..[7/7] with →/✓/✗, length → retry
+- [ ] Update `assets/opencode/book-forge-orchestrator.md` to emit same step log
+- [ ] Emit final summary with artifact paths for every design run
+
+**Acceptance Criteria:**
+- Every design run prints [1/7]..[7/7] steps with →/✓/✗ markers
+- `length` finish shows retry marker before next attempt
+- Final summary lists all promoted artifact paths
+
+**Tests:**
+- Unit — log sequence [1/7]..[7/7], retry marker on length, summary contains artifact paths
+
+### M43: M4 — Anti-laziness tiered cast/locations
+
+**Objective:** Enforce rich tiered canon so the model cannot be lazy on cast and places.
+
+**Tasks:**
+- [ ] Implement tiered schema: L1 1–3 protagonists 250–350w (want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w, L3 6–12 ricorrenti 60–90w, L4 10–20 comparse 1 line, total_named >=22 for 80k scaled with length; places L1 3–5, L2 5–8, L3 6–12, total >=14
+- [ ] Update `references/design.md` prompt to enforce tier counts and word ranges
+- [ ] Create `scripts/validate.py` with asserts for each tier and graph connectivity check
+- [ ] Split characters into 2 sub-chunks (L1+L2 and L3+L4) to stay within per-chunk budget
+- [ ] Create `tests/test_validate_tiers.py` covering tier counts, word ranges, total thresholds, and connectivity
+
+**Acceptance Criteria:**
+- Universe proposal with <22 named characters (at 80k) or <14 places fails validation
+- Each tier count and word range enforced; L1 requires want/need/flaw/wound/arc/voice/secret fields
+- Graph connectivity check fails on disconnected canon
+- Characters emitted as 2 sub-chunks
+
+**Tests:**
+- `tests/test_validate_tiers.py` — tier counts, word ranges, scaled totals, connectivity, sub-chunk split
