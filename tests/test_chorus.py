@@ -57,6 +57,20 @@ class ChorusTests(unittest.TestCase):
         self.bf.execute_universe_design(self.project, provider=wrapped, no_chorus=True)
         self.assertNotIn("advisor-grok-4-6", calls)
 
+    def test_malformed_advisor_does_not_kill_run(self):
+        calls = []
+        def runner(role, envelope, attempt_dir):
+            calls.append(role)
+            if role == "advisor-grok-4-6":
+                return {"text": json.dumps({"findings": [{"severity": "warning", "issue": "no id here"}]}), "session_id": "s", "provider": "openrouter", "model": role}
+            return {"text": json.dumps({"findings": [{"id": "W-0001", "severity": "note", "issue": f"issue from {role}", "evidence": [], "suggestion": "sug"}], "suggestions": ["s"]}), "session_id": "s", "provider": "openrouter", "model": role}
+        envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=2000)
+        res = self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"], provider=runner)
+        self.assertEqual(res["total_findings"], 1)
+        report = (Path(res["dir"]) / "chorus-report.md").read_text()
+        self.assertIn("FAILED (non-blocking)", report)
+        self.assertIn("Chorus finding missing id", report)
+
     def test_with_chorus_context_injects_report(self):
         # First run chorus to create a report
         envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=2000)

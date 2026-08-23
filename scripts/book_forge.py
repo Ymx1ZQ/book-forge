@@ -120,6 +120,22 @@ CHORUS_ADVISOR_SPECS: dict[str, tuple[str, str, int]] = {
 }
 # Dedicated synthesizer agent (pro/max) for chorus synthesis.
 CHORUS_SYNTHESIZER_AGENT = "chorus-synthesizer"
+# Reverse map advisor agent name -> model id, for resolved-pin verification.
+CHORUS_ADVISOR_MODELS: dict[str, str] = {_chorus_advisor_name(m): m for m in CHORUS_DEFAULT_MODELS}
+
+
+def _expected_pin(role: str) -> tuple[str, str]:
+    """Expected (model_id, variant) of the resolved agent for a role, mirroring _write_agents."""
+    if role in ROLE_SPECS:
+        return MODEL_ID, ROLE_SPECS[role][1]
+    if role == CHORUS_SYNTHESIZER_AGENT:
+        cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
+        variant = str(cfg.get("default_effort", "max")) if isinstance(cfg, dict) else "max"
+        return CHORUS_SYNTHESIZER.split("/", 1)[1], variant
+    model = CHORUS_ADVISOR_MODELS.get(role)
+    if model is None:
+        raise BookForgeError(f"Role cannot run headlessly: {role}")
+    return model.split("/", 1)[1], CHORUS_ADVISOR_SPECS[role][1]
 
 
 class BookForgeError(RuntimeError):
@@ -175,6 +191,20 @@ def _read_json(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise BookForgeError(f"Expected an object in {path}")
     return value
+
+
+def _project_root_from(attempt_dir: Path) -> Path:
+    """Resolve the project root from an attempt dir, walking up to the nearest
+    ancestor containing a `.book-forge` directory. Works for the run-attempt
+    layout (root/.book-forge/runs/RUN-x/attempts/ATT-x) and for chorus tmp dirs
+    created under the project root. Fail closed when no ancestor qualifies."""
+    candidate = attempt_dir
+    while True:
+        if (candidate / ".book-forge").is_dir():
+            return candidate
+        if candidate.parent == candidate:
+            raise BookForgeError(f"Cannot locate project root above {attempt_dir}")
+        candidate = candidate.parent
 
 
 def _project_root(project: Path | str) -> Path:
@@ -439,7 +469,7 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "default_continuity": "CNT-0001",
         "source_language": source_language,
         "model": MODEL,
-        "context": {"writer_max_input_tokens": 12000, "hard_fail_on_overflow": True},
+        "context": {"writer_max_input_tokens": 12000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
         "chorus": {"enabled": True, "models": list(CHORUS_DEFAULT_MODELS), "synthesizer": CHORUS_SYNTHESIZER},
     }
     _write_json(stage / "book-forge.yaml", config)
@@ -1361,8 +1391,8 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
             violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected[1]}, found {receipt.get('variant')}"})
         estimated = int(receipt.get("estimated_input_tokens", 0) or 0)
         provider_input = int((receipt.get("tokens") or {}).get("input", 0) or 0)
-        if expected and estimated > ROLE_BUDGETS[role][0]:
-            violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{estimated} > {ROLE_BUDGETS[role][0]}"})
+        if expected and estimated > _envelope_input_budget(root, role):
+            violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{estimated} > {_envelope_input_budget(root, role)}"})
         if estimated and provider_input > int(estimated * 1.25) + 256:
             violations.append({"code": "provider_overhead", "task": task_id, "detail": f"provider {provider_input}, estimated {estimated}"})
         if task_id.startswith("TRANSLATE-"):
@@ -2041,6 +2071,28 @@ for _adv in list(CHORUS_ADVISOR_SPECS):
 ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
 
 
+def _envelope_input_budget(root: Path, role: str) -> int:
+    """Per-role envelope input budget; project override wins over ROLE_BUDGETS.
+
+    `book-forge.yaml` may raise the design envelope ceiling under
+    `context.design_max_input_tokens` (applies to the designer and to chorus
+    advisors, which share the same context contract). Defaults to the fixed
+    role budget. Fail closed on a malformed override value."""
+    default_input, _ = ROLE_BUDGETS[role]
+    config_path = root / "book-forge.yaml"
+    if config_path.is_file():
+        config = _read_json(config_path)
+        ctx = config.get("context")
+        if isinstance(ctx, dict) and (role == "designer" or role.startswith("advisor-")):
+            knob = ctx.get("design_max_input_tokens")
+            if knob is not None:
+                try:
+                    return int(knob)
+                except (TypeError, ValueError):
+                    raise BookForgeError(f"context.design_max_input_tokens must be an integer, got {knob!r}")
+    return default_input
+
+
 def _estimate_deepseek_tokens(value: bytes, *, include_overhead: bool = False) -> int:
     # Conservative byte-based estimator pinned for the DeepSeek V4 Flash application
     # envelope. Provider telemetry calibrates the separately visible OpenCode overhead.
@@ -2091,6 +2143,8 @@ def build_envelope(
         raise BookForgeError(f"Role has no envelope budget: {role}")
     default_input, output_budget = ROLE_BUDGETS[role]
     budget = default_input if input_budget is None else input_budget
+    if input_budget is None:
+        budget = _envelope_input_budget(root, role)
     if max_output_tokens <= 0 or max_output_tokens > output_budget:
         raise BookForgeError(f"Output allowance {max_output_tokens} exceeds {role} budget {output_budget}")
     prompt_path = Path(__file__).resolve().parents[1] / "assets" / "prompts" / f"{role}.md"
@@ -2758,7 +2812,9 @@ def run_chorus(
         # We bypass claim_task/DAG and call runner directly (advisory, at-most-once not required).
         # Use a temp dir for advisory output.
         import tempfile as _tmp
-        tmp = Path(_tmp.mkdtemp(prefix=f".chorus-{_chorus_slug(model)}-"))
+        chorus_tmp_root = root / ".book-forge" / "chorus" / ".tmp"
+        chorus_tmp_root.mkdir(parents=True, exist_ok=True)
+        tmp = Path(_tmp.mkdtemp(prefix=f".chorus-{_chorus_slug(model)}-", dir=chorus_tmp_root))
         try:
             result = runner(advisor, adv_envelope, tmp)
             raw = _parse_contract_json(str(result["text"]))
@@ -2781,6 +2837,9 @@ def run_chorus(
                         fixed_ev.append({**item, "location": loc, "hash": item.get("hash", "unvalidated")})
                 bound_findings.append({**f, "evidence": fixed_ev})
             return advisor, {"findings": bound_findings, "suggestions": validated["suggestions"], "raw": raw, "envelope_hash": adv_envelope["hash"]}
+        except Exception as exc:
+            # Advisory-only: a malformed single advisor must not kill the run.
+            return advisor, {"findings": [], "suggestions": [], "error": str(exc), "envelope_hash": adv_envelope["hash"]}
         finally:
             import shutil as _sh
             if tmp.exists():
@@ -2804,6 +2863,11 @@ def run_chorus(
     report_lines.append(f"Total findings: {total_findings}")
     report_lines.append("")
     for advisor, data in sorted(results.items()):
+        if data.get("error"):
+            report_lines.append(f"## {advisor} — FAILED (non-blocking)")
+            report_lines.append(f"  error: {data['error']}")
+            report_lines.append("")
+            continue
         report_lines.append(f"## {advisor} — {len(data['findings'])} findings")
         for f in data["findings"]:
             report_lines.append(f"- **{f['id']}** ({f['severity']}): {f['issue']}")
@@ -2874,7 +2938,9 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
                 max_output_tokens=4000,
             )
             import tempfile as _tmp
-            tmp = Path(_tmp.mkdtemp(prefix=".chorus-synth-"))
+            chorus_tmp_root = root / ".book-forge" / "chorus" / ".tmp"
+            chorus_tmp_root.mkdir(parents=True, exist_ok=True)
+            tmp = Path(_tmp.mkdtemp(prefix=".chorus-synth-", dir=chorus_tmp_root))
             try:
                 result = runner(CHORUS_SYNTHESIZER_AGENT, synth_envelope, tmp)
                 raw = _parse_contract_json(str(result["text"]))
@@ -3136,7 +3202,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         raise BookForgeError(f"Role cannot run headlessly: {role}")
     if role in ROLE_SPECS and ROLE_SPECS[role][0] not in {"all", "primary"}:
         raise BookForgeError(f"Role cannot run headlessly: {role}")
-    root = attempt_dir.parents[4]
+    root = _project_root_from(attempt_dir)
     binary = _opencode_binary()
     resolved_result = subprocess.run(
         [binary, "--pure", "debug", "agent", role],
@@ -3147,11 +3213,12 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     )
     resolved = json.loads(resolved_result.stdout)
     resolved_model = resolved.get("model", {})
+    expected_model_id, expected_variant = _expected_pin(role)
     if (
         resolved.get("name") != role
         or resolved_model.get("providerID") != "openrouter"
-        or resolved_model.get("modelID") != MODEL.split("/", 1)[1]
-        or resolved.get("variant") != ROLE_SPECS[role][1]
+        or resolved_model.get("modelID") != expected_model_id
+        or resolved.get("variant") != expected_variant
     ):
         raise BookForgeError(f"Resolved OpenCode agent pin differs for {role}")
     environment = dict(os.environ)
@@ -3218,7 +3285,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     return {
         "text": texts[-1],
         "provider": "openrouter",
-        "model": MODEL.split("/", 1)[1],
+        "model": expected_model_id,
         "variant": resolved["variant"],
         "session_id": session_id,
         "tokens": tokens,

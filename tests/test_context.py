@@ -71,6 +71,33 @@ class ContextTests(unittest.TestCase):
         self.assertGreaterEqual(len(caught.exception.contributors), 2)
         self.assertEqual(caught.exception.contributors, sorted(caught.exception.contributors, key=lambda row: row["estimated_tokens"], reverse=True))
 
+    def test_design_budget_override_from_config(self):
+        import json as _json
+        config = _json.loads((self.project / "book-forge.yaml").read_text())
+        config.setdefault("context", {})["design_max_input_tokens"] = 48000
+        (self.project / "book-forge.yaml").write_text(_json.dumps(config, indent=2))
+
+        def estimate_for(role):
+            env = self.bf.build_envelope(
+                self.project, role=role, task_capsule={"brief": "x" * 30000},
+                imports=[], state={}, tools=[], max_output_tokens=2000,
+            )
+            return env["input_budget"]
+
+        self.assertEqual(estimate_for("designer"), 48000)
+        self.assertEqual(estimate_for("advisor-grok-4-6"), 48000)
+        self.assertEqual(self.bf._envelope_input_budget(self.project, "writer"), 12000)
+        self.assertEqual(self.bf._envelope_input_budget(self.project, "canon-auditor"), 16000)
+        self.assertEqual(self.bf._envelope_input_budget(self.project, "designer"), 48000)
+
+    def test_design_budget_override_fails_closed_on_malformed_value(self):
+        import json as _json
+        config = _json.loads((self.project / "book-forge.yaml").read_text())
+        config.setdefault("context", {})["design_max_input_tokens"] = "huge"
+        (self.project / "book-forge.yaml").write_text(_json.dumps(config, indent=2))
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._envelope_input_budget(self.project, "designer")
+
 
 if __name__ == "__main__":
     unittest.main()

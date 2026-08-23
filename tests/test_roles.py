@@ -86,5 +86,40 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertEqual(set(report["variants"]), {"low", "high", "max"})
 
 
+class ChorusPinResolutionTests(unittest.TestCase):
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+
+    def test_project_root_from_resolves_run_and_chorus_depths(self):
+        run_attempt = self.project / ".book-forge" / "runs" / "RUN-0001" / "attempts" / "ATT-0001"
+        run_attempt.mkdir(parents=True)
+        self.assertEqual(self.bf._project_root_from(run_attempt), self.project)
+        chorus_tmp = self.project / ".book-forge" / "chorus" / ".tmp" / ".chorus-grok-4-6-ab12"
+        chorus_tmp.mkdir(parents=True)
+        self.assertEqual(self.bf._project_root_from(chorus_tmp), self.project)
+
+    def test_project_root_from_raises_on_orphan(self):
+        orphan = Path(self.temp.name) / "orphan" / "deep"
+        orphan.mkdir(parents=True)
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._project_root_from(orphan)
+
+    def test_expected_pin_matches_written_agents(self):
+        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4-flash-0731", "max"))
+        self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4-flash-0731", "low"))
+        self.assertEqual(self.bf._expected_pin("advisor-qwen-qwen3-8-max"), ("qwen/qwen3.8-max", "xhigh"))
+        self.assertEqual(self.bf._expected_pin("advisor-openai-gpt-5-6-luna"), ("openai/gpt-5.6-luna", "high"))
+        pro_id = self.bf.CHORUS_SYNTHESIZER.split("/", 1)[1]
+        cfg = self.bf.CHORUS_MODEL_CONFIGS.get(self.bf.CHORUS_SYNTHESIZER, {})
+        variant = str(cfg.get("default_effort", "max"))
+        self.assertEqual(self.bf._expected_pin(self.bf.CHORUS_SYNTHESIZER_AGENT), (pro_id, variant))
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._expected_pin("no-such-role")
+
+
 if __name__ == "__main__":
     unittest.main()

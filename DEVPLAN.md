@@ -619,3 +619,89 @@ structural line).
 **Done when:** suite green; Landfall book design passes the new gate
 (brief file exists), and the envelope for DESIGN-BOOK-0001 carries the full
 canon context.
+
+## Fix: chorus `run_opencode_role` root resolution (2026-08-23)
+
+**Bug:** `run_opencode_role` derives the project root with
+`root = attempt_dir.parents[4]`, which only holds for the run-attempt layout
+(`root/.book-forge/runs/RUN-x/attempts/ATT-x`). `run_chorus` and the chorus
+synthesizer pass a system `tempfile.mkdtemp` directory in `/tmp` as the
+attempt dir → `parents[4]` raises `IndexError`; `chorus run` aborts before
+dispatching. The mock-provider chorus tests never exercise this line, so the
+suite stayed green.
+
+**Fix:**
+1. New pure helper `_project_root_from(attempt_dir)` — walk up to the nearest
+   ancestor containing a `.book-forge` directory; raise `BookForgeError` when
+   none exists (fail closed, no silent fallback).
+2. `run_opencode_role`: use `_project_root_from(attempt_dir)` instead of the
+   fixed-depth slice; keeps the `cwd` contract for both run attempts and
+   chorus dirs.
+3. `run_chorus.dispatch_one` and the synthesizer path in
+   `run_chorus_synthesis`: create tmp dirs with
+   `mkdtemp(dir=root / ".book-forge" / "chorus" / ".tmp")` so the attempt dir
+   lives under the project root and `cwd` resolves correctly; existing
+   `finally: rmtree` cleanup unchanged.
+4. Tests: unit-test `_project_root_from` (resolves from run-attempt depth and
+   from the chorus tmp depth; raises on an orphan dir). No change to chorus
+   mock-provider tests — they stay as-is.
+
+**Second bug (same code path):** the resolved-pin check in
+`run_opencode_role` compared every role against the single primary model
+(`modelID != MODEL.split("/",1)[1]` and `variant != ROLE_SPECS[role][1]`).
+Chorus advisors resolve to their own pinned model and effort (e.g.
+`qwen/qwen3.8-max`/`xhigh`), so every advisor would fail the check with
+`Resolved OpenCode agent pin differs`; the synthesizer (`pro`) would fail it
+too, and `ROLE_SPECS[role][1]` would `KeyError` for any advisor.
+
+**Fix:**
+5. New `CHORUS_ADVISOR_MODELS` reverse map (advisor name → model id) and
+   `_expected_pin(role)` returning the expected `(model_id, variant)` per role
+   class, mirroring exactly what `_write_agents` writes: `ROLE_SPECS` roles →
+   flash + their variant; advisor roles → their own model + per-model
+   `default_effort`; `chorus-synthesizer` → pro + its `default_effort`.
+6. `run_opencode_role` checks against `_expected_pin(role)` and reports the
+   resolved model id in the result, so telemetry no longer mislabels advisors
+   as flash.
+
+**Third bug (same run):** `run_chorus` aborts the whole standalone `chorus
+run` when a single advisor returns malformed output (e.g. a finding missing
+`id`) — `dispatch_one` had no per-advisor catch, while the `design` wrappers
+already print "Chorus advisory failed (non-blocking)". Advisory means
+advisory: one bad advisor must not kill the pass.
+
+**Fix:**
+7. `dispatch_one` catches any per-advisor exception and returns
+   `{"findings": [], "suggestions": [], "error": <reason>}` instead of
+   raising; the human report marks the advisor `FAILED (non-blocking)` with
+   the reason, and `chorus synthesize` simply sees no findings from it.
+8. Test: one advisor in the mock returns a finding without `id` → `run_chorus`
+   completes, the failed advisor is recorded with an error, others'
+   findings survive.
+
+**Fourth blocker (book scope):** the book-design envelope carries the full
+worldbuilding bible + brief + closed canon context (~45k estimated tokens on
+Landfall), which overflowed the fixed 16k designer/advisor budget — the
+documented `design book`/`chorus run --book` routes could never run
+programmatically, which is why the author did the book design by hand. The
+generated `context.writer_max_input_tokens` knob in `book-forge.yaml` was
+vestigial (never read by `build_envelope`).
+
+**Fix:**
+9. New `_envelope_input_budget(root, role)`: honors `context.design_max_input_tokens`
+   from `book-forge.yaml` for the `designer` role and all `advisor-*` chorus
+   roles (they share the same context contract); falls back to `ROLE_BUDGETS`;
+   fails closed on a malformed override value.
+10. `build_envelope` and the telemetry `envelope_budget` check use it, so a
+    project may raise the design ceiling without weakening the hard-fail
+    overflow guard (no silent truncation).
+11. Generated default `book-forge.yaml` now includes
+    `design_max_input_tokens: 16000` (self-documenting, unchanged behavior);
+    Landfall sets it to `48000`. `runtime sync` does not rewrite
+    `book-forge.yaml`, so the override survives.
+12. Tests: override applies to designer + advisors, not to writer/auditor;
+    malformed override fails closed; defaults unchanged.
+
+**Done when:** suite green; `book-forge chorus run` (universe, 8 models)
+completes and writes `.book-forge/chorus/<scope>/<ts>/` artifacts, followed by
+`chorus synthesize`.
