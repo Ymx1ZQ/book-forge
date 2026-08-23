@@ -39,6 +39,82 @@ ROLE_SPECS = {
     "book-forge-smoke": ("primary", "low", 3),
 }
 
+# Chorus ensemble — default-on, opt-out via chorus.enabled or --no-chorus.
+# Mirrors the user's global opencode.json catalog so every generated project
+# exposes the same 7 models without hand-editing provider config.
+CHORUS_SYNTHESIZER = "openrouter/deepseek/deepseek-v4-pro-0813"
+CHORUS_DEFAULT_MODELS: list[str] = [
+    "openrouter/deepseek/deepseek-v4-flash-0731",
+    "openrouter/deepseek/deepseek-v4-pro-0813",
+    "openrouter/z-ai/glm-5.3",
+    "openrouter/qwen/qwen3.8-max",
+    "openrouter/moonshotai/kimi-k3",
+    "openrouter/x-ai/grok-4.6",
+    "openrouter/google/gemini-3.7-flash",
+]
+# Per-model provider pin and reasoning ladder — taken from the global config.
+# Each entry mirrors provider.openrouter.models[<id>] in ~/.config/opencode/opencode.json.
+CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
+    "openrouter/deepseek/deepseek-v4-flash-0731": {
+        "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "high": "high", "max": "max"},
+    },
+    "openrouter/deepseek/deepseek-v4-pro-0813": {
+        "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "high": "high", "max": "max"},
+    },
+    "openrouter/z-ai/glm-5.3": {
+        "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
+        "default_effort": "max",
+        "variants": {"high": "high", "max": "max"},
+    },
+    "openrouter/qwen/qwen3.8-max": {
+        "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
+        "default_effort": "xhigh",
+        "variants": {"medium": "medium", "high": "high", "xhigh": "xhigh"},
+    },
+    "openrouter/moonshotai/kimi-k3": {
+        "provider": {"order": ["moonshotai"], "only": ["moonshotai"], "allow_fallbacks": False},
+        "default_effort": "max",
+        "variants": {"high": "high", "max": "max"},
+    },
+    "openrouter/x-ai/grok-4.6": {
+        "provider": {"order": ["xai"], "only": ["xai"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
+    },
+    "openrouter/google/gemini-3.7-flash": {
+        "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high"},
+    },
+}
+
+
+def _chorus_slug(model: str) -> str:
+    """Stable slug for advisor agent file: openrouter/x-ai/grok-4.6 -> grok-4-6."""
+    slug = model.split("/", 1)[1].replace("/", "-").replace(".", "-")
+    # x-ai/grok-4.6 -> x-ai-grok-4-6 -> grok-4-6 for brevity
+    if slug.startswith("x-ai-"):
+        slug = slug[len("x-ai-"):]
+    if slug.startswith("z-ai-"):
+        slug = slug[len("z-ai-"):]
+    return slug
+
+
+def _chorus_advisor_name(model: str) -> str:
+    return f"advisor-{_chorus_slug(model)}"
+
+
+CHORUS_ADVISOR_SPECS: dict[str, tuple[str, str, int]] = {
+    _chorus_advisor_name(m): ("all", str(CHORUS_MODEL_CONFIGS[m]["default_effort"]), 6)  # type: ignore[arg-type]
+    for m in CHORUS_DEFAULT_MODELS
+}
+# Dedicated synthesizer agent (pro/max) for chorus synthesis.
+CHORUS_SYNTHESIZER_AGENT = "chorus-synthesizer"
+
 
 class BookForgeError(RuntimeError):
     pass
@@ -126,35 +202,64 @@ def _block_record(block: str) -> dict[str, str]:
     return {"block": block, "hash": hashlib.sha256(block.encode()).hexdigest()}
 
 
-def _opencode_config() -> dict[str, object]:
+def _opencode_config(chorus_models: list[str] | None = None) -> dict[str, object]:
+    """Build opencode.json with primary model + chorus catalog."""
+    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    # Ensure primary MODEL is included even if caller filters.
+    if MODEL not in models:
+        models = [MODEL] + [m for m in models if m != MODEL]
+    models_dict: dict[str, object] = {}
+    for mid in models:
+        cfg = CHORUS_MODEL_CONFIGS.get(mid)
+        if cfg is None:
+            # Fallback for unknown model — use primary ladder.
+            cfg = {
+                "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
+                "default_effort": DEFAULT_EFFORT,
+                "variants": VARIANT_EFFORTS,
+            }
+        model_id = mid.split("/", 1)[1]
+        variants = cfg["variants"]  # type: ignore[index]
+        models_dict[model_id] = {
+            "options": {
+                "reasoningEffort": cfg["default_effort"],  # type: ignore[index]
+                "provider": cfg["provider"],  # type: ignore[index]
+            },
+            "variants": {name: {"reasoningEffort": effort} for name, effort in variants.items()},  # type: ignore[union-attr]
+        }
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": MODEL,
         "small_model": MODEL,
         "provider": {
             "openrouter": {
-                "models": {
-                    MODEL_ID: {
-                        "options": {
-                            "reasoningEffort": DEFAULT_EFFORT,
-                            "provider": {
-                                "order": ["deepseek", "baidu"],
-                                "only": ["deepseek", "baidu"],
-                                "allow_fallbacks": False,
-                            },
-                        },
-                        "variants": {
-                            name: {"reasoningEffort": effort}
-                            for name, effort in VARIANT_EFFORTS.items()
-                        },
-                    }
-                },
+                "models": models_dict,
             }
         },
     }
 
 
-def _write_agents(stage: Path) -> None:
+def _chorus_models_from_config(config: dict[str, object]) -> list[str]:
+    """Read chorus.models from book-forge.yaml, fallback to defaults."""
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict):
+        models = chorus.get("models")
+        if isinstance(models, list) and all(isinstance(m, str) for m in models):
+            # Validate each entry looks like openrouter/...
+            filtered = [m for m in models if "/" in m and m.startswith("openrouter/")]
+            if filtered:
+                return filtered
+    return list(CHORUS_DEFAULT_MODELS)
+
+
+def _chorus_enabled(config: dict[str, object]) -> bool:
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict) and "enabled" in chorus:
+        return bool(chorus["enabled"])
+    return True
+
+
+def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
     agents = stage / ".opencode" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
     for name, (mode, variant, steps) in ROLE_SPECS.items():
@@ -183,8 +288,45 @@ def _write_agents(stage: Path) -> None:
             f"{permissions}---\n\n{instruction}\n"
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
+    # Chorus advisors — one per model in the catalog, plus synthesizer.
+    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    if MODEL not in models:
+        models = [MODEL] + [m for m in models if m != MODEL]
+    for mid in models:
+        name = _chorus_advisor_name(mid)
+        cfg = CHORUS_MODEL_CONFIGS.get(mid, {})
+        variant = str(cfg.get("default_effort", DEFAULT_EFFORT)) if isinstance(cfg, dict) else DEFAULT_EFFORT
+        # Keep steps bounded like other editorial roles.
+        body = (
+            "---\n"
+            f"description: Book Forge {name} chorus advisor.\n"
+            f"mode: all\nmodel: {mid}\nvariant: {variant}\nsteps: 6\n"
+            'permission:\n  "*": deny\n'
+            "---\n\n"
+            f"You are the Book Forge chorus advisor {name} ({mid}). "
+            "Return only the requested chorus findings contract. "
+            "You have no tools and must not assume context outside the supplied envelope.\n"
+        )
+        _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
+    # Synthesizer
+    synth_cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
+    synth_variant = str(synth_cfg.get("default_effort", "max")) if isinstance(synth_cfg, dict) else "max"
+    _write_bytes_atomic(
+        agents / f"{CHORUS_SYNTHESIZER_AGENT}.md",
+        (
+            "---\n"
+            f"description: Book Forge {CHORUS_SYNTHESIZER_AGENT} role.\n"
+            f"mode: all\nmodel: {CHORUS_SYNTHESIZER}\nvariant: {synth_variant}\nsteps: 8\n"
+            'permission:\n  "*": deny\n'
+            "---\n\n"
+            "You are the Book Forge chorus synthesizer. Deduplicate and rank chorus findings. "
+            "Return only the requested synthesis contract. "
+            "You have no tools and must not assume context outside the supplied envelope.\n"
+        ).encode("utf-8"),
+    )
+    allowed = set(ROLE_SPECS) | {_chorus_advisor_name(m) for m in models} | {CHORUS_SYNTHESIZER_AGENT}
     for stale in agents.glob("*.md"):
-        if stale.stem not in ROLE_SPECS:
+        if stale.stem not in allowed:
             stale.unlink()
     commands = stage / ".opencode" / "commands"
     commands.mkdir(parents=True, exist_ok=True)
@@ -292,10 +434,11 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "source_language": source_language,
         "model": MODEL,
         "context": {"writer_max_input_tokens": 12000, "hard_fail_on_overflow": True},
+        "chorus": {"enabled": True, "models": list(CHORUS_DEFAULT_MODELS), "synthesizer": CHORUS_SYNTHESIZER},
     }
     _write_json(stage / "book-forge.yaml", config)
-    _write_json(stage / "opencode.json", _opencode_config())
-    _write_agents(stage)
+    _write_json(stage / "opencode.json", _opencode_config(list(CHORUS_DEFAULT_MODELS)))
+    _write_agents(stage, list(CHORUS_DEFAULT_MODELS))
     _write_json(
         stage / "universe" / "universe.yaml",
         {
@@ -387,8 +530,10 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
     neither `book-forge.yaml` nor any control-plane or canonical state.
     """
     root = _project_root(project)
-    _write_json(root / "opencode.json", _opencode_config())
-    _write_agents(root)
+    config = _read_json(root / "book-forge.yaml")
+    chorus_models = _chorus_models_from_config(config)
+    _write_json(root / "opencode.json", _opencode_config(chorus_models))
+    _write_agents(root, chorus_models)
     return {
         "synced": True,
         "project": str(root),
@@ -396,6 +541,8 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
         "default_effort": DEFAULT_EFFORT,
         "variants": VARIANT_EFFORTS,
         "roles": {name: spec[1] for name, spec in ROLE_SPECS.items()},
+        "chorus_models": chorus_models,
+        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
     }
 
 
@@ -707,12 +854,17 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
     resolved = json.loads(debug)
     if resolved.get("model") != MODEL:
         raise BookForgeError("Resolved OpenCode model differs from the project pin")
+    config = _read_json(root / "book-forge.yaml")
+    chorus_models = _chorus_models_from_config(config)
     return {
         "version": version,
         "model": MODEL,
         "variants": list(VARIANT_EFFORTS),
         "json_events": "--format" in help_text,
         "session_resume": "--session" in help_text,
+        "chorus_models": chorus_models,
+        "chorus_enabled": _chorus_enabled(config),
+        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
     }
 
 

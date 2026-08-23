@@ -34,7 +34,7 @@ IDs and explicit imports over semantic retrieval.
 - Collections are optional reading/editorial groupings; membership lives only in `collections.yaml`.
 - Books are discovered from their `book.yaml`; `universe.yaml` does not duplicate a manual book list.
 - Relations are explicit and typed; obligations and imports are stable addressable blocks.
-- Every model role is pinned to `openrouter/deepseek/deepseek-v4-flash-0731` through OpenRouter.
+- Primary roles (`designer`, `writer`, `cold-reader`, `technical-editor`, `reviser`, `canon-auditor`, `translator`, `judge`) are pinned to `openrouter/deepseek/deepseek-v4-flash-0731` through OpenRouter; chorus advisors use the configured ensemble (`flash`, `pro`, `glm-5.3`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`) and the synthesizer uses `openrouter/deepseek/deepseek-v4-pro-0813` on `max`.
 - Role reasoning uses the pinned model's own effort tiers: routine roles run `low`, editorial roles run `high`, and `max` is reserved for integration, canon, and judgement.
 - `source_language` defaults to `en`, may be selected at init, and becomes immutable after the first source chapter closes.
 - Translation workspaces are absent until the user explicitly requests a target locale.
@@ -71,7 +71,7 @@ book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>]
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
-book-forge design <universe|book> [--book <id>]
+book-forge design <universe|book> [--book <id>] [--no-chorus] [--chorus-models <csv>]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
@@ -228,12 +228,86 @@ orchestrator stays a deliberate act through the `/book-forge` command.
 catalogue and opens on an agent whose model can be changed, with every role pin
 intact.
 
+
+## Phase I — Pre-writing Chorus (ensemble multi-modello, default-on con opt-out) 🔄
+
+### M32: Catalogo multi-modello e advisor roles (infra) ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M26, M27
+
+**Why:** `book-forge` è pinned a un solo modello (`deepseek/deepseek-v4-flash-0731`) per tutti i ruoli (`MODEL`, `ROLE_SPECS`, `_opencode_config`). L'utente ha dovuto uscire dalla pipeline e interrogare a mano grok/glm/gemini/qwen/kimi + ds-pro per migliorare worldbuilding e brief su tre assi (sfruttamento worldbuilding, spinta bestseller, coerenza hard/scientifica). Senza catalogo multi-modello nel progetto generato (`opencode.json` ha un solo `MODEL_ID`) e senza agent advisor, quel miglioramento resta manuale e non riutilizzabile. Serve l'infra per esporre tutti i modelli già disponibili nel global config e per farli girare come advisor advisory-only.
+
+**Approach:**
+- `book-forge.yaml` nuovo blocco `chorus: {enabled: true, models: [7 default], synthesizer: "openrouter/deepseek/deepseek-v4-pro-0813"}` — default-on, opt-out via `--no-chorus` o `chorus.enabled=false`.
+- Catalogo default (allineato a `~/.config/opencode/opencode.json`): `deepseek/deepseek-v4-flash-0731`, `deepseek/deepseek-v4-pro-0813`, `z-ai/glm-5.3`, `qwen/qwen3.8-max`, `moonshotai/kimi-k3`, `x-ai/grok-4.6`, `google/gemini-3.7-flash` — pro incluso come advisor a pieno titolo.
+- `_opencode_config()` genera N entries `provider.openrouter.models` (con `reasoningEffort`/`provider.order` per-model presi dal global config) invece di una sola.
+- `_write_agents()` genera N agent `advisor-<slug>.md` (mode `all`, variant coerente al provider: `high`/`max` per glm/kimi, `xhigh` per qwen/grok, `high`/`max` per deepseek, `high` per gemini) + mantiene i ruoli storici pinned a flash. `book-forge-orchestrator` resta `max` su flash.
+- `verify_runtime` e `sync_runtime` rigenerano catalogo + advisor; `init` scrive il nuovo `book-forge.yaml` + `opencode.json`.
+- Aggiorna `SKILL.md` Product contract e Binding decisions: rimosso *Multi-provider ensembles out of scope*, nuovo *Primary roles pinned to flash, chorus advisors use configured ensemble, synthesizer uses pro/max*.
+
+**Tasks:**
+- [x] Estendere `book-forge.yaml` con blocco `chorus` (schema v1, default-on)
+- [x] Riscrivere `_opencode_config()` per N modelli (per-model options/variants)
+- [x] Generare `advisor-*` agents in `_write_agents()` con model/variant per-provider
+- [x] Aggiornare `verify_runtime` / `sync_runtime` per convergenza catalogo
+- [x] Aggiornare `SKILL.md` contract + `DEVPLAN.md` binding decisions
+- [x] Test: unit — `opencode.json` espone 7 modelli, ogni `advisor-*` ha pin diverso, ruoli storici restano su flash, `runtime sync` converge
+- [ ] Commit & push
+
+**Done when:** Un progetto nuovo espone 7 modelli in `opencode.json` e 7 `advisor-*` agents con pin diversi; `runtime sync` su Landfall porta lo stesso stato senza toccare canon/control-plane; suite green.
+
+### M33: Chorus advisory su ogni fase pre-scrittura (default-on, conferma modelli) ⏳
+
+**Depends on:** M32
+
+**Why:** Il miglioramento multi-modello è stato applicato solo a worldbuilding/brief a mano; ha senso su tutte le fasi pre-`run` (design universe, design book, e future fasi pre-scrittura). Deve essere suggerito di default (opt-out, non opt-in) e chiedere conferma/cambio modelli, altrimenti resta scoperta o a costo sorpresa.
+
+**Approach:**
+- Nuovo reference `references/chorus.md` (one-level) + helper riusabile `run_chorus(scope, envelope)` — costruisce stesso envelope del designer (full canon + `worldbuilding.md` + brief) e lancia advisor in parallelo (concurrency 2, 3-4 wave), raccoglie JSON `{"findings":[...], "suggestions":[...]}`.
+- 4 prompt specializzati in `assets/prompts/`: `chorus-world-exploiter.md`, `chorus-bestseller.md`, `chorus-science-coherence.md`, `chorus-continuity.md` + pro generalista — copre i 3 assi manuali (sfruttamento worldbuilding, bestseller, coerenza hard).
+- Advisory-only: scrive `.book-forge/chorus/<scope>/<ts>/` + `chorus-report.md` + `chorus-synthesis-input.json`, mai canon. Validazione `location` via `_resolve_evidence_target` fail-closed (M29/M30). Non entra nel DAG (`plan.json`); `pause`/`resume` non lo toccano.
+- Integrazione in `execute_universe_design` e `execute_book_design`: se `chorus.enabled` (default true) → chorus prima del designer, poi designer, poi audit. Con `--no-chorus` o `--chorus-models <csv>` si fa override. La stessa `run_chorus` sarà riusabile per future fasi pre-`run` senza duplicare codice.
+- CLI: `book-forge design <universe|book> [--no-chorus] [--chorus-models <csv>] [--chorus-synthesizer <id>]` — senza flag stampa lista modelli confermata e prosegue.
+- Budget separato: chorus 6-7 call + synthesis 1, non conteggiati in `design_call_budget`.
+
+**Tasks:**
+- [ ] Creare `references/chorus.md` e 4 prompt advisor + wiring `run_chorus`
+- [ ] Integrare chorus in `execute_universe_design` / `execute_book_design` con flag `--no-chorus` / `--chorus-models`
+- [ ] Scrittura `.book-forge/chorus/` + report umano, validazione evidence
+- [ ] Test: chorus produce findings advisory con hash binding, `--no-chorus` salta, `--chorus-models` filtra
+- [ ] Commit & push
+
+**Done when:** `design universe` e `design book` girano con chorus di default (conferma modelli stampata), producono report advisory senza toccare canon; `--no-chorus` li salta; future fasi pre-`run` possono chiamare `run_chorus`.
+
+### M34: Synthesis gate (deduplica, ranka, patch proposte) ⏳
+
+**Depends on:** M33
+
+**Why:** 6-7 advisor producono findings sovrapposti; serve un gate che deduplica, ranka `blocking/warning/note` e propone patch testuali senza auto-applicarle — l'autore resta decisore.
+
+**Approach:**
+- Nuovo agent `chorus-synthesizer` (`openrouter/deepseek/deepseek-v4-pro-0813`, `max`) + comando `book-forge chorus synthesize <scope>` che legge `.book-forge/chorus/<scope>/` e produce `chorus-synthesis.json` con patch proposte (diff testuali, `location` + `hash` ricalcolato).
+- `book-forge chorus apply --pick F-...` o patch manuale → poi `design` riparte con brief/worldbuilding aggiornato. Mantiene *source authoritative + stale tracking*.
+- `status` mostra `chorus: pending/clean/stale`.
+
+**Tasks:**
+- [ ] Agent `chorus-synthesizer` + `chorus synthesize` / `chorus apply` wiring
+- [ ] Deduplica + ranking + patch proposte con evidence hash binding
+- [ ] `status` chorus state
+- [ ] Test: synthesis deduplica, ranking corretto, apply non auto-scrive canon
+- [ ] Commit & push
+
+**Done when:** `chorus synthesize` produce `chorus-synthesis.json` con patch rankate e hash binding; `apply`/`status` coerenti; suite green.
+
+
 ## Out of scope
 
 - Graphify or semantic graph retrieval in the v1 execution path.
 - Guaranteed detection of undeclared facts that both writer disclosure and technical review miss.
 - Automatic translation creation or unrequested bulk translation.
-- Multi-provider or multi-model ensembles; creative roles use the pinned DeepSeek model.
+- Multi-provider ensembles outside the chorus; primary creative roles stay pinned to the DeepSeek flash model, chorus uses the configured ensemble.
 - Implicit multiverse inheritance; alternate continuities import shared material explicitly.
 - Changing source language after the first source chapter closes.
 - Audiobook or cover generation, ISBN procurement, DRM, storefront upload, or print-on-demand integration.

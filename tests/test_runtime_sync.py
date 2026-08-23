@@ -58,9 +58,12 @@ class RuntimeSyncTests(unittest.TestCase):
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
         self.assertEqual(model["options"]["reasoningEffort"], "high")
         self.assertEqual(set(model["variants"]), {"low", "high", "max"})
+        # Chorus catalog is restored as well (7 models by default).
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
 
         agents = self.project / ".opencode" / "agents"
-        self.assertEqual({path.stem for path in agents.glob("*.md")}, set(self.bf.ROLE_SPECS))
+        expected_agents = set(self.bf.ROLE_SPECS) | {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
+        self.assertEqual({path.stem for path in agents.glob("*.md")}, expected_agents)
         for name, (_, variant, _) in self.bf.ROLE_SPECS.items():
             self.assertIn(f"variant: {variant}", (agents / f"{name}.md").read_text())
 
@@ -88,6 +91,7 @@ class RuntimeSyncTests(unittest.TestCase):
         self.assertTrue(json.loads(stream.getvalue())["synced"])
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
 
 
 if __name__ == "__main__":

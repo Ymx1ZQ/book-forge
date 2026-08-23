@@ -53,7 +53,11 @@ class RoleTopologyTests(unittest.TestCase):
             "book-forge-smoke": ("primary", "low"),
         }
         files = {path.stem: path.read_text() for path in (self.project / ".opencode/agents").glob("*.md")}
-        self.assertEqual(set(files), set(expected))
+        # Primary roles must be present with exact pins; chorus advisors are additive.
+        self.assertTrue(set(expected) <= set(files), f"missing primary roles: {set(expected) - set(files)}")
+        expected_chorus = {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
+        self.assertTrue(expected_chorus <= set(files), f"missing chorus agents: {expected_chorus - set(files)}")
+        self.assertEqual(set(files), set(expected) | expected_chorus)
         for name, (mode, variant) in expected.items():
             body = files[name]
             self.assertIn(f"mode: {mode}", body)
@@ -65,6 +69,14 @@ class RoleTopologyTests(unittest.TestCase):
                 self.assertNotIn("write:", body)
                 self.assertNotIn("task:", body)
         self.assertIn("book-forge: allow", files["book-forge-smoke"])
+        # Chorus advisors carry their own model pin and variant from CHORUS_MODEL_CONFIGS.
+        for advisor in expected_chorus:
+            body = files[advisor]
+            self.assertIn("mode: all", body)
+            self.assertIn('"*": deny', body)
+            self.assertNotIn("bash:", body)
+        # Opencode config must expose the full chorus catalog (default 7 models).
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
 
     def test_local_runtime_has_required_model_and_json_sessions(self):
         report = self.bf.verify_runtime(self.project)

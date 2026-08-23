@@ -37,8 +37,10 @@ never bypass a block by editing canonical files.
 - Make the universe the root object and allow it to contain any number of books.
 - Model continuities separately from optional series, sagas, cycles, and reading orders.
 - Relate books explicitly without forcing standalone, trilogy, or fixed-length modes.
-- Pin every OpenCode role to `openrouter/deepseek/deepseek-v4-flash-0731` on a reasoning
-  effort that model declares: `low`, `high`, or `max`.
+- Pin primary OpenCode roles to `openrouter/deepseek/deepseek-v4-flash-0731` on a reasoning
+  effort that model declares: `low`, `high`, or `max`; chorus advisors use the configured ensemble
+  (`flash`, `pro`, `glm-5.3`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`) and the
+  synthesizer uses `openrouter/deepseek/deepseek-v4-pro-0813` on `max`.
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
 - Let one orchestrator decide work while a deterministic control plane performs every state and canonical write.
 - Persist task receipts, hashes, leases, and staged outputs so pause and resume survive process loss.
@@ -54,12 +56,13 @@ Preserve this compact route set while implementing the plan:
 ```text
 book-forge init [--title <title>] [--source-language <bcp47>]
 book-forge runtime sync
+book-forge chorus <status|synthesize|apply> [--book <id>]
 book-forge migrate <check|dry-run|apply|rollback>
 book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>] [--import <block>...]
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
-book-forge design <universe|book> [--book <id>] [--brief '<json>']
+book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--no-chorus] [--chorus-models <csv>]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
