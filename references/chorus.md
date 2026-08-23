@@ -9,4 +9,6 @@ Use this route only for `chorus` and for the default chorus step inside `design`
 - `chorus status` is zero-model: synthesis state, pending/clean/stale. `chorus synthesize` runs the `chorus-synthesizer` (`pro/max`) to deduplicate/rank and propose patches (`chorus-synthesis.json`). `chorus apply` is manual — never auto-rewrites canon.
 - Chorus is reusable: any future pre-`run` phase can call `run_chorus(scope,envelope)` with its own scope/envelope.
 
+Use `chorus run` for a standalone advisory pass (worldbuilding/brief) without designing. Use `design --with-chorus-context` to feed the latest report back into the designer.
+
 Do not use chorus inside `run`/`translate`/`export`.

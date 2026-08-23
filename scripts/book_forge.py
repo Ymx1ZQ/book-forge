@@ -2875,7 +2875,7 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
                 # Expect {"patches":[{"finding":"F-...","patch":"...","location":"..."}]}
                 if isinstance(raw.get("patches"), list):
                     synthesis["patches"] = raw["patches"]
-                if isinstance(raw.get("ranked_findings"), list):
+                if isinstance(raw.get("ranked_findings"), list) and raw["ranked_findings"]:
                     synthesis["findings"] = raw["ranked_findings"]
             finally:
                 import shutil as _sh
@@ -2887,7 +2887,28 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
     return synthesis
 
 
-def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False) -> dict[str, object]:
+
+def _latest_chorus_report(project: Path | str, scope_id: str) -> dict[str, object] | None:
+    root = _project_root(project)
+    cdir = root / ".book-forge" / "chorus" / scope_id
+    if not cdir.is_dir():
+        return None
+    runs = sorted([p.name for p in cdir.glob("*") if p.is_dir()])
+    if not runs:
+        return None
+    latest = runs[-1]
+    report_path = cdir / latest / "chorus-synthesis.json"
+    if report_path.is_file():
+        return _read_json(report_path)
+    # Fallback to raw advisor findings
+    run_dir = cdir / latest
+    findings = []
+    for af in run_dir.glob("advisor-*.json"):
+        data = _read_json(af)
+        findings.extend(data.get("findings", []))
+    return {"findings": findings, "patches": []} if findings else None
+
+def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_universe_design(root)
@@ -2918,6 +2939,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             "scope": "universe",
             "brief": brief,
             "continuities": _continuities(root)["continuities"],
+            **({"chorus_report": _latest_chorus_report(root, "universe")} if with_chorus_context and _latest_chorus_report(root, "universe") else {}),
             "required_output": {
                 "kernel": "LAW-#### rows",
                 "eras": "ERA-#### rows",
@@ -2964,7 +2986,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     return {**audit, "calls": 2}
 
 
-def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False) -> dict[str, object]:
+def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_book_design(root, book_id)
@@ -3005,6 +3027,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             "book": book,
             "brief": brief,
             "worldbuilding": worldbuilding,
+            **({"chorus_report": _latest_chorus_report(root, f"book-{book_id}")} if with_chorus_context and _latest_chorus_report(root, f"book-{book_id}") else {}),
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
             "required_output": {
@@ -4890,6 +4913,7 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
     design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
     design.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this chorus run")
+    design.add_argument("--with-chorus-context", action="store_true", help="Inject latest chorus report into designer capsule")
     run = commands.add_parser("run")
     run.add_argument("--book")
     run.add_argument("--task")
@@ -4907,6 +4931,10 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--override", action="store_true")
     chorus = commands.add_parser("chorus")
     chorus_commands = chorus.add_subparsers(dest="chorus_command", required=True)
+    chorus_run = chorus_commands.add_parser("run")
+    chorus_run.add_argument("--book")
+    chorus_run.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this run")
+    chorus_run.add_argument("--no-chorus", action="store_true", help="No-op (keeps CLI parity)")
     chorus_status = chorus_commands.add_parser("status")
     chorus_status.add_argument("--book")
     chorus_synth = chorus_commands.add_parser("synthesize")
@@ -4969,13 +4997,38 @@ def main(argv: list[str] | None = None) -> int:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus), sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
             if args.brief:
                 _write_book_brief(args.project, args.book, args.brief)
-            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus), sort_keys=True))
+            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context), sort_keys=True))
+        elif args.command == "chorus" and args.chorus_command == "run":
+            # Standalone chorus without designer
+            if args.no_chorus:
+                print(json.dumps({"skipped": True, "reason": "--no-chorus"}, sort_keys=True))
+            else:
+                # Build envelope like designer would, then run chorus
+                root = _project_root(args.project)
+                cfg = _read_json(root / "book-forge.yaml")
+                models = _parse_chorus_models_arg(args.chorus_models, _chorus_models_from_config(cfg)) if args.chorus_models else _chorus_models_from_config(cfg)
+                if args.book:
+                    book_id = args.book
+                    # Need book context like execute_book_design
+                    book = next(row for row in list_books(root) if row["id"] == book_id)
+                    brief = _book_brief(root, book_id)
+                    index = rebuild_indexes(root)
+                    context = _book_canon_context(root, book_id, index)
+                    imports = sorted({row["id"] for row in context if row["id"] != "worldbuilding.md"})
+                    worldbuilding = next((row["content"] for row in context if row["id"] == "worldbuilding.md"), None)
+                    envelope = build_envelope(root, role="designer", task_capsule={"scope": "book", "book": book, "brief": brief, "worldbuilding": worldbuilding}, imports=imports, state={}, tools=[], max_output_tokens=3000)
+                    scope = {"scope": "book", "book": book_id, "brief": brief}
+                else:
+                    brief = _read_json(root / "universe" / "design-brief.json")
+                    envelope = build_envelope(root, role="designer", task_capsule={"scope": "universe", "brief": brief}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=3000)
+                    scope = {"scope": "universe", "brief": brief}
+                print(json.dumps(run_chorus(args.project, scope, envelope, models), sort_keys=True))
         elif args.command == "chorus" and args.chorus_command == "status":
             print(json.dumps(chorus_status(args.project, book_id=args.book), sort_keys=True))
         elif args.command == "chorus" and args.chorus_command == "synthesize":

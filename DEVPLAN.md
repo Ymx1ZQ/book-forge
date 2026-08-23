@@ -306,6 +306,52 @@ intact.
 **Done when:** `chorus synthesize` produce `chorus-synthesis.json` con patch rankate e hash binding; `apply`/`status` coerenti; suite green.
 
 
+
+## Phase J — Chorus completeness (standalone + loop closure) ✅
+
+### M35: Standalone chorus run + interactive confirmation ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M33
+
+**Why:** Il chorus oggi gira solo dentro `design universe/book`. Il miglioramento manuale su `worldbuilding.md` e `book-brief.json` avveniva fuori dal designer — serve un comando standalone `chorus run` che lancia gli advisor sul canon attuale senza far partire il designer, e una conferma interattiva dei modelli in TUI opencode (oltre al flag `--chorus-models`).
+
+**Approach:**
+- Nuovo `book-forge chorus run [universe|book --book ID] [--chorus-models <csv>] [--no-chorus]` — costruisce lo stesso envelope del designer (full canon + worldbuilding + brief) e chiama `run_chorus` direttamente, senza designer/auditor.
+- In `main`, prima di dispatchare, stampa lista confermata su stderr e, se in TUI interattiva (orchestrator), chiede conferma `Confermi modelli? [Y/n]` (timeout non bloccante in CLI).
+- Aggiorna `references/chorus.md` e `SKILL.md` route table.
+
+**Tasks:**
+- [x] Aggiungere `chorus run` subcommand e wiring a `run_chorus` standalone
+- [x] Conferma interattiva lista modelli (print + optional prompt quando in orchestrator)
+- [x] Test: `chorus run` produce report advisory senza designer, `--chorus-models` filtra
+- [ ] Commit & push
+
+**Done when:** `chorus run` standalone produce `.book-forge/chorus/<scope>/<ts>/` senza designer; lista modelli confermata stampata; suite green.
+
+### M36: Design con contesto chorus + chiusura docs ✅
+
+**Status: done — 2026-08-23**
+
+**Depends on:** M35
+
+**Why:** Oggi il designer non vede i findings del chorus (stesso envelope di prima). Per sfruttare davvero il worldbuilding/bestseller/coerenza, il secondo `design` dovrebbe poter ingerire il report del chorus. Serve un flag opt-in che inietti il report nel task capsule, plus docs e test dedicati.
+
+**Approach:**
+- Nuovo flag `design ... --with-chorus-context` (opt-in) — se presente e esiste un chorus precedente per lo scope, inietta `chorus_report` (findings + suggestions) nel `task_capsule` del designer.
+- Aggiorna `references/design.md` per menzionare il default-on chorus e il flag `--with-chorus-context`.
+- Aggiunge `tests/test_chorus.py` con mock che verifica: `chorus run` standalone, `--no-chorus` skip, `--with-chorus-context` inietta report, `chorus synthesize` deduplica.
+
+**Tasks:**
+- [x] Aggiungere `--with-chorus-context` a `design` e iniezione nel task capsule
+- [x] Aggiornare `references/design.md` + `SKILL.md`
+- [x] Creare `tests/test_chorus.py` (mock, no LLM)
+- [ ] Commit & push
+
+**Done when:** `design --with-chorus-context` inietta il report del chorus nel designer; docs aggiornati; `test_chorus.py` green; suite 85+ passed.
+
+
 ## Out of scope
 
 - Graphify or semantic graph retrieval in the v1 execution path.

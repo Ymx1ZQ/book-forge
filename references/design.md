@@ -42,3 +42,7 @@ break — fix at the source, never auto-rewrap.
 
 The model, variants, maximum steps, and provider are project-pinned. Do not
 forward user-supplied model or variant overrides.
+
+## Chorus (default-on)
+
+Every `design` runs the chorus ensemble before the designer unless `--no-chorus` is passed. The chorus uses the same envelope (full canon + worldbuilding + brief) and prints the confirmed model list. Override with `--chorus-models <csv>`. To make the designer see the latest chorus report, add `--with-chorus-context` (opt-in) — it injects `chorus_report` into the task capsule. For a standalone advisory pass without designing, use `chorus run [universe|book --book ID]`.
