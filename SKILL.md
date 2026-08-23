@@ -24,6 +24,7 @@ reference before acting:
 | `pause`, `resume`, `status` | `references/lifecycle.md` |
 | `audit` | `references/audit.md` |
 | `translate` | `references/translate.md` |
+| `chorus` | `references/chorus.md` |
 | `export` | `references/export.md` |
 
 For a multi-command request, finish and checkpoint one command before loading

@@ -43,6 +43,20 @@ class DesignProvider:
 
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
+        if role.startswith("advisor-") or role == "chorus-synthesizer":
+            # Chorus advisory — return empty findings for deterministic tests.
+            variant = "high"
+            return {
+                "text": json.dumps({"findings": [], "suggestions": []}),
+                "provider": "openrouter",
+                "model": MODEL,
+                "variant": variant,
+                "session_id": f"ses-{len(self.calls)}",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.001,
+                "latency_ms": 5,
+                "finish": "stop",
+            }
         value = self.proposal if role == "designer" else self.audit
         variant = ROLE_VARIANTS[role]
         return {
@@ -65,6 +79,11 @@ class UniverseDesignTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "world"
         self.bf.init_project(self.project, "World")
+        # Disable chorus for deterministic design-audit tests (M33).
+        import json
+        cfg = json.loads((self.project / "book-forge.yaml").read_text())
+        cfg["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
 
     def test_schedules_two_bounded_roles_and_promotes_clean_design(self):
         tasks = self.bf.schedule_universe_design(self.project, guided_answers={"tone": "hopeful"})

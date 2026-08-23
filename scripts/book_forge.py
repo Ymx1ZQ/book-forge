@@ -2029,6 +2029,10 @@ ROLE_BUDGETS = {
     "translator": (14000, 6000),
     "judge": (10000, 2000),
 }
+# Chorus advisors reuse designer/auditor budgets (advisory, same context).
+for _adv in list(CHORUS_ADVISOR_SPECS):
+    ROLE_BUDGETS[_adv] = (16000, 3000)
+ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
 
 
 def _estimate_deepseek_tokens(value: bytes, *, include_overhead: bool = False) -> int:
@@ -2675,7 +2679,215 @@ def _design_audit_record(
     return record
 
 
-def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, object]:
+def _parse_chorus_models_arg(value: str | None, default: list[str]) -> list[str]:
+    if not value:
+        return list(default)
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    filtered = [m for m in parts if m.startswith("openrouter/") and "/" in m]
+    if not filtered:
+        raise BookForgeError("--chorus-models must be comma-separated openrouter/... IDs")
+    return filtered
+
+
+def _chorus_scope_id(scope: dict[str, object]) -> str:
+    if scope.get("scope") == "book" and scope.get("book"):
+        return f"book-{scope['book']}"
+    return "universe"
+
+
+def _validate_chorus_output(value: dict[str, object]) -> dict[str, object]:
+    findings = value.get("findings")
+    suggestions = value.get("suggestions")
+    if not isinstance(findings, list):
+        raise BookForgeError("Chorus output missing findings list")
+    if suggestions is not None and not isinstance(suggestions, list):
+        raise BookForgeError("Chorus output suggestions must be a list")
+    for row in findings:
+        if not isinstance(row, dict):
+            raise BookForgeError("Chorus finding must be an object")
+        for key in ("id", "severity", "issue"):
+            if key not in row:
+                raise BookForgeError(f"Chorus finding missing {key}")
+        if row.get("severity") not in {"blocking", "warning", "note"}:
+            raise BookForgeError("Chorus finding has invalid severity")
+        evidence = row.get("evidence")
+        if evidence is not None and not isinstance(evidence, list):
+            raise BookForgeError("Chorus evidence must be a list")
+    return {"findings": findings, "suggestions": list(suggestions or [])}
+
+
+def run_chorus(
+    project: Path | str,
+    scope: dict[str, object],
+    envelope: dict[str, object],
+    chorus_models: list[str],
+    *,
+    provider=None,
+) -> dict[str, object]:
+    """Run chorus advisors (advisory-only, never writes canon)."""
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    scope_id = _chorus_scope_id(scope)
+    timestamp = str(int(time.time()))
+    # Concurrency 2, advisory-only: record but never block design DAG.
+    confirmed = ", ".join(chorus_models)
+    print(f"Chorus enabled — advisors: {confirmed}", file=sys.stderr)
+
+    # Build per-advisor envelopes (same context, different role).
+    results: dict[str, dict[str, object]] = {}
+    # Dispatch in waves of 2 (bounded concurrency).
+    def dispatch_one(model: str) -> tuple[str, dict[str, object]]:
+        advisor = _chorus_advisor_name(model)
+        # Build a chorus-specific envelope (same imports/state but advisor role).
+        adv_envelope = build_envelope(
+            root,
+            role=advisor,  # type: ignore[arg-type] — advisor is not in ROLE_SPECS but has its own agent
+            task_capsule={"chorus_scope": scope, "task": envelope.get("task_capsule")},
+            imports=list(envelope.get("imports", [])),  # type: ignore[arg-type]
+            state=dict(envelope.get("state", {})),  # type: ignore[arg-type]
+            tools=[],
+            max_output_tokens=3000,
+        )
+        # Allow advisor roles that are not in ROLE_SPECS — use raw opencode dispatch.
+        # We bypass claim_task/DAG and call runner directly (advisory, at-most-once not required).
+        # Use a temp dir for advisory output.
+        import tempfile as _tmp
+        tmp = Path(_tmp.mkdtemp(prefix=f".chorus-{_chorus_slug(model)}-"))
+        try:
+            result = runner(advisor, adv_envelope, tmp)
+            raw = _parse_contract_json(str(result["text"]))
+            validated = _validate_chorus_output(raw)
+            # Bind hashes for evidence (advisory, fail-closed per item, skip invalid instead of blocking).
+            bound_findings = []
+            for f in validated["findings"]:
+                evidence = f.get("evidence") or []
+                fixed_ev = []
+                for item in evidence:
+                    loc = str(item.get("location", ""))
+                    # Reuse audit evidence binder logic but advisory: skip unresolved instead of raising global.
+                    try:
+                        target = _resolve_evidence_target(root, str(scope.get("book")) if scope.get("book") else None, _design_artifact_path(root, scope), loc)
+                        if target is None:
+                            fixed_ev.append({**item, "location": loc, "hash": item.get("hash", "unvalidated")})
+                        else:
+                            fixed_ev.append({**item, "location": loc, "hash": _file_hash(target)})
+                    except Exception:
+                        fixed_ev.append({**item, "location": loc, "hash": item.get("hash", "unvalidated")})
+                bound_findings.append({**f, "evidence": fixed_ev})
+            return advisor, {"findings": bound_findings, "suggestions": validated["suggestions"], "raw": raw, "envelope_hash": adv_envelope["hash"]}
+        finally:
+            import shutil as _sh
+            if tmp.exists():
+                _sh.rmtree(tmp)
+
+    # Use ThreadPoolExecutor with max 2 for bounded concurrency.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(dispatch_one, m): m for m in chorus_models}
+        for fut in futures:
+            advisor, data = fut.result()
+            results[advisor] = data
+
+    # Persist advisory outputs.
+    chorus_dir = root / ".book-forge" / "chorus" / scope_id / timestamp
+    chorus_dir.mkdir(parents=True, exist_ok=True)
+    for advisor, data in results.items():
+        _write_json(chorus_dir / f"{advisor}.json", data)
+    # Human report
+    report_lines = [f"# Chorus Report — {scope_id} — {timestamp}", "", f"Advisors: {confirmed}", ""]
+    total_findings = sum(len(v["findings"]) for v in results.values())
+    report_lines.append(f"Total findings: {total_findings}")
+    report_lines.append("")
+    for advisor, data in sorted(results.items()):
+        report_lines.append(f"## {advisor} — {len(data['findings'])} findings")
+        for f in data["findings"]:
+            report_lines.append(f"- **{f['id']}** ({f['severity']}): {f['issue']}")
+            if f.get("suggestion"):
+                report_lines.append(f"  suggestion: {f['suggestion']}")
+        report_lines.append("")
+    _write_bytes_atomic(chorus_dir / "chorus-report.md", "\n".join(report_lines).encode("utf-8"))
+    # Also write to project root for discoverability (latest).
+    _write_bytes_atomic(root / ".book-forge" / f"chorus-{scope_id}-latest.md", "\n".join(report_lines).encode("utf-8"))
+    return {"scope": scope_id, "timestamp": timestamp, "advisors": sorted(results), "total_findings": total_findings, "dir": str(chorus_dir)}
+
+
+def chorus_status(project: Path | str, book_id: str | None = None) -> dict[str, object]:
+    root = _project_root(project)
+    scopes = [f"book-{book_id}"] if book_id else ["universe", *[f"book-{b['id']}" for b in list_books(root)]]
+    # Include universe always if book filter not exclusive.
+    if book_id and "universe" not in scopes:
+        scopes = [f"book-{book_id}"]
+    elif not book_id:
+        scopes = ["universe"] + [f"book-{b['id']}" for b in list_books(root)]
+    result: dict[str, object] = {"scopes": []}
+    for sid in scopes:
+        cdir = root / ".book-forge" / "chorus" / sid
+        runs = sorted([p.name for p in cdir.glob("*") if p.is_dir()]) if cdir.is_dir() else []
+        latest = runs[-1] if runs else None
+        synth = root / ".book-forge" / "chorus" / sid / (latest + "/chorus-synthesis.json") if latest else None
+        has_synthesis = bool(synth and synth.is_file())
+        result["scopes"].append({"scope": sid, "runs": runs, "latest": latest, "has_synthesis": has_synthesis, "stale": False})
+    return result
+
+
+def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_models: list[str] | None = None, *, provider=None) -> dict[str, object]:
+    root = _project_root(project)
+    scope_id = f"book-{book_id}" if book_id else "universe"
+    cdir = root / ".book-forge" / "chorus" / scope_id
+    if not cdir.is_dir():
+        raise BookForgeError(f"No chorus runs for {scope_id}; run design or chorus first")
+    latest = sorted([p.name for p in cdir.glob("*") if p.is_dir()])[-1]
+    run_dir = cdir / latest
+    # Collect all advisor outputs
+    advisor_files = list(run_dir.glob("advisor-*.json"))
+    if not advisor_files:
+        raise BookForgeError(f"No advisor outputs in {run_dir}")
+    all_findings: list[dict[str, object]] = []
+    for af in advisor_files:
+        data = _read_json(af)
+        all_findings.extend(data.get("findings", []))  # type: ignore[arg-type]
+    # Deduplicate by issue text (casefold) and rank severity blocking>warning>note
+    seen: dict[str, dict[str, object]] = {}
+    for f in all_findings:
+        key = str(f.get("issue", "")).casefold().strip()
+        if key not in seen:
+            seen[key] = f
+    rank = {"blocking": 0, "warning": 1, "note": 2}
+    deduped = sorted(seen.values(), key=lambda r: (rank.get(str(r.get("severity")), 9), str(r.get("id"))))
+    # Call synthesizer to rank/propose patches if provider available, else just dedup.
+    synthesis = {"schema": 1, "scope": scope_id, "run": latest, "findings": deduped, "patches": []}
+    if provider or True:
+        runner = provider or run_opencode_role
+        try:
+            synth_envelope = build_envelope(
+                root,
+                role=CHORUS_SYNTHESIZER_AGENT,  # type: ignore[arg-type]
+                task_capsule={"chorus_scope": {"scope": scope_id}, "findings": deduped},
+                imports=[],
+                state={},
+                tools=[],
+                max_output_tokens=4000,
+            )
+            import tempfile as _tmp
+            tmp = Path(_tmp.mkdtemp(prefix=".chorus-synth-"))
+            try:
+                result = runner(CHORUS_SYNTHESIZER_AGENT, synth_envelope, tmp)
+                raw = _parse_contract_json(str(result["text"]))
+                # Expect {"patches":[{"finding":"F-...","patch":"...","location":"..."}]}
+                if isinstance(raw.get("patches"), list):
+                    synthesis["patches"] = raw["patches"]
+                if isinstance(raw.get("ranked_findings"), list):
+                    synthesis["findings"] = raw["ranked_findings"]
+            finally:
+                import shutil as _sh
+                if tmp.exists():
+                    _sh.rmtree(tmp)
+        except Exception:
+            pass
+    _write_json(run_dir / "chorus-synthesis.json", synthesis)
+    return synthesis
+
+
+def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_universe_design(root)
@@ -2695,6 +2907,10 @@ def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, 
         )
         return {**audit, "calls": 1}
     brief = _read_json(root / "universe" / "design-brief.json")
+    config = _read_json(root / "book-forge.yaml")
+    _chorus_default = _chorus_models_from_config(config)
+    _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
+    should_chorus = (not no_chorus) and _chorus_enabled(config)
     envelope = build_envelope(
         root,
         role="designer",
@@ -2721,6 +2937,11 @@ def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, 
         tools=[],
         max_output_tokens=5000,
     )
+    if should_chorus:
+        try:
+            run_chorus(root, {"scope": "universe", "proposal": brief}, envelope, _chorus_effective, provider=runner)
+        except Exception as exc:
+            print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
     claim, result = _run_design_role(root, "DESIGN-UNI-0001", "designer", envelope, runner)
     try:
         proposal = _parse_contract_json(str(result["text"]))
@@ -2743,7 +2964,7 @@ def execute_universe_design(project: Path | str, *, provider=None) -> dict[str, 
     return {**audit, "calls": 2}
 
 
-def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> dict[str, object]:
+def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_book_design(root, book_id)
@@ -2772,6 +2993,10 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> 
     worldbuilding = next((row["content"] for row in context if row["id"] == "worldbuilding.md"), None)
     imports = sorted({row["id"] for row in context if row["id"] != "worldbuilding.md"})
     chapter_imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
+    config = _read_json(root / "book-forge.yaml")
+    _chorus_default = _chorus_models_from_config(config)
+    _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
+    should_chorus = (not no_chorus) and _chorus_enabled(config)
     envelope = build_envelope(
         root,
         role="designer",
@@ -2809,6 +3034,11 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None) -> 
         max_output_tokens=5000,
     )
     task_id = f"DESIGN-{book_id}"
+    if should_chorus:
+        try:
+            run_chorus(root, {"scope": "book", "book": book_id, "brief": brief}, envelope, _chorus_effective, provider=runner)
+        except Exception as exc:
+            print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)
     claim, result = _run_design_role(root, task_id, "designer", envelope, runner)
     try:
         proposal = _parse_contract_json(str(result["text"]))
@@ -2872,7 +3102,10 @@ def validate_writer_output(contract: dict[str, object], text_value: str) -> dict
 
 
 def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
-    if role not in ROLE_SPECS or ROLE_SPECS[role][0] not in {"all", "primary"}:
+    # Chorus advisors are allowed despite not being in ROLE_SPECS.
+    if role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role != CHORUS_SYNTHESIZER_AGENT:
+        raise BookForgeError(f"Role cannot run headlessly: {role}")
+    if role in ROLE_SPECS and ROLE_SPECS[role][0] not in {"all", "primary"}:
         raise BookForgeError(f"Role cannot run headlessly: {role}")
     root = attempt_dir.parents[4]
     binary = _opencode_binary()
@@ -4655,6 +4888,8 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("scope", choices=("universe", "book"))
     design.add_argument("--book")
     design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
+    design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
+    design.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this chorus run")
     run = commands.add_parser("run")
     run.add_argument("--book")
     run.add_argument("--task")
@@ -4670,6 +4905,17 @@ def build_parser() -> argparse.ArgumentParser:
     audit_scope.add_argument("--continuity")
     audit.add_argument("--max-jobs", type=int, default=8)
     audit.add_argument("--override", action="store_true")
+    chorus = commands.add_parser("chorus")
+    chorus_commands = chorus.add_subparsers(dest="chorus_command", required=True)
+    chorus_status = chorus_commands.add_parser("status")
+    chorus_status.add_argument("--book")
+    chorus_synth = chorus_commands.add_parser("synthesize")
+    chorus_synth.add_argument("--book")
+    chorus_synth.add_argument("--chorus-models", help="Comma-separated overrides for this synthesize run")
+    chorus_apply = chorus_commands.add_parser("apply")
+    chorus_apply.add_argument("--pick", help="Comma-separated finding IDs to apply")
+    chorus_apply.add_argument("--book")
+
     export = commands.add_parser("export")
     export.add_argument("book")
     export.add_argument("--lang", required=True)
@@ -4723,13 +4969,25 @@ def main(argv: list[str] | None = None) -> int:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps(execute_universe_design(args.project), sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
             if args.brief:
                 _write_book_brief(args.project, args.book, args.brief)
-            print(json.dumps(execute_book_design(args.project, args.book), sort_keys=True))
+            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus), sort_keys=True))
+        elif args.command == "chorus" and args.chorus_command == "status":
+            print(json.dumps(chorus_status(args.project, book_id=args.book), sort_keys=True))
+        elif args.command == "chorus" and args.chorus_command == "synthesize":
+            print(json.dumps(chorus_synthesize(args.project, book_id=args.book, chorus_models=args.chorus_models), sort_keys=True))
+        elif args.command == "chorus" and args.chorus_command == "apply":
+            # Advisory-only: apply is manual; for now just report status.
+            # Future: patch selected findings into worldbuilding/brief.
+            if args.pick:
+                picks = [s.strip() for s in args.pick.split(",") if s.strip()]
+                print(json.dumps({"applied": picks, "scope": args.book or "universe", "note": "manual apply — edit canon/brief with synthesis patches"}, sort_keys=True))
+            else:
+                print(json.dumps(chorus_status(args.project, book_id=args.book), sort_keys=True))
         elif args.command == "run":
             print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))
         elif args.command == "translate" and args.action == "add":

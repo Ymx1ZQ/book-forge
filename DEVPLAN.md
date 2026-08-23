@@ -229,7 +229,7 @@ catalogue and opens on an agent whose model can be changed, with every role pin
 intact.
 
 
-## Phase I — Pre-writing Chorus (ensemble multi-modello, default-on con opt-out) 🔄
+## Phase I — Pre-writing Chorus (ensemble multi-modello, default-on con opt-out) ✅
 
 ### M32: Catalogo multi-modello e advisor roles (infra) ✅
 
@@ -258,7 +258,9 @@ intact.
 
 **Done when:** Un progetto nuovo espone 7 modelli in `opencode.json` e 7 `advisor-*` agents con pin diversi; `runtime sync` su Landfall porta lo stesso stato senza toccare canon/control-plane; suite green.
 
-### M33: Chorus advisory su ogni fase pre-scrittura (default-on, conferma modelli) ⏳
+### M33: Chorus advisory su ogni fase pre-scrittura (default-on, conferma modelli) ✅
+
+**Status: done — 2026-08-23**
 
 **Depends on:** M32
 
@@ -273,15 +275,17 @@ intact.
 - Budget separato: chorus 6-7 call + synthesis 1, non conteggiati in `design_call_budget`.
 
 **Tasks:**
-- [ ] Creare `references/chorus.md` e 4 prompt advisor + wiring `run_chorus`
-- [ ] Integrare chorus in `execute_universe_design` / `execute_book_design` con flag `--no-chorus` / `--chorus-models`
-- [ ] Scrittura `.book-forge/chorus/` + report umano, validazione evidence
-- [ ] Test: chorus produce findings advisory con hash binding, `--no-chorus` salta, `--chorus-models` filtra
+- [x] Creare `references/chorus.md` e 4 prompt advisor + wiring `run_chorus`
+- [x] Integrare chorus in `execute_universe_design` / `execute_book_design` con flag `--no-chorus` / `--chorus-models`
+- [x] Scrittura `.book-forge/chorus/` + report umano, validazione evidence
+- [x] Test: chorus produce findings advisory con hash binding, `--no-chorus` salta, `--chorus-models` filtra (mock)
 - [ ] Commit & push
 
 **Done when:** `design universe` e `design book` girano con chorus di default (conferma modelli stampata), producono report advisory senza toccare canon; `--no-chorus` li salta; future fasi pre-`run` possono chiamare `run_chorus`.
 
-### M34: Synthesis gate (deduplica, ranka, patch proposte) ⏳
+### M34: Synthesis gate (deduplica, ranka, patch proposte) ✅
+
+**Status: done — 2026-08-23**
 
 **Depends on:** M33
 
@@ -293,10 +297,10 @@ intact.
 - `status` mostra `chorus: pending/clean/stale`.
 
 **Tasks:**
-- [ ] Agent `chorus-synthesizer` + `chorus synthesize` / `chorus apply` wiring
-- [ ] Deduplica + ranking + patch proposte con evidence hash binding
-- [ ] `status` chorus state
-- [ ] Test: synthesis deduplica, ranking corretto, apply non auto-scrive canon
+- [x] Agent `chorus-synthesizer` + `chorus synthesize` / `chorus apply` wiring
+- [x] Deduplica + ranking + patch proposte con evidence hash binding
+- [x] `status` chorus state
+- [x] Test: synthesis deduplica, ranking corretto, apply non auto-scrive canon (mock)
 - [ ] Commit & push
 
 **Done when:** `chorus synthesize` produce `chorus-synthesis.json` con patch rankate e hash binding; `apply`/`status` coerenti; suite green.

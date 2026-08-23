@@ -44,6 +44,18 @@ class DesignProvider:
 
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
+        if role.startswith("advisor-") or role == "chorus-synthesizer":
+            return {
+                "text": json.dumps({"findings": [], "suggestions": []}),
+                "provider": "openrouter",
+                "model": MODEL,
+                "variant": "high",
+                "session_id": f"ses-{len(self.calls)}",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.001,
+                "latency_ms": 5,
+                "finish": "stop",
+            }
         payload = self.value if role == "designer" else self.audit
         return {
             "text": json.dumps(payload),
@@ -65,6 +77,11 @@ class BookDesignTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "world"
         self.bf.init_project(self.project, "World")
+        # Disable chorus for deterministic tests.
+        import json as _json
+        _cfg = _json.loads((self.project / "book-forge.yaml").read_text())
+        _cfg["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(_json.dumps(_cfg, indent=2, sort_keys=True) + "\n")
 
     def brief(self, book):
         path = self.project / f"books/{book}/book-brief.json"
