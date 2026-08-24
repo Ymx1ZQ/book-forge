@@ -1823,6 +1823,14 @@ def resume_run(
         failure = _last_validation_failure(plan, str(task["id"]))
         if failure is not None:
             retryable_blocked[str(task["id"])] = failure
+            continue
+        # A failed_length task is blocked but retryable: its last attempt is
+        # marked failed_length, so surface that attempt for the explicit retry.
+        attempts = [row for row in plan["attempts"] if row.get("task") == task["id"]]
+        for attempt in reversed(attempts):
+            if attempt["state"] == "failed_length":
+                retryable_blocked[str(task["id"])] = attempt
+                break
     blocked_choices = blocked_resolutions or {}
     if set(retryable_blocked) != set(blocked_choices):
         raise BookForgeError("Every validation-blocked task requires an explicit retry resolution")
@@ -2472,6 +2480,12 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
         task.pop("attempt", None)
         _save_plan(root, plan)
         render_plan(root)
+        control = _control(root)
+        if control.get("active_run"):
+            run_path = _run_path(root, str(control["active_run"]))
+            run = _read_json(run_path)
+            run["state"] = "blocked"
+            _write_json(run_path, run)
         raise BookForgeError(f"Design {task_id} failed_length after {max_retries+1} attempts")
     return last_claim, last_result  # type: ignore[return-value]
 

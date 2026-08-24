@@ -93,6 +93,30 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in self.bf.ready_frontier(self.project)], ["TASK-A"])
         self.assertEqual(self.bf.status_project(self.project)["telemetry"]["resolutions"], {claim["attempt"]: "retry"})
 
+    def test_failed_length_blocked_task_requires_explicit_retry_resolution(self):
+        claim = self.bf.claim_task(self.project, "TASK-A", request_hash="a" * 64)
+        plan = self.bf._load_plan(self.project)
+        attempt = self.bf._attempt(plan, claim["attempt"])
+        attempt["state"] = "failed_length"
+        attempt["failure"] = "finish_reason==length after retries"
+        task = next(row for row in plan["tasks"] if row["id"] == "TASK-A")
+        task["state"] = "blocked"
+        task.pop("attempt", None)
+        self.bf._save_plan(self.project, plan)
+        self.bf.render_plan(self.project)
+        self.assertEqual(self.bf.status_project(self.project)["tasks"]["blocked"], 1)
+
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.resume_run(self.project)
+        resumed = self.bf.resume_run(self.project, blocked_resolutions={"TASK-A": "retry"})
+        self.assertEqual(resumed["state"], "running")
+        plan = self.bf._load_plan(self.project)
+        task = next(row for row in plan["tasks"] if row["id"] == "TASK-A")
+        self.assertEqual(task["state"], "pending")
+        attempt = self.bf._attempt(plan, claim["attempt"])
+        self.assertEqual(attempt["state"], "orphaned")
+        self.assertEqual(attempt["resolution"], "retry")
+
     def test_run_selector_is_validated_instead_of_silently_ignored(self):
         claim = self.bf.claim_task(self.project, "TASK-A", request_hash="a" * 64)
         active = self.bf.status_project(self.project)["run"]["id"]
