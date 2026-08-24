@@ -205,6 +205,33 @@ class BookDesignTests(unittest.TestCase):
         self.assertEqual(evidence[1]["hash"], self.bf._file_hash(chapter))
         self.assertEqual(evidence[2]["hash"], self.bf._file_hash(reader_state))
 
+    def test_binds_book_scoped_entry_exit_state_evidence_to_reader_state(self):
+        book = self.bf.add_book(self.project, "BookScopedState")["id"]
+        self.brief(book)
+        provider = DesignProvider(
+            proposal(),
+            audit={"findings": [{
+                "id": "F-0001",
+                "severity": "note",
+                "issue": "Seeded note.",
+                "evidence": [
+                    {"location": f"{book}#entry_state#cradle"},
+                    {"location": f"{book}#exit_boundary#book2_hooks"},
+                    {"location": f"{book}#proposal/turns/TURN-0001"},
+                ],
+                "repair_scope": [book],
+            }]},
+        )
+        result = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        evidence = audit["findings"][0]["evidence"]
+        reader_state = self.project / f"books/{book}/reader-state.md"
+        design_md = self.project / f"books/{book}/design.md"
+        self.assertEqual(evidence[0]["hash"], self.bf._file_hash(reader_state))
+        self.assertEqual(evidence[1]["hash"], self.bf._file_hash(reader_state))
+        self.assertEqual(evidence[2]["hash"], self.bf._file_hash(design_md))
+
     def test_foreign_book_scoped_evidence_still_fails_closed(self):
         book = self.bf.add_book(self.project, "Closed")["id"]
         self.brief(book)

@@ -73,7 +73,7 @@ VARIANT_EFFORTS = {"low": "low", "high": "high", "max": "max"}
 DEFAULT_EFFORT = "high"
 ROLE_SPECS = {
     "book-forge-orchestrator": ("primary", "max", 30),
-    "designer": ("all", "max", 10),
+    "designer": ("all", "high", 10),
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
@@ -2827,6 +2827,9 @@ def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: P
                 return path
         if suffix.startswith("proposal"):
             return design_artifact if design_artifact.is_file() else None
+        if re.match(r"(entry_state|exit_boundary)", suffix):
+            path = root / "books" / book_id / "reader-state.md"
+            return path if path.is_file() else None
         return None
     for match in _EVIDENCE_ROW_RE.finditer(location):
         prefix, row_id = match.group(1), match.group(0)
