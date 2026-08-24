@@ -2540,8 +2540,14 @@ def _dedupe_rows(rows: list[object]) -> list[object]:
 
 def _merge_design_chunks(merged: dict[str, object], parsed: dict[str, object]) -> dict[str, object]:
     """Merge one parsed chunk into the proposal. List keys concatenate with
-    stable-id dedupe (last wins); dict keys shallow-update; scalars last wins."""
+    stable-id dedupe (last wins); dict keys shallow-update; scalars last wins.
+    A "tail" object ({themes, style, continuity_material, ...}) is unwrapped
+    to the top level."""
     for key, value in parsed.items():
+        if key == "tail" and isinstance(value, dict):
+            for inner_key, inner_value in value.items():
+                merged = _merge_design_chunks(merged, {inner_key: inner_value})
+            continue
         if isinstance(value, list):
             if isinstance(merged.get(key), list):
                 merged[key] = _dedupe_rows(merged[key] + value)

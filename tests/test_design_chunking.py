@@ -203,6 +203,16 @@ class DesignChunkingTests(unittest.TestCase):
         self.assertNotIn("_contract", merged)
         self.assertNotIn("rows", merged)
 
+    def test_merge_unwraps_tail_object(self):
+        merged = bf._merge_design_chunks(
+            {},
+            {"tail": {"themes": ["t"], "style": {"tense": "past"}, "continuity_material": {"CNT-0001": ["CHR-0001"]}}},
+        )
+        self.assertEqual(merged["themes"], ["t"])
+        self.assertEqual(merged["style"], {"tense": "past"})
+        self.assertEqual(merged["continuity_material"], {"CNT-0001": ["CHR-0001"]})
+        self.assertNotIn("tail", merged)
+
     def test_designer_capsule_m4_tiers(self):
         # The universe designer capsule must carry the M4 tier contract.
         src = pathlib.Path(bf.__file__).read_text()
