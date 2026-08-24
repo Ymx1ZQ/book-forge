@@ -104,6 +104,10 @@ class LifecycleTests(unittest.TestCase):
         task.pop("attempt", None)
         self.bf._save_plan(self.project, plan)
         self.bf.render_plan(self.project)
+        run_path = self.bf._run_path(self.project, str(self.bf._control(self.project)["active_run"]))
+        run = self.bf._read_json(run_path)
+        run["state"] = "blocked"
+        self.bf._write_json(run_path, run)
         self.assertEqual(self.bf.status_project(self.project)["tasks"]["blocked"], 1)
 
         with self.assertRaises(self.bf.BookForgeError):
