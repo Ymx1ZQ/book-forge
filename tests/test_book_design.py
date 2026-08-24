@@ -218,6 +218,9 @@ class BookDesignTests(unittest.TestCase):
                     {"location": f"{book}#entry_state#cradle"},
                     {"location": f"{book}#exit_boundary#book2_hooks"},
                     {"location": f"{book}#proposal/turns/TURN-0001"},
+                    {"location": f"{book}#CH-0001"},
+                    {"location": "design_scope.premise — Silent Mind description"},
+                    {"location": "BEAT-0003 (design_scope.proposal.chapters.CH-0001.beats.BEAT-0001.cause, unhashed in envelope)"},
                 ],
                 "repair_scope": [book],
             }]},
@@ -228,9 +231,13 @@ class BookDesignTests(unittest.TestCase):
         evidence = audit["findings"][0]["evidence"]
         reader_state = self.project / f"books/{book}/reader-state.md"
         design_md = self.project / f"books/{book}/design.md"
+        chapter = self.project / f"books/{book}/chapters/CH-0001.json"
         self.assertEqual(evidence[0]["hash"], self.bf._file_hash(reader_state))
         self.assertEqual(evidence[1]["hash"], self.bf._file_hash(reader_state))
         self.assertEqual(evidence[2]["hash"], self.bf._file_hash(design_md))
+        self.assertEqual(evidence[3]["hash"], self.bf._file_hash(chapter))
+        self.assertEqual(evidence[4]["hash"], self.bf._file_hash(design_md))
+        self.assertEqual(evidence[5]["hash"], self.bf._file_hash(chapter))
 
     def test_foreign_book_scoped_evidence_still_fails_closed(self):
         book = self.bf.add_book(self.project, "Closed")["id"]

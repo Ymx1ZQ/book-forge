@@ -176,6 +176,33 @@ class DesignChunkingTests(unittest.TestCase):
         with self.assertRaises(bf.BookForgeError):
             bf._parse_chunked_contract("no json here")
 
+    def test_parse_chunked_contract_labeled_form_with_fences(self):
+        # Model wraps each chunk in a markdown fence with prose between, and
+        # uses the labeled form {"_contract": "kernel", "rows": [...]}.
+        text = (
+            "I'll produce the design in chunks.\n\n"
+            "### Chunk 1: KERNEL\n\n```json\n"
+            + json.dumps({"_contract": "kernel", "rows": [{"id": "LAW-0001", "summary": "a"}]})
+            + "\n```\n\n"
+            "### Chunk 2: CHARACTERS\n\n```json\n"
+            + json.dumps({"_contract": "characters", "rows": [{"id": "CHR-0001", "summary": "d"}]})
+            + "\n```\n\n"
+            "### Chunk 2b: CHARACTERS (L3+L4)\n\n```json\n"
+            + json.dumps({"_contract": "characters", "rows": [{"id": "CHR-0002", "summary": "e"}]})
+            + "\n```\n\n"
+            "### Chunk 3: TAIL\n\n```json\n"
+            + json.dumps({"themes": ["t"], "style": {"tense": "past"}})
+            + "\n```\n"
+        )
+        merged = bf._parse_chunked_contract(text)
+        self.assertEqual(len(merged["kernel"]), 1)
+        self.assertEqual(merged["kernel"][0]["id"], "LAW-0001")
+        self.assertEqual(len(merged["characters"]), 2)
+        self.assertEqual(merged["characters"][1]["id"], "CHR-0002")
+        self.assertEqual(merged["style"], {"tense": "past"})
+        self.assertNotIn("_contract", merged)
+        self.assertNotIn("rows", merged)
+
     def test_designer_capsule_m4_tiers(self):
         # The universe designer capsule must carry the M4 tier contract.
         src = pathlib.Path(bf.__file__).read_text()

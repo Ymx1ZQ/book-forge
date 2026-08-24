@@ -2828,7 +2828,26 @@ def _book_proposal_from_artifacts(root: Path, book_id: str) -> dict[str, object]
     }
 
 
+def _normalize_evidence_location(location: str) -> str:
+    """Strip prose annotations from auditor-cited evidence locations.
+
+    The canon-auditor often appends free prose after a stable location:
+    `design_scope.premise — Silent Mind description`, or wraps the location
+    in a parenthetical: `BEAT-0003 (design_scope.proposal.chapters[0].beats[2],
+    unhashed in envelope)`. Normalize to the bare location before matching so
+    binding fails closed only on genuinely unresolvable locations.
+    """
+    value = str(location).strip()
+    parenthetical = re.search(r"\(([^()]*(?:design_scope|proposal|chapters|entry_state|exit_boundary|#)[^()]*)\)", value)
+    if parenthetical:
+        value = parenthetical.group(1).strip()
+    value = re.split(r"\s*[—–]\s*", value, maxsplit=1)[0].strip()
+    value = re.sub(r"\s*\([^()]*\)\s*$", "", value).strip()
+    return value
+
+
 def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: Path, location: str) -> Path | None:
+    location = _normalize_evidence_location(location)
     book_scoped = re.match(r"^BOOK-\d{4}#(.+)$", location)
     if book_scoped:
         if not book_id or location.split("#", 1)[0] != book_id:
@@ -2837,6 +2856,10 @@ def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: P
         chapter = re.match(r"^proposal/chapters/(CH-\d{4})(?:/|$)", suffix)
         if chapter:
             path = root / "books" / book_id / "chapters" / f"{chapter.group(1)}.json"
+            if path.is_file():
+                return path
+        if re.fullmatch(r"CH-\d{4}", suffix):
+            path = root / "books" / book_id / "chapters" / f"{suffix}.json"
             if path.is_file():
                 return path
         if suffix.startswith("proposal"):
@@ -2877,7 +2900,7 @@ def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: P
         if re.match(r"(entry_state|exit_boundary)", suffix):
             path = root / "books" / book_id / "reader-state.md"
             return path if path.is_file() else None
-        if re.match(r"proposal", suffix):
+        if re.match(r"(premise|arc|proposal)", suffix):
             return design_artifact if design_artifact.is_file() else None
         return None
     block_match = re.fullmatch(r"[A-Z][A-Z0-9]*-\d{4}#[a-z0-9][a-z0-9-]*", location)
@@ -3522,20 +3545,26 @@ def _parse_chunked_contract(text_value: str) -> dict[str, object]:
     found = 0
     length = len(stripped)
     while pos < length:
-        while pos < length and stripped[pos] in " \t\r\n,;":
-            pos += 1
-        if pos >= length or stripped[pos] != "{":
+        pos = stripped.find("{", pos)
+        if pos < 0:
             break
         try:
             value, end = decoder.raw_decode(stripped, pos)
-        except json.JSONDecodeError as exc:
-            raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
+        except json.JSONDecodeError:
+            # Not a JSON object here (e.g. prose brace); keep scanning.
+            pos += 1
+            continue
         if not isinstance(value, dict):
             raise BookForgeError("Model output contract must be an object")
         found += 1
         chunk_size = len(json.dumps(value, ensure_ascii=False))
         if chunk_size > DESIGN_CHUNK_MAX_BYTES:
             raise BookForgeError(f"Design chunk exceeds {DESIGN_CHUNK_MAX_BYTES} bytes: {chunk_size}")
+        # Accept both direct category keys and the labeled form
+        # {"_contract": "kernel", "rows": [...]}.
+        contract = value.get("_contract")
+        if isinstance(contract, str) and "rows" in value and contract not in value:
+            value = {contract: value["rows"]}
         for key, chunk_value in value.items():
             if key in merged and isinstance(merged[key], list) and isinstance(chunk_value, list):
                 merged[key] = merged[key] + chunk_value
