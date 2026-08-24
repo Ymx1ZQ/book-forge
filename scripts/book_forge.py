@@ -3493,7 +3493,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         "required_output": {
                 "kernel": "LAW-#### rows: {id, name, summary}",
                 "eras": "ERA-#### rows: {id, name, summary}",
-                "events": "EVT-#### rows: {id, name, summary, era, order}",
+                "events": "EVT-#### rows: {id, name, summary, era, order} — era must be the stable ERA-#### id of an era you emitted",
                 "places": "PLC-#### rows: {id, name, summary, sensory, tier} — tiered: L1 3-5, L2 5-8, L3 6-12, total >= 14 places",
                 "factions": "FAC-#### rows: {id, name, summary}",
                 "characters": "CHR-#### rows: {id, name, tier, summary, voice, appearance, past, want, need, flaw, wound, arc, secret} — tiered cast (M4): L1 1-3 protagonists 250-350 words each with want/need/flaw/wound/arc/voice/secret, L2 4-7 secondaries 150-200 words, L3 6-12 recurring 60-90 words, L4 10-20 walk-ons one line (<20 words), total named characters >= 22; emit characters in at most two sub-chunks (L1+L2, then L3+L4) if needed to stay <15KB each",

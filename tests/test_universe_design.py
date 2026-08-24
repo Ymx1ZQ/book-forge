@@ -264,7 +264,8 @@ class UniverseDesignTests(unittest.TestCase):
         self.assertIn("tiered cast (M4)", required["characters"])
         self.assertIn("total named characters >= 22", required["characters"])
         self.assertIn("tier", required["places"])
-        self.assertEqual(required["events"], "EVT-#### rows: {id, name, summary, era, order}")
+        self.assertIn("EVT-#### rows: {id, name, summary, era, order}", required["events"])
+        self.assertIn("stable ERA-#### id", required["events"])
 
     def test_promotes_detail_blocks_from_canon_rows(self):
         proposal = clean_proposal()
