@@ -43,9 +43,9 @@ break — fix at the source, never auto-rewrap.
 The model, variants, maximum steps, and provider are project-pinned. Do not
 forward user-supplied model or variant overrides.
 
-## Chorus (default-on)
+## Chorus (default-on, pre + post)
 
-Every `design` runs the chorus ensemble before the designer unless `--no-chorus` is passed. The chorus uses the same envelope (full canon + worldbuilding + brief) and prints the confirmed model list. Override with `--chorus-models <csv>`. To make the designer see the latest chorus report, add `--with-chorus-context` (opt-in) — it injects `chorus_report` into the task capsule. For a standalone advisory pass without designing, use `chorus run [universe|book --book ID]`.
+Every `design` runs the chorus ensemble **twice** unless opted out: **pre-design** (before the designer, same full canon + worldbuilding + brief envelope, advisory-only) and **post-design** (after the auditor, on the designer product — kernel/places/factions/characters/themes for universe; premise/arc/chapters per-chapter beats/POV for book — at per-chapter granularity). Post-design blocks on `blocking|warning` (advisory for `note`). Prints the confirmed model list per pass. Override with `--chorus-models <csv>`; skip pre+post with `--no-chorus`, skip only post with `--no-post-chorus`. To make the designer see the latest chorus report, add `--with-chorus-context` (opt-in). For a standalone pass without designing, use `chorus run [universe|book --book ID]` (pre) or `chorus run --post-design` (post on last product).
 
 ## Per-chunk generation (M1: <15KB per chunk, 41KB truncation fix)
 
@@ -63,7 +63,7 @@ the helper retries up to 2 times, then marks the attempt `failed_length` (not `o
 
 The designer must produce a dense, non-lazy canon:
 
-- **Characters tiered**: L1 1–3 protagonists 250–350w each (must include want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w, L3 6–12 ricorrenti 60–90w, L4 10–20 comparse 1 line (<20w). Total named characters >=22 for 80k (scaled linearly with `length_notes`), e.g. 40k→11, 120k→33.
+- **Characters tiered**: L1 1–3 protagonists 250–350w each (combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space, word-boundary regex as in `validate.py`; must include want/need/flaw/wound/arc/voice/secret), L2 4–7 secondaries 150–200w combined same count, L3 6–12 ricorrenti 60–90w combined, L4 10–20 comparse 1 line (<20w combined). Total named characters >=22 for 80k (scaled linearly with `length_notes`), e.g. 40k→11, 120k→33.
 - **Places tiered**: L1 3–5, L2 5–8, L3 6–12, total >=14.
 - **Validation**: `scripts/validate.py` asserts each tier count and word range, checks total thresholds, and runs graph connectivity (every character/place must be reachable via `continuity_material` or textual reference; otherwise `graph.disconnected`).
 - **Chunking**: Characters are split into 2 sub-chunks (L1+L2 and L3+L4) each <15KB, validated by `split_proposal_into_chunks` and `split_characters_tiered`.

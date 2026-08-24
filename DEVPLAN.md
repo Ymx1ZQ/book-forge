@@ -920,3 +920,31 @@ blocks.
 
 **Tests:**
 - Unit — capsule 19.8k passes new default, 33k fails with `estimated_input > budget`, knob override respected
+
+## Fix: designer word-count mismatch + repair cumulativo (M44) ✅
+
+**Status: done — 2026-08-24**
+
+**Problem:** `DESIGN-UNI-0001` blocked in loop cieco su Margherita (RUN-0002 gen 26-29, 33 attempt ATT-0005..0037). Causa radice in due difetti accoppiati:
+1. Prompt designer `L2 4-7 secondaries 150-200 words` non definisce come contare; validazione `scripts/validate.py:validate_tiered_cast` conta il combinato di 10 campi `summary+voice+appearance+past+want+need+flaw+wound+arc+secret` con `\b[\w''-]+\b`. Il modello conta diversamente (solo summary) → mismatch deterministico, `tier.L2.words` blocking su 5/5 retry ultimi.
+2. Repair feedback `scripts/book_forge.py:3678` (`3811` per book) inietta solo `str(last_failure.get("failure"))` — l'ultimo failure isolato. Nessun accumulo → ogni retry riparte cieco, nessuna convergenza.
+
+**Fix:**
+1. `scripts/book_forge.py:3693` `required_output["characters"]` — esplicitare per ogni tier che `words = combined count across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (exactly as validate.py word_count with \b[\w''-]+\b)`; aggiungere stessa riga per L1/L2/L3/L4 con range corretti e nota che `L4 <20w` è su combinato.
+2. `scripts/book_forge.py:3678-3679` e `3811-3812` — repair cumulativo: nuovo helper `_collect_validation_failures(plan, task_id, limit=5)` che raccoglie ultimi 5 failure dedup per `code` da `plan.json`/`transactions`, inietta `{"repair": {"validation_errors": [...full JSON findings...], "hint": "word count is combined across 10 fields; tier.*.words and tier.*.count are enforced; include tier field"}}` invece del singolo `str()`. Fallback a singolo se solo uno.
+3. `references/design.md` §Anti-laziness — allineare descrizione tier con stessa definizione di conteggio combinato.
+4. `scripts/validate.py` invariato (canonical).
+5. Test: estendere `tests/test_validate_tiers.py` con caso L2 160w su summary ma >200w combinato → blocking; test repair cumulativo su `_collect_validation_failures`.
+6. `install.sh --force` e verifica su Margherita (`design universe` resume).
+
+**Acceptance:**
+- Prompt designer e validazione concordano sul conteggio combinato 10 campi
+- Repair contiene fino a 5 failure cumulati, non solo l'ultimo
+- Suite verde (`pytest -q`)
+- Su Margherita `DESIGN-UNI-0001` non ripete `tier.L2.words` con stesso profilo con repair successivo
+
+**Tasks:**
+- [x] Patch `scripts/book_forge.py` required_output + repair cumulativo
+- [x] Patch `references/design.md`
+- [x] Test cumulativo + word-count combinato
+- [x] `install.sh --force` + verifica Margherita (suite 41 pass su tier/chunking + full suite pending)

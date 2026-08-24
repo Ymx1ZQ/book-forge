@@ -229,9 +229,19 @@ def _sha256_bytes(value: bytes) -> str:
 
 
 def _read_json(path: Path) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        # Option A: YAML-tolerant fallback for outline.yaml (converted to real YAML). pyyaml available.
+        try:
+            import yaml  # type: ignore
+            value = yaml.safe_load(text)
+        except Exception as exc:
+            raise BookForgeError(f"Invalid project file {path}: {exc}") from exc
+        if value is None:
+            value = {}
+    except OSError as exc:
         raise BookForgeError(f"Invalid project file {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise BookForgeError(f"Expected an object in {path}")
@@ -338,6 +348,76 @@ def _chorus_enabled(config: dict[str, object]) -> bool:
     if isinstance(chorus, dict) and "enabled" in chorus:
         return bool(chorus["enabled"])
     return True
+
+
+def _chorus_post_enabled(config: dict[str, object]) -> bool:
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict) and "post_enabled" in chorus:
+        return bool(chorus["post_enabled"])
+    return _chorus_enabled(config)
+
+
+def _prompt_chorus_models(default: list[str] | None = None) -> list[str]:
+    """Prompt TTY for chorus model selection at setup start (M1). Returns validated list."""
+    default = list(default or CHORUS_DEFAULT_MODELS)
+    if not __import__("sys").stdin.isatty():
+        return default
+    import sys as _sys
+    print("Select chorus models for this project:", file=_sys.stderr)
+    for i, m in enumerate(CHORUS_DEFAULT_MODELS, 1):
+        marker = " [default]" if m in default else ""
+        print(f"  {i}. {m}{marker}", file=_sys.stderr)
+    print("Enter numbers comma-separated (e.g. 1,3,5), 'all' (default), or 'none' to disable.", file=_sys.stderr)
+    print("Choice [all]: ", file=_sys.stderr, end="", flush=True)
+    try:
+        ans = input().strip().lower()
+    except EOFError:
+        return default
+    if not ans or ans == "all":
+        return list(CHORUS_DEFAULT_MODELS)
+    if ans == "none":
+        return []
+    selected: list[str] = []
+    for part in ans.split(","):
+        part = part.strip()
+        if part.isdigit() and 1 <= int(part) <= len(CHORUS_DEFAULT_MODELS):
+            selected.append(CHORUS_DEFAULT_MODELS[int(part)-1])
+        elif part in CHORUS_DEFAULT_MODELS:
+            if part not in selected:
+                selected.append(part)
+        elif part:
+            # allow slug without prefix?
+            for full in CHORUS_DEFAULT_MODELS:
+                if full.endswith(part) and full not in selected:
+                    selected.append(full)
+                    break
+    return selected or default
+
+
+def _parse_chorus_csv(csv: str | None) -> list[str] | None:
+    if csv is None:
+        return None
+    csv = csv.strip()
+    low = csv.lower()
+    if low == "none":
+        return []
+    if low == "all":
+        return list(CHORUS_DEFAULT_MODELS)
+    if not csv:
+        return []
+    parts = [s.strip() for s in csv.split(",") if s.strip()]
+    # Validate openrouter/... shape
+    out = []
+    for m in parts:
+        if m.startswith("openrouter/") and "/" in m:
+            out.append(m)
+        else:
+            # try to match by slug
+            for full in CHORUS_DEFAULT_MODELS:
+                if m == full or m == full.split("/",1)[1] or m == _chorus_slug(full):
+                    out.append(full)
+                    break
+    return out
 
 
 def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
@@ -506,7 +586,8 @@ def _validate_existing(project: Path, title: str, source_language: str) -> dict[
     return {"created": False, "project": str(project)}
 
 
-def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool) -> None:
+def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool, chorus_models: list[str] | None = None) -> None:
+    _cm = list(chorus_models) if chorus_models is not None else list(CHORUS_DEFAULT_MODELS)
     config = {
         "schema": SCHEMA_VERSION,
         "title": title,
@@ -516,11 +597,11 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "model": MODEL,
         "context": {"writer_max_input_tokens": 12000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
         "audit": {"input_budget": 32000},
-        "chorus": {"enabled": True, "models": list(CHORUS_DEFAULT_MODELS), "synthesizer": CHORUS_SYNTHESIZER},
+        "chorus": {"enabled": True, "post_enabled": True, "models": _cm, "synthesizer": CHORUS_SYNTHESIZER},
     }
     _write_json(stage / "book-forge.yaml", config)
-    _write_json(stage / "opencode.json", _opencode_config(list(CHORUS_DEFAULT_MODELS)))
-    _write_agents(stage, list(CHORUS_DEFAULT_MODELS))
+    _write_json(stage / "opencode.json", _opencode_config(_cm))
+    _write_agents(stage, _cm)
     _write_json(
         stage / "universe" / "universe.yaml",
         {
@@ -580,7 +661,10 @@ def init_project(
     source_language: str = "en",
     *,
     fault_hook=None,
+    chorus_models: list[str] | None = None,
 ) -> dict[str, object]:
+    if chorus_models is None:
+        chorus_models = _prompt_chorus_models()
     target = Path(project).expanduser().resolve()
     language = _canonical_language(source_language)
     if target.exists() and any(target.iterdir()):
@@ -590,7 +674,7 @@ def init_project(
     stage = Path(tempfile.mkdtemp(prefix=f".{target.name}-book-forge-", dir=target.parent))
     target_was_empty = target.exists()
     try:
-        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent))
+        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent), chorus_models=chorus_models)
         if fault_hook is not None:
             fault_hook("before_promote")
         if target_was_empty:
@@ -1791,6 +1875,26 @@ def _last_validation_failure(plan: dict[str, object], task_id: str) -> dict[str,
         if row.get("state") == "orphaned" and row.get("resolution") == "retry" and row.get("failure"):
             return row
     return None
+
+
+def _collect_validation_failures(plan: dict[str, object], task_id: str, limit: int = 5) -> list[object]:
+    rows = [row for row in plan["attempts"] if row.get("task") == task_id]
+    seen: set[str] = set()
+    out: list[object] = []
+    for row in reversed(rows):
+        if row.get("state") not in {"validation_failed", "orphaned"}:
+            continue
+        failure = row.get("failure")
+        if not failure:
+            continue
+        key = str(failure)[:500]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(failure)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def resume_run(
@@ -3385,6 +3489,116 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
     _write_json(run_dir / "chorus-synthesis.json", synthesis)
     return synthesis
 
+def _post_design_scope_id(scope: dict[str, object]) -> str:
+    if scope.get("book"):
+        return f"book-{scope['book']}"
+    return str(scope.get("scope", "universe"))
+
+
+def run_chorus_post_design(
+    project: Path | str,
+    scope: dict[str, object],
+    product: dict[str, object],
+    chorus_models: list[str],
+    *,
+    provider=None,
+) -> dict[str, object]:
+    """Post-design ensemble: re-reads the designer product at per-chapter granularity (M2)."""
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    scope_id = _post_design_scope_id(scope)
+    # Build product-centric envelope — writer must be able to execute without inference.
+    # For books, surface each chapter's beats/pov/plants/reveals inline so cheap flash/low gets complete instructions.
+    task_capsule: dict[str, object] = {"scope": scope, "product": product}
+    # Include chapter summary for per-chapter verification
+    if isinstance(product.get("chapters"), list):
+        task_capsule["chapters"] = product["chapters"]
+    if isinstance(product.get("premise"), str):
+        task_capsule["premise"] = product["premise"]
+    if isinstance(product.get("arc"), list):
+        task_capsule["arc"] = product["arc"]
+    imports = scope.get("imports") or []
+    if not isinstance(imports, list):
+        imports = []
+    # Use available canon imports as envelope imports (bounded by design_max_input_tokens)
+    # product itself is already in capsule; imports provide LAW/character grounding
+    # Map to run_chorus scope shape: it expects scope dict + envelope
+    # Build a dedicated envelope for advisors: they see product, not brief
+    # Reuse run_chorus internals but with product capsule
+    base_envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule=task_capsule,
+        imports=list(imports)[:30],
+        state={},
+        tools=[],
+        max_output_tokens=3000,
+    )
+    # Dispatch with post suffix so outputs go to -post dir
+    # We call run_chorus with a post-scoped scope id
+    post_scope = {**scope, "_post": True}
+    # Run chorus but rename dir after
+    result = run_chorus(project, {**scope, "product": product}, base_envelope, chorus_models, provider=runner)
+    # Rename timestamp dir to -post to distinguish
+    # run_chorus already wrote to .book-forge/chorus/<scope_id>/<ts> ; move to <ts>-post
+    try:
+        orig = pathlib.Path(result["dir"])
+        post_dir = pathlib.Path(str(orig) + "-post")
+        if orig.exists() and not post_dir.exists():
+            orig.rename(post_dir)
+            result["dir"] = str(post_dir)
+            # Also update latest symlink file
+            report = post_dir / "chorus-report.md"
+            if report.is_file():
+                (pathlib.Path(result["dir"]).parent / f"chorus-{scope_id}-latest-post.md").write_bytes(report.read_bytes())
+    except Exception:
+        pass
+    # Enrich result with blocking check
+    # Collect findings from post dir
+    findings = []
+    try:
+        pd = pathlib.Path(result["dir"])
+        for jf in pd.glob("advisor-*.json"):
+            import json as _js
+            data = _js.loads(jf.read_text(encoding="utf-8"))
+            findings.extend(data.get("findings", []))
+    except Exception:
+        pass
+    result["findings"] = findings
+    result["blocking_or_warning"] = [f for f in findings if str(f.get("severity")) in ("blocking","warning")]
+    return result
+
+
+def _enforce_post_chorus_gate(post_result: dict[str, object], scope_id: str) -> None:
+    blockers = post_result.get("blocking_or_warning", [])
+    if blockers:
+        import json as _js
+        raise BookForgeError(f"Post-design chorus blocked ({scope_id}): {len(blockers)} blocking|warning findings — run chorus synthesize and apply, or pass --no-post-chorus to bypass. Sample: {_js.dumps(blockers[:3], sort_keys=True)[:800]}")
+
+
+
+def _latest_chorus_report(project: Path | str, scope_id: str) -> dict[str, object] | None:
+    root = _project_root(project)
+    cdir = root / ".book-forge" / "chorus" / scope_id
+    if not cdir.is_dir():
+        return None
+    runs = sorted([p.name for p in cdir.glob("*") if p.is_dir()])
+    if not runs:
+        return None
+    latest = runs[-1]
+    report_path = cdir / latest / "chorus-synthesis.json"
+    if report_path.is_file():
+        return _read_json(report_path)
+    # Fallback to raw advisor findings
+    run_dir = cdir / latest
+    findings = []
+    for af in run_dir.glob("advisor-*.json"):
+        data = _read_json(af)
+        findings.extend(data.get("findings", []))
+    return {"findings": findings, "patches": []} if findings else None
+
+
+
 
 
 def _latest_chorus_report(project: Path | str, scope_id: str) -> dict[str, object] | None:
@@ -3453,7 +3667,7 @@ def _sweep_orphaned_canon(root: Path, proposal: dict[str, object]) -> list[str]:
     return swept
 
 
-def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False, skip_brief: bool = False) -> dict[str, object]:
+def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, no_post_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False, skip_brief: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_universe_design(root)
@@ -3481,8 +3695,11 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     config = _read_json(root / "book-forge.yaml")
     _chorus_default = _chorus_models_from_config(config)
     _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
-    last_failure = _last_validation_failure(plan, "DESIGN-UNI-0001")
-    repair_context = {"repair": {"validation_error": str(last_failure.get("failure"))}} if last_failure else {}
+    _failures = _collect_validation_failures(plan, "DESIGN-UNI-0001", limit=5)
+    if _failures:
+        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"}}
+    else:
+        repair_context = {}
     should_chorus = (not no_chorus) and _chorus_enabled(config)
     base_capsule = {
         "scope": "universe",
@@ -3496,7 +3713,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
                 "events": "EVT-#### rows: {id, name, summary, era, order} — era must be the stable ERA-#### id of an era you emitted",
                 "places": "PLC-#### rows: {id, name, summary, sensory, tier} — tiered: L1 3-5, L2 5-8, L3 6-12, total >= 14 places",
                 "factions": "FAC-#### rows: {id, name, summary}",
-                "characters": "CHR-#### rows: {id, name, tier, summary, voice, appearance, past, want, need, flaw, wound, arc, secret} — tiered cast (M4): L1 1-3 protagonists 250-350 words each with want/need/flaw/wound/arc/voice/secret, L2 4-7 secondaries 150-200 words, L3 6-12 recurring 60-90 words, L4 10-20 walk-ons one line (<20 words), total named characters >= 22; emit characters in at most two sub-chunks (L1+L2, then L3+L4) if needed to stay <15KB each",
+                "characters": "CHR-#### rows: {id, name, tier, summary, voice, appearance, past, want, need, flaw, wound, arc, secret} — tiered cast (M4): L1 1-3 protagonists 250-350 words each (combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space, counted as word-boundary regex exactly as validate.py) must include want/need/flaw/wound/arc/voice/secret, L2 4-7 secondaries 150-200 words combined same count, L3 6-12 recurring 60-90 words combined, L4 10-20 walk-ons one line (<20 words combined), total named characters >= 22; emit characters in at most two sub-chunks (L1+L2, then L3+L4) if needed to stay <15KB each",
                 "themes": ["theme"],
                 "style": {"tense": "past", "person": "third-limited"},
                 "continuity_material": {"CNT-0001": ["stable IDs"]},
@@ -3559,13 +3776,27 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         "universe/design-audit.json",
     )
     _log_step(7, 7, "audit", "✓")
+    # M2: post-design ensemble — re-read product at per-chapter granularity (places/characters/themes)
+    if (not no_chorus) and (not no_post_chorus) and _chorus_post_enabled(config):
+        _log_step(7, 7, "post-chorus", "→")
+        try:
+            post = run_chorus_post_design(root, {"scope": "universe", "imports": ["UNI-0001#kernel"]}, proposal, _chorus_effective, provider=runner)
+            chorus_synthesize(root, book_id=None)  # synthesize post run as well (dedup)
+            _enforce_post_chorus_gate(post, "universe")
+            _log_step(7, 7, "post-chorus", "✓")
+        except BookForgeError:
+            _log_step(7, 7, "post-chorus", "✗")
+            raise
+        except Exception as exc:
+            print(f"Post-chorus advisory failed (non-blocking): {exc}", file=__import__("sys").stderr)
+            _log_step(7, 7, "post-chorus", "✗ (advisory)")
     # M3 summary
     arts = list(_universe_design_outputs(proposal).keys()) + ["universe/design-audit.json"]
     _log_summary(arts)
     return {**audit, "calls": len(results) + 1}
 
 
-def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
+def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, no_post_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
     tasks = schedule_book_design(root, book_id)
@@ -3600,8 +3831,11 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     _chorus_default = _chorus_models_from_config(config)
     _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
     should_chorus = (not no_chorus) and _chorus_enabled(config)
-    last_failure = _last_validation_failure(plan, f"DESIGN-{book_id}")
-    repair_context = {"repair": {"validation_error": str(last_failure.get("failure"))}} if last_failure else {}
+    _failures = _collect_validation_failures(plan, f"DESIGN-{book_id}", limit=5)
+    if _failures:
+        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"}}
+    else:
+        repair_context = {}
     envelope = build_envelope(
         root,
         role="designer",
@@ -3683,6 +3917,20 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         f"books/{book_id}/design-audit.json",
     )
     _log_step(7, 7, "audit", "✓")
+    # M2: post-design ensemble — re-read book product (arc + chapters per-chapter beats/POV)
+    if (not no_chorus) and (not no_post_chorus) and _chorus_post_enabled(config):
+        _log_step(7, 7, "post-chorus", "→")
+        try:
+            post = run_chorus_post_design(root, {"scope": "book", "book": book_id, "imports": imports}, proposal, _chorus_effective, provider=runner)
+            chorus_synthesize(root, book_id=book_id)
+            _enforce_post_chorus_gate(post, f"book-{book_id}")
+            _log_step(7, 7, "post-chorus", "✓")
+        except BookForgeError:
+            _log_step(7, 7, "post-chorus", "✗")
+            raise
+        except Exception as exc:
+            print(f"Post-chorus advisory failed (non-blocking): {exc}", file=__import__("sys").stderr)
+            _log_step(7, 7, "post-chorus", "✗ (advisory)")
     arts = list(_book_design_outputs(root, book_id, proposal).keys()) + [f"books/{book_id}/design-audit.json"]
     _log_summary(arts)
     return {**audit, "calls": 2}
@@ -5576,6 +5824,7 @@ def build_parser() -> argparse.ArgumentParser:
     init = commands.add_parser("init")
     init.add_argument("--title")
     init.add_argument("--source-language", default="en")
+    init.add_argument("--chorus-models", help="Comma-separated openrouter/... models; when omitted and TTY, prompts interactively")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
     continuity_add = continuity_commands.add_parser("add")
@@ -5623,6 +5872,7 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("--book")
     design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
     design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
+    design.add_argument("--no-post-chorus", action="store_true", help="Skip post-design ensemble (keeps pre-design)")
     design.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this chorus run")
     design.add_argument("--with-chorus-context", action="store_true", help="Inject latest chorus report into designer capsule")
     design.add_argument("--refresh", action="store_true", help="Universe only: re-run the design cycle against the current brief (pre-book only)")
@@ -5646,6 +5896,7 @@ def build_parser() -> argparse.ArgumentParser:
     chorus_commands = chorus.add_subparsers(dest="chorus_command", required=True)
     chorus_run = chorus_commands.add_parser("run")
     chorus_run.add_argument("--book")
+    chorus_run.add_argument("--post-design", action="store_true", help="Re-read the last design product instead of the brief")
     chorus_run.add_argument("--chorus-models", help="Comma-separated openrouter/... overrides for this run")
     chorus_run.add_argument("--no-chorus", action="store_true", help="No-op (keeps CLI parity)")
     chorus_status = chorus_commands.add_parser("status")
@@ -5671,7 +5922,8 @@ def main(argv: list[str] | None = None) -> int:
             recover_transactions(args.project)
         if args.command == "init":
             title = args.title or args.project.name.replace("-", " ").title()
-            print(json.dumps(init_project(args.project, title, args.source_language), sort_keys=True))
+            cm = _parse_chorus_csv(args.chorus_models) if getattr(args, "chorus_models", None) is not None else None
+            print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "add-book":
@@ -5710,17 +5962,29 @@ def main(argv: list[str] | None = None) -> int:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
-            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh, skip_brief=args.skip_brief), sort_keys=True))
+            print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, no_post_chorus=args.no_post_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh, skip_brief=args.skip_brief), sort_keys=True))
         elif args.command == "design" and args.scope == "book":
             if not args.book:
                 raise BookForgeError("design book requires --book")
             if args.brief:
                 _write_book_brief(args.project, args.book, args.brief)
-            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus, with_chorus_context=args.with_chorus_context, skip_brief=args.skip_brief), sort_keys=True))
+            print(json.dumps(execute_book_design(args.project, args.book, chorus_models=args.chorus_models, no_chorus=args.no_chorus, no_post_chorus=args.no_post_chorus, with_chorus_context=args.with_chorus_context, skip_brief=args.skip_brief), sort_keys=True))
         elif args.command == "chorus" and args.chorus_command == "run":
             # Standalone chorus without designer
             if args.no_chorus:
                 print(json.dumps({"skipped": True, "reason": "--no-chorus"}, sort_keys=True))
+            elif getattr(args, "post_design", False):
+                root = _project_root(args.project)
+                cfg = _read_json(root / "book-forge.yaml")
+                models = _parse_chorus_models_arg(args.chorus_models, _chorus_models_from_config(cfg)) if args.chorus_models else _chorus_models_from_config(cfg)
+                if args.book:
+                    book_id = args.book
+                    proposal = _book_proposal_from_artifacts(root, book_id)
+                    imports = sorted({row["id"] for row in _book_canon_context(root, book_id, rebuild_indexes(root)) if row["id"] != "worldbuilding.md"})
+                    print(json.dumps(run_chorus_post_design(args.project, {"scope": "book", "book": book_id, "imports": imports}, proposal, models), sort_keys=True))
+                else:
+                    proposal = _read_json(root / "universe" / "design.json")
+                    print(json.dumps(run_chorus_post_design(args.project, {"scope": "universe", "imports": ["UNI-0001#kernel"]}, proposal, models), sort_keys=True))
             else:
                 # Build envelope like designer would, then run chorus
                 root = _project_root(args.project)

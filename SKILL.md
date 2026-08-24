@@ -41,8 +41,8 @@ never bypass a block by editing canonical files.
 - Relate books explicitly without forcing standalone, trilogy, or fixed-length modes.
 - Pin primary OpenCode roles to `openrouter/deepseek/deepseek-v4-flash-0731` on a reasoning
   effort that model declares: `low`, `high`, or `max`; chorus advisors use the configured ensemble
-  (`flash`, `pro`, `glm-5.3`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`) and the
-  synthesizer uses `openrouter/deepseek/deepseek-v4-pro-0813` on `max`.
+  (`flash`, `pro`, `glm-5.3`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`, `luna`) and the
+  synthesizer uses `openrouter/deepseek/deepseek-v4-pro-0813` on `max`; `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
 - Let one orchestrator decide work while a deterministic control plane performs every state and canonical write.
 - Persist task receipts, hashes, leases, and staged outputs so pause and resume survive process loss.
@@ -56,7 +56,7 @@ never bypass a block by editing canonical files.
 Preserve this compact route set while implementing the plan:
 
 ```text
-book-forge init [--title <title>] [--source-language <bcp47>]
+book-forge init [--title <title>] [--source-language <bcp47>] [--chorus-models <csv>]  # asks interactively when omitted and TTY
 book-forge runtime sync
 book-forge chorus <status|synthesize|apply> [--book <id>]
 book-forge migrate <check|dry-run|apply|rollback>
@@ -64,7 +64,7 @@ book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>]
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
-book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--skip-brief] [--no-chorus] [--chorus-models <csv> [--with-chorus-context]]
+book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--skip-brief] [--no-chorus] [--no-post-chorus] [--chorus-models <csv> [--with-chorus-context]]  # runs pre-chorus + post-chorus (default-on) with per-chapter verification
 book-forge brief <universe|book> [--book <id>] [--skip-brief]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
