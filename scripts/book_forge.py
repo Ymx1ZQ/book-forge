@@ -1437,10 +1437,22 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
             violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected[1]}, found {receipt.get('variant')}"})
         estimated = int(receipt.get("estimated_input_tokens", 0) or 0)
         provider_input = int((receipt.get("tokens") or {}).get("input", 0) or 0)
-        if expected and estimated > _envelope_input_budget(root, role):
-            violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{estimated} > {_envelope_input_budget(root, role)}"})
-        if estimated and provider_input > int(estimated * 1.25) + 256:
-            violations.append({"code": "provider_overhead", "task": task_id, "detail": f"provider {provider_input}, estimated {estimated}"})
+        chunk_telemetry = receipt.get("chunk_telemetry") or []
+        if chunk_telemetry:
+            # Chunked design: the aggregate receipt spans several per-chunk
+            # calls, so budget and overhead are validated per chunk instead.
+            for chunk in chunk_telemetry:
+                chunk_estimated = int(chunk.get("estimated_input_tokens", 0) or 0)
+                chunk_input = int((chunk.get("tokens") or {}).get("input", 0) or 0)
+                if expected and chunk_estimated > _envelope_input_budget(root, role):
+                    violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{chunk_estimated} > {_envelope_input_budget(root, role)}"})
+                if chunk_estimated and chunk_input > int(chunk_estimated * 1.25) + 256:
+                    violations.append({"code": "provider_overhead", "task": task_id, "detail": f"provider {chunk_input}, estimated {chunk_estimated}"})
+        else:
+            if expected and estimated > _envelope_input_budget(root, role):
+                violations.append({"code": "envelope_budget", "task": task_id, "detail": f"{estimated} > {_envelope_input_budget(root, role)}"})
+            if estimated and provider_input > int(estimated * 1.25) + 256:
+                violations.append({"code": "provider_overhead", "task": task_id, "detail": f"provider {provider_input}, estimated {estimated}"})
         if task_id.startswith("TRANSLATE-"):
             calls_by_translation[task_id] = calls_by_translation.get(task_id, 0) + 1
         elif task_id.startswith("DESIGN-"):
@@ -2490,6 +2502,176 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
     return last_claim, last_result  # type: ignore[return-value]
 
 
+# M1 per-chunk design calls: the helper invokes the designer once per category
+# (each call well inside the per-response output budget), then merges.
+UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
+    {"category": "kernel"},
+    {"category": "eras"},
+    {"category": "events"},
+    {"category": "places"},
+    {"category": "factions"},
+    {"category": "characters", "part": "L1+L2"},
+    {"category": "characters", "part": "L3+L4"},
+    {"category": "tail", "keys": ["themes", "style", "continuity_material", "book_local", "unresolved_questions"]},
+]
+
+
+def _chunk_slug(chunk: dict[str, object]) -> str:
+    part = str(chunk.get("part", ""))
+    return f"{chunk['category']}{'-' + part.lower() if part else ''}"
+
+
+def _dedupe_rows(rows: list[object]) -> list[object]:
+    """Stable-id dedupe, last occurrence wins; non-id rows pass through in order."""
+    out: list[object] = []
+    index: dict[str, int] = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("id"):
+            key = str(row["id"])
+            if key in index:
+                out[index[key]] = row
+            else:
+                index[key] = len(out)
+                out.append(row)
+        else:
+            out.append(row)
+    return out
+
+
+def _merge_design_chunks(merged: dict[str, object], parsed: dict[str, object]) -> dict[str, object]:
+    """Merge one parsed chunk into the proposal. List keys concatenate with
+    stable-id dedupe (last wins); dict keys shallow-update; scalars last wins."""
+    for key, value in parsed.items():
+        if isinstance(value, list):
+            if isinstance(merged.get(key), list):
+                merged[key] = _dedupe_rows(merged[key] + value)
+            else:
+                merged[key] = value
+        elif isinstance(value, dict):
+            if isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        else:
+            merged[key] = value
+    return merged
+
+
+def _block_task_failed_length(root: Path, task_id: str, claim: dict[str, object]) -> None:
+    plan = _load_plan(root)
+    att = _attempt(plan, str(claim["attempt"]))
+    att["state"] = "failed_length"
+    att["failure"] = "finish_reason==length after retries"
+    task = next(row for row in plan["tasks"] if row["id"] == task_id)
+    task["state"] = "blocked"
+    task.pop("attempt", None)
+    _save_plan(root, plan)
+    render_plan(root)
+    control = _control(root)
+    if control.get("active_run"):
+        run_path = _run_path(root, str(control["active_run"]))
+        run = _read_json(run_path)
+        run["state"] = "blocked"
+        _write_json(run_path, run)
+
+
+def _run_design_chunked(
+    root: Path,
+    task_id: str,
+    base_capsule: dict[str, object],
+    imports: list[str],
+    runner,
+    *,
+    chunks: list[dict[str, object]] | None = None,
+    max_output_tokens: int = 8192,
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+    """Run the designer once per category chunk (M1), then merge the responses.
+
+    One DAG claim covers the whole chunked run; per-chunk length truncation is
+    retried locally up to 2 times, and exhaustion blocks the task as
+    failed_length (never outcome_unknown). Returns (claim, merged_proposal,
+    results, chunk_telemetry) where chunk_telemetry holds one per-call record
+    {estimated_input_tokens, tokens} for budget validation.
+    """
+    chunk_specs = chunks if chunks is not None else UNIVERSE_DESIGN_CHUNKS
+    request_hash = _sha256_bytes(
+        _json_bytes({"task": task_id, "chunks": [_chunk_slug(c) for c in chunk_specs]})
+    )
+    claim = claim_task(root, task_id, request_hash=request_hash)
+    attempt_dir = Path(claim["capsule"]).parent
+    merged: dict[str, object] = {}
+    results: list[dict[str, object]] = []
+    chunk_telemetry: list[dict[str, object]] = []
+    for chunk in chunk_specs:
+        capsule = dict(base_capsule)
+        capsule["chunk"] = chunk
+        envelope = build_envelope(
+            root,
+            role="designer",
+            task_capsule=capsule,
+            imports=imports,
+            state={},
+            tools=[],
+            max_output_tokens=max_output_tokens,
+        )
+        _write_bytes_atomic(attempt_dir / f"envelope-{_chunk_slug(chunk)}.json", envelope["bytes"])
+        result = None
+        for attempt in range(3):
+            result = runner("designer", envelope, attempt_dir)
+            results.append(result)
+            mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+            if result["finish"] != "length":
+                break
+            _write_bytes_atomic(
+                attempt_dir / f"raw-{_chunk_slug(chunk)}-attempt{attempt + 1}.txt",
+                str(result.get("text", "")).encode(),
+            )
+        if result is None or _is_length_finish(result):
+            _block_task_failed_length(root, task_id, claim)
+            raise BookForgeError(f"Design {task_id} failed_length on chunk {_chunk_slug(chunk)}")
+        _write_bytes_atomic(attempt_dir / f"raw-{_chunk_slug(chunk)}.txt", str(result.get("text", "")).encode())
+        chunk_telemetry.append(
+            {
+                "chunk": _chunk_slug(chunk),
+                "estimated_input_tokens": envelope["estimated_input_tokens"],
+                "tokens": result.get("tokens") or {},
+            }
+        )
+        try:
+            parsed = _parse_chunked_contract(str(result.get("text", "")))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+            raise
+        merged = _merge_design_chunks(merged, parsed)
+    return claim, merged, results, chunk_telemetry
+
+
+def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, object]) -> dict[str, object]:
+    """Aggregate per-chunk results into one result record for completion telemetry."""
+    tokens = {"input": 0, "output": 0}
+    cost = 0.0
+    latency = 0
+    session_id = None
+    for row in results:
+        row_tokens = row.get("tokens") or {}
+        for key in ("input", "output"):
+            if isinstance(row_tokens.get(key), (int, float)):
+                tokens[key] = int(tokens[key]) + int(row_tokens[key])
+        cost += float(row.get("cost") or 0)
+        latency += int(row.get("latency_ms") or 0)
+        session_id = row.get("session_id") or session_id
+    return {
+        "text": json.dumps(merged, ensure_ascii=False, sort_keys=True),
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "variant": "high",
+        "session_id": session_id,
+        "tokens": tokens,
+        "cost": cost,
+        "latency_ms": latency,
+        "finish": "stop",
+    }
+
 
 def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) -> str:
     metadata = f"---\nid: {row['id']}\n"
@@ -3296,16 +3478,13 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     last_failure = _last_validation_failure(plan, "DESIGN-UNI-0001")
     repair_context = {"repair": {"validation_error": str(last_failure.get("failure"))}} if last_failure else {}
     should_chorus = (not no_chorus) and _chorus_enabled(config)
-    envelope = build_envelope(
-        root,
-        role="designer",
-        task_capsule={
-            "scope": "universe",
-            "brief": brief,
-            "continuities": _continuities(root)["continuities"],
-            **repair_context,
-            **({"chorus_report": _latest_chorus_report(root, "universe")} if with_chorus_context and _latest_chorus_report(root, "universe") else {}),
-            "required_output": {
+    base_capsule = {
+        "scope": "universe",
+        "brief": brief,
+        "continuities": _continuities(root)["continuities"],
+        **repair_context,
+        **({"chorus_report": _latest_chorus_report(root, "universe")} if with_chorus_context and _latest_chorus_report(root, "universe") else {}),
+        "required_output": {
                 "kernel": "LAW-#### rows: {id, name, summary}",
                 "eras": "ERA-#### rows: {id, name, summary}",
                 "events": "EVT-#### rows: {id, name, summary, era, order}",
@@ -3318,7 +3497,11 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
                 "book_local": {},
                 "unresolved_questions": [],
             },
-        },
+    }
+    envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule=base_capsule,
         imports=["UNI-0001#kernel"],
         state={},
         tools=[],
@@ -3338,14 +3521,15 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         _log_step(2, 7, "chorus", "✓ (skipped)")
     _log_step(3, 7, "designer envelope", "✓")
     _log_step(4, 7, "designer call", "→")
-    claim, result = _run_with_length_retry(root, "DESIGN-UNI-0001", "designer", envelope, runner)
-    if _is_length_finish(result):
-        _log_step(4, 7, "designer call", "✗ length → retry")
-    else:
-        _log_step(4, 7, "designer call", "✓")
+    claim, merged, results, chunk_telemetry = _run_design_chunked(
+        root, "DESIGN-UNI-0001", base_capsule, ["UNI-0001#kernel"], runner
+    )
+    result = _synthetic_chunk_result(results, merged)
+    result["chunk_telemetry"] = chunk_telemetry
+    _log_step(4, 7, "designer call", "✓")
     _log_step(5, 7, "validate", "→")
     try:
-        proposal = _normalize_universe_proposal(_parse_chunked_contract(str(result["text"])))
+        proposal = _normalize_universe_proposal(merged)
         findings = validate_universe_design(root, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             _log_step(5, 7, "validate", "✗")
@@ -3372,7 +3556,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     # M3 summary
     arts = list(_universe_design_outputs(proposal).keys()) + ["universe/design-audit.json"]
     _log_summary(arts)
-    return {**audit, "calls": 2}
+    return {**audit, "calls": len(results) + 1}
 
 
 def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
@@ -3917,6 +4101,8 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
 def _provider_telemetry(result: dict[str, object], envelope: dict[str, object], call_number: int = 1) -> dict[str, object]:
     telemetry = {key: result[key] for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
     telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
+    if "chunk_telemetry" in result:
+        telemetry["chunk_telemetry"] = result["chunk_telemetry"]
     return telemetry
 
 

@@ -111,8 +111,8 @@ class UniverseDesignTests(unittest.TestCase):
         provider = DesignProvider(clean_proposal())
         result = self.bf.execute_universe_design(self.project, provider=provider)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(result["calls"], 2)
-        self.assertEqual(provider.calls, ["designer", "canon-auditor"])
+        self.assertEqual(result["calls"], len(self.bf.UNIVERSE_DESIGN_CHUNKS) + 1)
+        self.assertEqual(provider.calls, ["designer"] * len(self.bf.UNIVERSE_DESIGN_CHUNKS) + ["canon-auditor"])
         report = self.bf.telemetry_report(self.project, strict=True)
         self.assertEqual(report["calls"]["with_receipts"], 2)
 
@@ -256,7 +256,7 @@ class UniverseDesignTests(unittest.TestCase):
         provider = DesignProvider(clean_proposal())
         self.bf.execute_universe_design(self.project, provider=provider)
         import glob
-        envelopes = sorted(glob.glob(str(self.project / ".book-forge/runs/*/attempts/ATT-*/envelope.json")))
+        envelopes = sorted(glob.glob(str(self.project / ".book-forge/runs/*/attempts/ATT-*/envelope-*.json")))
         designer = next(json.loads(Path(path).read_text()) for path in reversed(envelopes) if json.loads(Path(path).read_text())["role"] == "designer")
         required = designer["task"]["required_output"]
         self.assertEqual(required["kernel"], "LAW-#### rows: {id, name, summary}")
@@ -286,7 +286,7 @@ class UniverseDesignTests(unittest.TestCase):
         first = DesignProvider(clean_proposal())
         self.bf.execute_universe_design(self.project, provider=first)
         self.assertTrue((self.project / "universe/canon/places/PLC-0001.md").is_file())
-        self.assertEqual(first.calls, ["designer", "canon-auditor"])
+        self.assertEqual(first.calls, ["designer"] * len(self.bf.UNIVERSE_DESIGN_CHUNKS) + ["canon-auditor"])
 
         enriched = clean_proposal()
         enriched["characters"].append({"id": "CHR-0002", "name": "Serafina", "summary": "The bar owner who sees everything.", "voice": "Rapid Barese dialect, warm and cutting."})
@@ -294,7 +294,7 @@ class UniverseDesignTests(unittest.TestCase):
         second = DesignProvider(enriched)
         result = self.bf.execute_universe_design(self.project, provider=second, refresh=True)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(result["calls"], 2)
+        self.assertEqual(result["calls"], len(self.bf.UNIVERSE_DESIGN_CHUNKS) + 1)
         self.assertTrue((self.project / "universe/canon/characters/CHR-0002.md").is_file())
         self.assertFalse((self.project / "universe/canon/places/PLC-0001.md").exists())
         kept = (self.project / "universe/canon/characters/CHR-0001.md").read_text()
@@ -333,7 +333,7 @@ class UniverseDesignTests(unittest.TestCase):
         retry = DesignProvider(clean_proposal())
         self.bf.execute_universe_design(self.project, provider=retry)
         import glob
-        envelopes = sorted(glob.glob(str(self.project / ".book-forge/runs/*/attempts/ATT-*/envelope.json")))
+        envelopes = sorted(glob.glob(str(self.project / ".book-forge/runs/*/attempts/ATT-*/envelope-*.json")))
         designer = next(json.loads(Path(path).read_text()) for path in reversed(envelopes) if json.loads(Path(path).read_text())["role"] == "designer")
         repair = designer["task"].get("repair")
         self.assertIsNotNone(repair, "retry envelope must carry repair context")

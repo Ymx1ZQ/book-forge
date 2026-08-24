@@ -105,7 +105,7 @@ class EndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp) / "world"
             bf.init_project(project, "World")
-            self.assertEqual(bf.execute_universe_design(project, provider=provider)["calls"], 2)
+            self.assertEqual(bf.execute_universe_design(project, provider=provider)["calls"], len(bf.UNIVERSE_DESIGN_CHUNKS) + 1)
 
             a, b, c, local = [bf.add_book(project, title)["id"] for title in ("Origin", "Sequel", "Parallel", "Local")]
             alternate = bf.add_continuity(project, "Ash Timeline", fork_from="CNT-0001", imports=["UNI-0001#kernel"])["id"]
@@ -141,7 +141,9 @@ class EndToEndTests(unittest.TestCase):
             self.assertTrue(bf.migrate_project(project, "check")["compatible"])
             report = bf.telemetry_report(project, strict=True)
             self.assertTrue(report["valid"])
-            self.assertEqual(report["calls"]["accepted"], len(provider.calls))
+            # The chunked universe design folds 8 per-category calls into one
+            # accepted attempt, so accepted counts attempts, not provider calls.
+            self.assertEqual(report["calls"]["accepted"], len(provider.calls) - (len(bf.UNIVERSE_DESIGN_CHUNKS) - 1))
             self.assertFalse(any(path.name.upper() == "CLAUDE.MD" for path in project.rglob("*")))
             self.assertFalse(any(path.suffix == ".sh" for path in project.rglob("*")))
 
