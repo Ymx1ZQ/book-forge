@@ -36,6 +36,7 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
         self.assertEqual(model["variants"], {
             "low": {"reasoningEffort": "low"},
+            "medium": {"reasoningEffort": "medium"},
             "high": {"reasoningEffort": "high"},
             "max": {"reasoningEffort": "max"},
         })
@@ -83,7 +84,7 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertEqual(report["model"], MODEL)
         self.assertTrue(report["json_events"])
         self.assertTrue(report["session_resume"])
-        self.assertEqual(set(report["variants"]), {"low", "high", "max"})
+        self.assertEqual(set(report["variants"]), {"low", "medium", "high", "max"})
 
 
 class ChorusPinResolutionTests(unittest.TestCase):
