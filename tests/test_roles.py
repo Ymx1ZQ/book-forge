@@ -42,7 +42,7 @@ class RoleTopologyTests(unittest.TestCase):
 
         expected = {
             "book-forge-orchestrator": ("primary", "max"),
-            "designer": ("all", "high"),
+            "designer": ("all", "medium"),
             "writer": ("all", "low"),
             "cold-reader": ("all", "low"),
             "technical-editor": ("all", "high"),
@@ -109,7 +109,7 @@ class ChorusPinResolutionTests(unittest.TestCase):
             self.bf._project_root_from(orphan)
 
     def test_expected_pin_matches_written_agents(self):
-        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4-flash-0731", "high"))
+        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4-flash-0731", "medium"))
         self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4-flash-0731", "low"))
         self.assertEqual(self.bf._expected_pin("advisor-qwen-qwen3-8-max"), ("qwen/qwen3.8-max", "xhigh"))
         self.assertEqual(self.bf._expected_pin("advisor-openai-gpt-5-6-luna"), ("openai/gpt-5.6-luna", "high"))

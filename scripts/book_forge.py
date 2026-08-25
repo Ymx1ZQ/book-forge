@@ -2881,7 +2881,7 @@ def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, 
         "text": json.dumps(merged, ensure_ascii=False, sort_keys=True),
         "provider": "openrouter",
         "model": "deepseek/deepseek-v4-flash-0731",
-        "variant": "high",
+        "variant": ROLE_SPECS["designer"][1],
         "session_id": session_id,
         "tokens": tokens,
         "cost": cost,
@@ -4777,9 +4777,10 @@ def _validate_revision(
         raise BookForgeError("Revision must disposition every finding exactly once")
     for finding in findings:
         disposition = by_finding[str(finding["id"])]
-        required = {"action", "evidence", "loss", "supersedes"}
+        required = {"action", "evidence", "loss"}
         if not required <= disposition.keys():
             raise BookForgeError(f"Incomplete disposition for {finding['id']}")
+        disposition.setdefault("supersedes", [])
         if finding.get("objective") and finding["severity"] == "blocking" and disposition["action"] != "repaired":
             raise BookForgeError(f"Objective blocker {finding['id']} cannot be dismissed")
     revised_rows = value.get("consequences", [])

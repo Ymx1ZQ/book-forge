@@ -46,7 +46,7 @@ class ChorusTests(unittest.TestCase):
             calls.append(role)
             if role.startswith("advisor-"):
                 raise AssertionError("should not be called")
-            return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+            return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "medium", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
         # Need to also mock auditor
         orig = runner
         def wrapped(role, envelope, attempt_dir):
