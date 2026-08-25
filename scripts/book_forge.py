@@ -360,11 +360,32 @@ def _chorus_enabled(config: dict[str, object]) -> bool:
 
 
 def _style_review_enabled(config: dict[str, object]) -> bool:
-    """Style review via chorus on chapters: on by default, opt-out with chorus.style_review: false."""
+    """Style review via chorus on chapters: on by default, opt-out with chorus.style_review: false or {enabled:false}."""
     chorus = config.get("chorus")
     if isinstance(chorus, dict) and "style_review" in chorus:
-        return bool(chorus["style_review"])
+        sr = chorus["style_review"]
+        if isinstance(sr, dict):
+            return bool(sr.get("enabled", True))
+        return bool(sr)
     return True
+
+def _style_review_models(config: dict[str, object]) -> list[str]:
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict):
+        sr = chorus.get("style_review")
+        if isinstance(sr, dict) and isinstance(sr.get("models"), list):
+            return [m for m in sr["models"] if isinstance(m, str) and "/" in m]
+        if isinstance(sr, dict) and isinstance(sr.get("default_models"), list):
+            return [m for m in sr["default_models"] if isinstance(m, str) and "/" in m]
+    return list(STYLE_REVIEW_MODELS)
+
+def _style_review_rules(config: dict[str, object]) -> list[dict[str, object]]:
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict):
+        sr = chorus.get("style_review")
+        if isinstance(sr, dict) and isinstance(sr.get("rules"), list):
+            return [r for r in sr["rules"] if isinstance(r, dict)]
+    return []
 
 def _chorus_post_enabled(config: dict[str, object]) -> bool:
     chorus = config.get("chorus")
@@ -1093,7 +1114,7 @@ def add_task(
 ) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
-    if role not in ROLE_SPECS or role in {"book-forge-orchestrator", "book-forge-smoke"}:
+    if (role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS) or role in {"book-forge-orchestrator", "book-forge-smoke"}:
         raise BookForgeError(f"Invalid worker role: {role}")
     if any(task["id"] == task_id for task in plan["tasks"]):
         raise BookForgeError(f"Duplicate task: {task_id}")
@@ -1237,10 +1258,15 @@ def record_execution(
     receipt = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "fence": fence, "output_hash": output_hash, "outcome": "observed"}
     if telemetry:
         role = str(attempt["role"])
-        expected_variant = ROLE_SPECS[role][1]
+        if role in ROLE_SPECS:
+            expected_variant = ROLE_SPECS[role][1]
+            expected_models = {MODEL, MODEL.split("/", 1)[1]}
+        else:
+            expected_variant = CHORUS_ADVISOR_SPECS[role][1]
+            expected_models = {CHORUS_ADVISOR_MODELS[role], CHORUS_ADVISOR_MODELS[role].split("/", 1)[1]}
         observed_model = str(telemetry.get("model"))
-        if telemetry.get("provider") != "openrouter" or observed_model not in {MODEL, MODEL.split("/", 1)[1]}:
-            raise BookForgeError("Provider receipt does not match the pinned OpenRouter DeepSeek model")
+        if telemetry.get("provider") != "openrouter" or observed_model not in expected_models:
+            raise BookForgeError("Provider receipt does not match the pinned OpenRouter model")
         if telemetry.get("variant") != expected_variant:
             raise BookForgeError(f"Provider variant {telemetry.get('variant')} does not match {role} pin {expected_variant}")
         receipt.update(telemetry)
@@ -3569,22 +3595,22 @@ def run_chorus_post_design(
     # Rename timestamp dir to -post to distinguish
     # run_chorus already wrote to .book-forge/chorus/<scope_id>/<ts> ; move to <ts>-post
     try:
-        orig = pathlib.Path(result["dir"])
-        post_dir = pathlib.Path(str(orig) + "-post")
+        orig = Path(result["dir"])
+        post_dir = Path(str(orig) + "-post")
         if orig.exists() and not post_dir.exists():
             orig.rename(post_dir)
             result["dir"] = str(post_dir)
             # Also update latest symlink file
             report = post_dir / "chorus-report.md"
             if report.is_file():
-                (pathlib.Path(result["dir"]).parent / f"chorus-{scope_id}-latest-post.md").write_bytes(report.read_bytes())
+                (Path(result["dir"]).parent / f"chorus-{scope_id}-latest-post.md").write_bytes(report.read_bytes())
     except Exception:
         pass
     # Enrich result with blocking check
     # Collect findings from post dir
     findings = []
     try:
-        pd = pathlib.Path(result["dir"])
+        pd = Path(result["dir"])
         for jf in pd.glob("advisor-*.json"):
             import json as _js
             data = _js.loads(jf.read_text(encoding="utf-8"))
@@ -4323,6 +4349,8 @@ def run_next(
             draft_path = root / "books" / str(book["id"]) / "work" / str(contract["id"]) / "draft.md"
             final_path = root / "books" / str(book["id"]) / "manuscript" / "chapters" / f"{contract['id']}.md"
             if final_path.exists():
+                if _closed_style_pending(root, str(book["id"]), str(contract["id"])):
+                    return recheck_style_closed_chapter(root, str(book["id"]), str(contract["id"]), contract, provider or run_opencode_role)
                 continue
             if contract.get("pivotal"):
                 return produce_pivotal_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
@@ -4331,6 +4359,94 @@ def run_next(
             if not draft_path.exists() and not contract.get("pivotal"):
                 return draft_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
     raise BookForgeError("No ordinary chapter draft is ready; design a book or use the pivotal workflow")
+
+
+def _closed_style_pending(root: Path, book_id: str, chapter_id: str) -> bool:
+    """A closed chapter is pending style recheck when style review is enabled
+    and its STYLE-* advisory outputs are not materialized, or its style-only
+    revision has not landed yet."""
+    try:
+        config = _read_json(root / "book-forge.yaml")
+    except Exception:
+        config = {}
+    if not _style_review_enabled(config):
+        return False
+    plan = _load_plan(root)
+    reviser_id = f"REVISE-STYLE-{book_id}-{chapter_id}"
+    if any(t["id"] == reviser_id and t["state"] in {"pending", "running"} for t in plan["tasks"]):
+        return True
+    slugs = [model.split("/")[-1].replace(".", "-") for model in STYLE_REVIEW_MODELS]
+    return not any((root / f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json").is_file() for slug in slugs)
+
+
+def recheck_style_closed_chapter(
+    root: Path,
+    book_id: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    runner,
+) -> dict[str, object]:
+    """Style-check a closed chapter (advisory). If findings surface, re-revise
+    the manuscript prose with the reviser; never re-opens state.yaml/reader-state."""
+    ms_path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md"
+    if not ms_path.is_file():
+        raise BookForgeError(f"No manuscript prose for closed chapter {chapter_id}")
+    prose = ms_path.read_text(encoding="utf-8")
+    style_findings = _call_style_review(root, book_id, chapter_id, contract, prose, runner)
+    title = str(contract.get("title") or "").strip()
+    if not style_findings and title:
+        lines = prose.split("\n")
+        if lines and lines[0].startswith("#") and lines[0].lstrip("# ").strip() != title:
+            lines[0] = f"# {title}"
+            ms_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+            return {"state": "style_clean", "book": book_id, "chapter": chapter_id, "findings": 0, "heading": title}
+        return {"state": "style_clean", "book": book_id, "chapter": chapter_id, "findings": 0}
+    if not style_findings:
+        return {"state": "style_clean", "book": book_id, "chapter": chapter_id, "findings": 0}
+    reviser_id = f"REVISE-STYLE-{book_id}-{chapter_id}"
+    plan = _load_plan(root)
+    if not any(t["id"] == reviser_id for t in plan["tasks"]):
+        add_task(
+            root,
+            reviser_id,
+            "reviser",
+            deps=[],
+            priority=70,
+            outputs=[
+                f"books/{book_id}/manuscript/chapters/{chapter_id}.md",
+                f"books/{book_id}/reviews/{chapter_id}/style-dispositions.json",
+            ],
+        )
+    envelope = build_envelope(
+        root,
+        role="reviser",
+        task_capsule={"book": book_id, "chapter": chapter_id, "contract": contract, "draft": prose, "findings": style_findings, "mode": "style-only"},
+        imports=list(contract.get("imports", [])),
+        state={},
+        tools=[],
+        max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+    )
+    claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
+    attempt_dir = Path(claim["capsule"]).parent
+    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+    result = runner("reviser", envelope, attempt_dir)
+    mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+    value = _parse_contract_json(str(result["text"]))
+    validated = _validate_revision(contract, value, style_findings, [])
+    outputs = {
+        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
+        f"books/{book_id}/reviews/{chapter_id}/style-dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": value["dispositions"]}),
+    }
+    manifest = stage_outputs(root, claim["attempt"], outputs)
+    receipt = record_execution(
+        root,
+        claim["attempt"],
+        claim["fence"],
+        output_hash=_sha256_bytes(_json_bytes(manifest)),
+        telemetry=_provider_telemetry(result, envelope),
+    )
+    promote_task(root, claim["attempt"], claim["fence"])
+    return {"state": "style_revised", "book": book_id, "chapter": chapter_id, "calls": 4, "findings": len(style_findings), "receipt": receipt["attempt"]}
 
 
 def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str, dict[str, object]]:
@@ -4508,56 +4624,75 @@ def _call_parallel_reviews(
 
 
 def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
-    """Chorus style review on chapters: 3-model ensemble, advisory only (note/warning, never blocking). On by default, opt-out via chorus.style_review: false."""
+    """Chorus style review on chapters: tag-aware, advisory only (note/warning, never blocking). On by default, opt-out via chorus.style_review: false. Supports per-tag rules with rewrite."""
     try:
         config = _read_json(root / "book-forge.yaml")
     except Exception:
         config = {}
     if not _style_review_enabled(config):
         return []
-    # Style review uses a focused 3-model ensemble
-    style_models = STYLE_REVIEW_MODELS
-    # Build style-specific capsule
+    # Resolve tag-aware models/rules (e.g., spicy -> grok with rewrite)
+    chapter_tags = [str(t).lower() for t in contract.get("tags", []) if isinstance(t, str)]
+    rules = _style_review_rules(config)
+    matched_rule = None
+    for rule in rules:
+        rule_tags = [str(t).lower() for t in rule.get("tags", []) if isinstance(t, str)]
+        if any(t in chapter_tags for t in rule_tags):
+            matched_rule = rule
+            break
+    if matched_rule:
+        style_models = [str(matched_rule.get("reviewer"))] if matched_rule.get("reviewer") else _style_review_models(config)
+        # prompt override handled via style_model param; allow_rewrite checked later
+    else:
+        style_models = _style_review_models(config)
+    # Drop stale STYLE tasks for models no longer in the ensemble (never-started only).
+    current_slugs = {model.split("/")[-1].replace(".", "-") for model in style_models}
+    plan = _load_plan(root)
+    for task in [t for t in plan["tasks"] if t["id"].startswith(f"STYLE-{book_id}-{chapter_id}-") and t["state"] == "pending" and t["id"].rsplit("-", 1)[-1] not in current_slugs]:
+        plan["tasks"].remove(task)
+    _save_plan(root, plan)
     capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft, "mode": "style"}
-    # Use chorus infrastructure: build envelope for each style advisor and run via runner
-    # For simplicity, run via same runner as cold-reader but with style prompt
-    # We reuse the chorus advisor interface: call each style model as a separate review
     findings = []
+
+    def _normalize(f):
+        f = dict(f)
+        f["dimension"] = "style"
+        if f.get("severity") == "blocking":
+            f["severity"] = "warning"
+        f["id"] = f"S-{f.get('id','000')}"
+        return f
+
     for model in style_models:
+        role = _chorus_advisor_name(model)
         slug = model.split("/")[-1].replace(".", "-")
         task_id = f"STYLE-{book_id}-{chapter_id}-{slug}"
-        # Ensure task exists for traceability (advisory, never blocking)
+        out_path = root / f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"
         try:
             plan = _load_plan(root)
-            if not any(t["id"] == task_id for t in plan["tasks"]):
-                add_task(root, task_id, "cold-reader", deps=[], priority=65, outputs=[f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"])
+            task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
+            if out_path.is_file() and task and task["state"] == "succeeded":
+                value = _read_json(out_path)
+                findings.extend(_normalize(f) for f in value.get("findings", []))
+                continue
+            if not task:
+                add_task(root, task_id, role, deps=[], priority=65, outputs=[f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"])
         except Exception:
             pass
-        envelope = build_envelope(root, role="cold-reader", task_capsule={**capsule, "style_model": model}, imports=list(contract.get("imports", [])), state={}, tools=[], max_output_tokens=2000)
+        envelope = build_envelope(root, role=role, task_capsule={**capsule, "style_model": model}, imports=list(contract.get("imports", [])), state={}, tools=[], max_output_tokens=2000)
         try:
             claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-            attempt_dir = pathlib.Path(claim["capsule"]).parent
+            attempt_dir = Path(claim["capsule"]).parent
             _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
-            result = runner("cold-reader", envelope, attempt_dir)
+            result = runner(role, envelope, attempt_dir)
             mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
             value = _parse_contract_json(str(result["text"]))
-            for f in value.get("findings", []):
-                # Normalize to style dimension, advisory only
-                f = dict(f)
-                f["dimension"] = "style"
-                # Downgrade blocking to warning (style never blocks)
-                if f.get("severity") == "blocking":
-                    f["severity"] = "warning"
-                f["id"] = f"S-{f.get('id','000')}"
-                findings.append(f)
-            # Materialize but don't promote as blocking
+            findings.extend(_normalize(f) for f in value.get("findings", []))
             try:
                 _materialize_review_result(root, task_id, claim, envelope, result, value)
             except Exception:
                 pass
         except Exception:
             continue
-    # Return only note/warning, never blocking
     return [f for f in findings if f.get("severity") in ("note", "warning")]
 
 def _validate_revision(
@@ -4608,6 +4743,7 @@ def review_and_close_chapter(
     draft = draft_path.read_text(encoding="utf-8")
     writer_consequences = _read_json(root / "books" / book_id / "work" / chapter_id / "consequences.json")
     _ensure_review_tasks(root, book_id, chapter_id)
+    style_findings = _call_style_review(root, book_id, chapter_id, contract, draft, runner)
     cold, technical, receipts = _call_parallel_reviews(root, book_id, chapter_id, contract, draft, writer_consequences, runner)
     technical_findings = []
     for position, finding in enumerate(technical["findings"], start=1):
@@ -4615,7 +4751,7 @@ def review_and_close_chapter(
         renamed["id"] = f"T-{position:04d}"
         renamed["review"] = "technical"
         technical_findings.append(renamed)
-    findings = list(cold["findings"]) + technical_findings
+    findings = list(style_findings) + list(cold["findings"]) + technical_findings
     # Feedback loop: if previous verification exists (retry after failed verify), inject its blocking/warning findings so reviser sees them
     try:
         prev_verif_path = root / f"books/{book_id}/reviews/{chapter_id}/verification.json"
