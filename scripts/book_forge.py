@@ -5675,7 +5675,7 @@ def _normalize_text(value: str) -> str:
     return unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n")).rstrip() + "\n"
 
 
-def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[str, object]:
+def assemble_edition(project: Path | str, book_id: str, language: str, draft: bool = False) -> dict[str, object]:
     root = _project_root(project)
     canonical = _canonical_locale(language)
     config = _read_json(root / "book-forge.yaml")
@@ -5689,6 +5689,8 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
         raise BookForgeError("Publication refused: the book has no chapter contracts")
     translated = canonical != source_language
     metadata = None
+    # Draft mode: export whatever chapters are currently available for review
+    export_chapters: list[str] = expected
     if translated:
         locale_root = root / "books" / book_id / "translations" / canonical
         locale_config_path = locale_root / "locale.yaml"
@@ -5706,25 +5708,52 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
             or _canonical_locale(str(state.get("locale", ""))) != canonical
         ):
             raise BookForgeError("Publication refused: locale workspace contains mixed identity or language metadata")
-        if (
-            state.get("status") != "current"
-            or state.get("current") is not True
-            or state.get("stale_prose")
-            or state.get("boundary_audit")
-            or state.get("completed_chapters") != expected
-        ):
-            raise BookForgeError("Publication refused: translation is stale, incomplete, or awaiting a boundary audit")
-        manuscript_root = locale_root / "chapters"
+        if draft:
+            completed = state.get("completed_chapters") or []
+            if not isinstance(completed, list) or not completed:
+                raise BookForgeError("Draft publication refused: no completed chapters available for review")
+            # Use available completed chapters, must be subset of expected and in order
+            if not all(ch in expected for ch in completed):
+                raise BookForgeError("Draft publication refused: completed chapters contain unknown chapter")
+            if completed != sorted(completed, key=lambda x: expected.index(x) if x in expected else 999):
+                raise BookForgeError("Draft publication refused: completed chapters out of order")
+            export_chapters = [str(c) for c in completed]
+            manuscript_root = locale_root / "chapters"
+        else:
+            if (
+                state.get("status") != "current"
+                or state.get("current") is not True
+                or state.get("stale_prose")
+                or state.get("boundary_audit")
+                or state.get("completed_chapters") != expected
+            ):
+                raise BookForgeError("Publication refused: translation is stale, incomplete, or awaiting a boundary audit")
+            manuscript_root = locale_root / "chapters"
     else:
         state = _read_json(root / "books" / book_id / "state.yaml")
-        if state.get("closed_chapters") != expected:
-            raise BookForgeError("Publication refused: source chapters are incomplete, stale, or out of order")
-        manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
+        if draft:
+            closed = state.get("closed_chapters") or []
+            if not isinstance(closed, list) or not closed:
+                raise BookForgeError("Draft publication refused: no closed chapters available for review (write at least one chapter)")
+            if not all(ch in expected for ch in closed):
+                raise BookForgeError("Draft publication refused: closed chapters contain unknown chapter")
+            if closed != sorted(closed, key=lambda x: expected.index(x) if x in expected else 999):
+                raise BookForgeError("Draft publication refused: closed chapters out of order")
+            export_chapters = [str(c) for c in closed]
+            manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
+        else:
+            if state.get("closed_chapters") != expected:
+                raise BookForgeError("Publication refused: source chapters are incomplete, stale, or out of order")
+            manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
     present = [path.stem for path in sorted(manuscript_root.glob("CH-*.md"))]
-    if expected != present:
-        raise BookForgeError("Publication refused: edition chapters are missing, extra, or out of order")
+    if draft:
+        if export_chapters != present:
+            raise BookForgeError(f"Draft publication refused: expected {export_chapters} but found {present} on disk")
+    else:
+        if expected != present:
+            raise BookForgeError("Publication refused: edition chapters are missing, extra, or out of order")
     registry = _artifact_registry(root)
-    if not translated and registry.get("artifacts"):
+    if not translated and not draft and registry.get("artifacts"):
         try:
             stale = reconcile_artifacts(root)
         except BookForgeError as exc:
@@ -5734,7 +5763,7 @@ def assemble_edition(project: Path | str, book_id: str, language: str) -> dict[s
             raise BookForgeError("Publication refused: source chapter artifact is stale")
     chapters = []
     input_hashes = {}
-    for chapter_id in expected:
+    for chapter_id in export_chapters:
         path = manuscript_root / f"{chapter_id}.md"
         text_value = _normalize_text(path.read_text(encoding="utf-8"))
         chapters.append({"id": chapter_id, "title": next((line[2:].strip() for line in text_value.splitlines() if line.startswith("# ")), chapter_id), "markdown": text_value})
@@ -5929,14 +5958,15 @@ def _skill_commit() -> str:
     return result.stdout.strip() or "uncommitted"
 
 
-def export_epub(project: Path | str, book_id: str, language: str) -> dict[str, object]:
+def export_epub(project: Path | str, book_id: str, language: str, draft: bool = False) -> dict[str, object]:
     root = _project_root(project)
-    assembly = assemble_edition(root, book_id, language)
+    assembly = assemble_edition(root, book_id, language, draft=draft)
     members = _epub_members(assembly)
     epub_bytes = _deterministic_zip(members)
     output_dir = root / "dist" / book_id / str(assembly["language"])
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{book_id}.epub"
+    suffix = ".draft" if draft else ""
+    output_path = output_dir / f"{book_id}{suffix}.epub"
     _write_bytes_atomic(output_path, epub_bytes)
     validation = validate_epub(output_path, expected_chapters=len(assembly["chapters"]))
     manifest = {
@@ -5951,9 +5981,14 @@ def export_epub(project: Path | str, book_id: str, language: str) -> dict[str, o
         "toolchain": {"builder": "book-forge-stdlib-epub-v1", "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"},
         "skill_commit": _skill_commit(),
         "output_sha256": validation["sha256"],
+        "draft": draft,
+        "partial": draft,
     }
-    manifest_path = output_dir / f"{book_id}.epub.manifest.json"
+    manifest_path = output_dir / f"{book_id}{suffix}.epub.manifest.json"
     _write_json(manifest_path, manifest)
+    if draft:
+        # Draft exports are for review only, not registered as final edition artifacts
+        return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0, "draft": True}
     dependencies = _edition_dependencies(root, assembly)
     registry = _artifact_registry(root)
     edition_id = f"EDITION-{book_id}-{assembly['language']}-EPUB"
@@ -6019,9 +6054,10 @@ def export_pdf(
     language: str,
     *,
     font_paths: dict[str, Path] | None = None,
+    draft: bool = False,
 ) -> dict[str, object]:
     root = _project_root(project)
-    assembly = assemble_edition(root, book_id, language)
+    assembly = assemble_edition(root, book_id, language, draft=draft)
     selected_fonts = PDF_FONT_PATHS if font_paths is None else {key: Path(value) for key, value in font_paths.items()}
     font_hashes = _verify_pdf_fonts(selected_fonts)
     publication_root = Path(__file__).resolve().parents[1] / "assets" / "publication"
@@ -6047,8 +6083,9 @@ def export_pdf(
     _write_json(assembly_path, renderer_assembly)
     output_dir = root / "dist" / book_id / str(assembly["language"])
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{book_id}.pdf"
-    temporary_path = output_dir / f".{book_id}.pdf.rendering"
+    suffix = ".draft" if draft else ""
+    output_path = output_dir / f"{book_id}{suffix}.pdf"
+    temporary_path = output_dir / f".{book_id}{suffix}.pdf.rendering"
     environment = dict(os.environ)
     environment.update({"TZ": "UTC", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0", "SOURCE_DATE_EPOCH": str(assembly["source_epoch"]), "UV_PYTHON": "3.13.12"})
     result = subprocess.run(
@@ -6095,9 +6132,13 @@ def export_pdf(
         "toolchain": {"renderer": "weasyprint==69.0", "python": "3.13.12", "hashes": toolchain_hashes},
         "skill_commit": _skill_commit(),
         "output_sha256": validation["sha256"],
+        "draft": draft,
+        "partial": draft,
     }
-    manifest_path = output_dir / f"{book_id}.pdf.manifest.json"
+    manifest_path = output_dir / f"{book_id}{suffix}.pdf.manifest.json"
     _write_json(manifest_path, manifest)
+    if draft:
+        return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0, "draft": True}
     dependencies = _edition_dependencies(root, assembly)
     registry = _artifact_registry(root)
     edition_id = f"EDITION-{book_id}-{assembly['language']}-PDF"
@@ -6230,6 +6271,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("book")
     export.add_argument("--lang", required=True)
     export.add_argument("--format", choices=("epub", "pdf", "all"), default="all")
+    export.add_argument("--draft", action="store_true", help="Allow partial export of available chapters for review (draft, not registered as final edition)")
     return parser
 
 
@@ -6350,9 +6392,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "export":
             results = {}
             if args.format in {"epub", "all"}:
-                results["epub"] = export_epub(args.project, args.book, args.lang)
+                results["epub"] = export_epub(args.project, args.book, args.lang, draft=args.draft)
             if args.format in {"pdf", "all"}:
-                results["pdf"] = export_pdf(args.project, args.book, args.lang)
+                results["pdf"] = export_pdf(args.project, args.book, args.lang, draft=args.draft)
             print(json.dumps(results, sort_keys=True))
         return 0
     except (BookForgeError, OSError, subprocess.SubprocessError) as exc:
