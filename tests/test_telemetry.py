@@ -82,7 +82,7 @@ class TelemetryTests(unittest.TestCase):
         receipts[0].write_text(json.dumps(bad))
 
         plan = self.bf._load_plan(self.project)
-        for index in range(3):
+        for index in range(5):
             plan["attempts"].append({
                 "id": f"SEEDED-{index}",
                 "task": plan["tasks"][index]["id"],

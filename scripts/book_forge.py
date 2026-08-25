@@ -69,7 +69,7 @@ from pathlib import Path
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 SCHEMA_VERSION = 1
 MODEL_ID = MODEL.split("/", 1)[1]
-VARIANT_EFFORTS = {"low": "low", "high": "high", "max": "max"}
+VARIANT_EFFORTS = {"low": "low", "medium": "medium", "high": "high", "max": "max"}
 DEFAULT_EFFORT = "high"
 ROLE_SPECS = {
     "book-forge-orchestrator": ("primary", "max", 30),
