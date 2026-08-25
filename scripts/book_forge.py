@@ -77,7 +77,7 @@ ROLE_SPECS = {
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
-    "reviser": ("all", "high", 8),
+    "reviser": ("all", "low", 8),
     "canon-auditor": ("all", "max", 8),
     "translator": ("all", "low", 7),
     "judge": ("all", "max", 6),
@@ -88,6 +88,11 @@ ROLE_SPECS = {
 # Mirrors the user's global opencode.json catalog so every generated project
 # exposes the same 7 models without hand-editing provider config.
 CHORUS_SYNTHESIZER = "openrouter/deepseek/deepseek-v4-pro-0813"
+STYLE_REVIEW_MODELS: list[str] = [
+    "openrouter/openai/gpt-5.6-luna",
+    "openrouter/moonshotai/kimi-k3",
+    "openrouter/google/gemini-3.7-flash",
+]
 CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/deepseek/deepseek-v4-flash-0731",
     "openrouter/deepseek/deepseek-v4-pro-0813",
@@ -353,6 +358,13 @@ def _chorus_enabled(config: dict[str, object]) -> bool:
         return bool(chorus["enabled"])
     return True
 
+
+def _style_review_enabled(config: dict[str, object]) -> bool:
+    """Style review via chorus on chapters: on by default, opt-out with chorus.style_review: false."""
+    chorus = config.get("chorus")
+    if isinstance(chorus, dict) and "style_review" in chorus:
+        return bool(chorus["style_review"])
+    return True
 
 def _chorus_post_enabled(config: dict[str, object]) -> bool:
     chorus = config.get("chorus")
@@ -3043,6 +3055,7 @@ def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) 
         ),
     }
     for chapter in chapters:
+        # title is optional but preserved when designer provides it; writer uses it verbatim when present
         contract = {
             "schema": 1,
             "book": book_id,
@@ -4493,6 +4506,59 @@ def _call_parallel_reviews(
         receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
     return parsed["cold-reader"], parsed["technical-editor"], receipts
 
+
+def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
+    """Chorus style review on chapters: 3-model ensemble, advisory only (note/warning, never blocking). On by default, opt-out via chorus.style_review: false."""
+    try:
+        config = _read_json(root / "book-forge.yaml")
+    except Exception:
+        config = {}
+    if not _style_review_enabled(config):
+        return []
+    # Style review uses a focused 3-model ensemble
+    style_models = STYLE_REVIEW_MODELS
+    # Build style-specific capsule
+    capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft, "mode": "style"}
+    # Use chorus infrastructure: build envelope for each style advisor and run via runner
+    # For simplicity, run via same runner as cold-reader but with style prompt
+    # We reuse the chorus advisor interface: call each style model as a separate review
+    findings = []
+    for model in style_models:
+        slug = model.split("/")[-1].replace(".", "-")
+        task_id = f"STYLE-{book_id}-{chapter_id}-{slug}"
+        # Ensure task exists for traceability (advisory, never blocking)
+        try:
+            plan = _load_plan(root)
+            if not any(t["id"] == task_id for t in plan["tasks"]):
+                add_task(root, task_id, "cold-reader", deps=[], priority=65, outputs=[f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"])
+        except Exception:
+            pass
+        envelope = build_envelope(root, role="cold-reader", task_capsule={**capsule, "style_model": model}, imports=list(contract.get("imports", [])), state={}, tools=[], max_output_tokens=2000)
+        try:
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            attempt_dir = pathlib.Path(claim["capsule"]).parent
+            _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+            result = runner("cold-reader", envelope, attempt_dir)
+            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+            value = _parse_contract_json(str(result["text"]))
+            for f in value.get("findings", []):
+                # Normalize to style dimension, advisory only
+                f = dict(f)
+                f["dimension"] = "style"
+                # Downgrade blocking to warning (style never blocks)
+                if f.get("severity") == "blocking":
+                    f["severity"] = "warning"
+                f["id"] = f"S-{f.get('id','000')}"
+                findings.append(f)
+            # Materialize but don't promote as blocking
+            try:
+                _materialize_review_result(root, task_id, claim, envelope, result, value)
+            except Exception:
+                pass
+        except Exception:
+            continue
+    # Return only note/warning, never blocking
+    return [f for f in findings if f.get("severity") in ("note", "warning")]
 
 def _validate_revision(
     contract: dict[str, object],
