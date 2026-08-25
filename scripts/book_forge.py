@@ -77,7 +77,7 @@ ROLE_SPECS = {
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
-    "reviser": ("all", "low", 8),
+    "reviser": ("all", "high", 8),
     "canon-auditor": ("all", "max", 8),
     "translator": ("all", "low", 7),
     "judge": ("all", "max", 6),
@@ -1206,8 +1206,8 @@ def claim_task(
         raise BookForgeError("request_hash must be a lowercase SHA-256")
     plan = _load_plan(root)
     active_attempts = [row for row in plan["attempts"] if row["state"] in {"running", "promotion_pending"}]
-    if len(active_attempts) >= 2:
-        raise BookForgeError("Maximum subagent concurrency is two")
+    if len(active_attempts) >= 4:
+        raise BookForgeError("Maximum subagent concurrency is four")
     ready_ids = {str(task["id"]) for task in ready_frontier(root)}
     if task_id not in ready_ids:
         raise BookForgeError(f"Task is not ready: {task_id}")
@@ -1634,8 +1634,8 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
             violations.append({"code": "audit_call_budget", "task": task_id, "detail": f"{count} > 2"})
 
     active = [attempt for attempt in plan["attempts"] if attempt.get("state") in {"running", "promotion_pending"}]
-    if len(active) > 2:
-        violations.append({"code": "concurrency", "detail": f"{len(active)} active attempts > 2"})
+    if len(active) > 4:
+        violations.append({"code": "concurrency", "detail": f"{len(active)} active attempts > 4"})
     currentness_path = root / ".book-forge" / "currentness.json"
     currentness = _read_json(currentness_path) if currentness_path.is_file() else {"artifacts": {}}
     stale = {key: value for key, value in currentness.get("artifacts", {}).items() if not value.get("current", True)}
@@ -4747,6 +4747,18 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             except Exception:
                 pass
         except Exception:
+            # Advisory style review must not leave running attempts that block parallel reviews
+            try:
+                plan = _load_plan(root)
+                attempt = next((a for a in plan["attempts"] if a["id"] == claim["attempt"]), None) if 'claim' in locals() else None
+                if attempt and attempt.get("state") == "running":
+                    attempt["state"] = "failed"
+                    task = next((t for t in plan["tasks"] if t["id"] == task_id), None)
+                    if task:
+                        task["state"] = "failed"
+                    _save_plan(root, plan)
+            except Exception:
+                pass
             continue
     return [f for f in findings if f.get("severity") in ("note", "warning")]
 
