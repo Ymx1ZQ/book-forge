@@ -105,6 +105,7 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "high": "high", "max": "max"},
+        "limit": {"context": 1310720, "output": 131072},
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
         "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
@@ -311,13 +312,16 @@ def _opencode_config(chorus_models: list[str] | None = None) -> dict[str, object
             }
         model_id = mid.split("/", 1)[1]
         variants = cfg["variants"]  # type: ignore[index]
-        models_dict[model_id] = {
+        entry: dict[str, object] = {
             "options": {
                 "reasoningEffort": cfg["default_effort"],  # type: ignore[index]
                 "provider": cfg["provider"],  # type: ignore[index]
             },
             "variants": {name: {"reasoningEffort": effort} for name, effort in variants.items()},  # type: ignore[union-attr]
         }
+        if "limit" in cfg:
+            entry["limit"] = cfg["limit"]  # type: ignore[index]
+        models_dict[model_id] = entry
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": MODEL,
@@ -595,7 +599,7 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "default_continuity": "CNT-0001",
         "source_language": source_language,
         "model": MODEL,
-        "context": {"writer_max_input_tokens": 12000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
+        "context": {"writer_max_input_tokens": 12000, "cold_reader_max_input_tokens": 8000, "technical_editor_max_input_tokens": 10000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
         "audit": {"input_budget": 32000},
         "chorus": {"enabled": True, "post_enabled": True, "models": _cm, "synthesizer": CHORUS_SYNTHESIZER},
     }
@@ -2251,23 +2255,33 @@ ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
 def _envelope_input_budget(root: Path, role: str) -> int:
     """Per-role envelope input budget; project override wins over ROLE_BUDGETS.
 
-    `book-forge.yaml` may raise the design envelope ceiling under
-    `context.design_max_input_tokens` (applies to the designer and to chorus
-    advisors, which share the same context contract) and the audit envelope
-    ceiling under `audit.input_budget` (applies to the canon-auditor). Defaults
-    to the fixed role budget. Fail closed on a malformed override value."""
+    `book-forge.yaml` may raise any role's envelope ceiling under
+    `context.<role>_max_input_tokens` (role dashes become underscores, e.g.
+    `context.technical_editor_max_input_tokens` for the technical-editor).
+    Legacy aliases remain: `context.design_max_input_tokens` (designer and
+    chorus advisors, which share the same context contract) and
+    `audit.input_budget` (canon-auditor). Defaults to the fixed role budget.
+    Fail closed on a malformed override value."""
     default_input, _ = ROLE_BUDGETS[role]
     config_path = root / "book-forge.yaml"
     if config_path.is_file():
         config = _read_json(config_path)
         ctx = config.get("context")
-        if isinstance(ctx, dict) and (role == "designer" or role.startswith("advisor-")):
-            knob = ctx.get("design_max_input_tokens")
+        knob_name = f"{role.replace('-', '_')}_max_input_tokens"
+        if isinstance(ctx, dict):
+            knob = ctx.get(knob_name)
             if knob is not None:
                 try:
                     return int(knob)
                 except (TypeError, ValueError):
-                    raise BookForgeError(f"context.design_max_input_tokens must be an integer, got {knob!r}")
+                    raise BookForgeError(f"context.{knob_name} must be an integer, got {knob!r}")
+            if role == "designer" or role.startswith("advisor-"):
+                knob = ctx.get("design_max_input_tokens")
+                if knob is not None:
+                    try:
+                        return int(knob)
+                    except (TypeError, ValueError):
+                        raise BookForgeError(f"context.design_max_input_tokens must be an integer, got {knob!r}")
         audit_cfg = config.get("audit")
         if isinstance(audit_cfg, dict) and role == "canon-auditor":
             knob = audit_cfg.get("input_budget")
