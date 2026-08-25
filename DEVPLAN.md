@@ -948,3 +948,24 @@ blocks.
 - [x] Patch `references/design.md`
 - [x] Test cumulativo + word-count combinato
 - [x] `install.sh --force` + verifica Margherita (suite 41 pass su tier/chunking + full suite pending)
+
+## Fix: canon-auditor evidence locations must be stable artifacts (M46) ✅
+
+**Status: in-progress — 2026-08-25**
+
+**Problem:** `AUDIT-UNI-0001` blocked in loop su Margherita (ATT-0041/0042/0053): l'auditor cita location non risolvibili (`CNT-0001`, `CNT-0001#continuity_material`, `CNT-0001#continuity-material`, `unresolved_questions#1`) e `_bind_audit_evidence` fallisce con `Audit evidence location is not a stable artifact`. Il prompt `assets/prompts/canon-auditor.md` dice genericamente `stable path or block ID`; il modello interpreta `CNT-*`/`UNI-*` come block ID, ma `_resolve_evidence_target` (universe scope) risolve solo `LAW-####|PLC-####|FAC-####|CHR-####` + suffissi di blocco canon, `ERA-####`/`EVT-####` (yaml), `proposal*` (book), e file esistenti.
+
+**Fix:**
+1. `assets/prompts/canon-auditor.md` — sostituire la specifica evidence con l'elenco esplicito delle location valide (universe scope): `{LAW|PLC|FAC|CHR}-#####{summary|voice|appearance|past|want|need|flaw|wound|arc|secret}` o `{ERA|EVT}-####` (senza suffisso), oppure un path file esistente (`universe/...`). Vietare esplicitamente `CNT-*`, `UNI-*`, `unresolved_questions`, `design_scope.*` in universe scope: non sono artifact stabili e bloccano il binding.
+2. `./install.sh --force` nella dev tree.
+3. Su Margherita: `resume --resolve-blocked AUDIT-UNI-0001:retry` + `design universe` (esegue solo audit, DESIGN-UNI-0001 già succeeded).
+
+**Acceptance:**
+- L'audit universe produce findings con solo location risolvibili
+- AUDIT-UNI-0001 chiude senza `not a stable artifact`
+- Suite `pytest -q` verde
+
+**Tasks:**
+- [ ] Patch `assets/prompts/canon-auditor.md`
+- [ ] `./install.sh --force`
+- [ ] Verifica Margherita: audit universe chiude
