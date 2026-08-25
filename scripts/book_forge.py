@@ -4494,15 +4494,19 @@ def recheck_style_closed_chapter(
         imports=list(contract.get("imports", [])),
         state={},
         tools=[],
-        max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+        max_output_tokens=min(8000, max(1000, int(contract["target_words"]) * 2)),
     )
     claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
     attempt_dir = Path(claim["capsule"]).parent
     _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
     result = runner("reviser", envelope, attempt_dir)
     mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-    value = _parse_contract_json(str(result["text"]))
-    validated = _validate_revision(contract, value, style_findings, [])
+    try:
+        value = _parse_contract_json(str(result["text"]))
+        validated = _validate_revision(contract, value, style_findings, [])
+    except BookForgeError as exc:
+        _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
+        raise
     outputs = {
         f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
         f"books/{book_id}/reviews/{chapter_id}/style-dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": value["dispositions"]}),
@@ -4853,15 +4857,15 @@ def review_and_close_chapter(
         imports=list(contract.get("imports", [])),
         state=_read_json(root / "books" / book_id / "state.yaml"),
         tools=[],
-        max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+        max_output_tokens=min(8000, max(1000, int(contract["target_words"]) * 2)),
     )
     claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
     attempt_dir = Path(claim["capsule"]).parent
     _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
     result = runner("reviser", envelope, attempt_dir)
     mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-    value = _parse_contract_json(str(result["text"]))
     try:
+        value = _parse_contract_json(str(result["text"]))
         validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
     except BookForgeError as exc:
         _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
