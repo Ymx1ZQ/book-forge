@@ -1831,8 +1831,38 @@ def start_run(project: Path | str, *, now: float | None = None) -> dict[str, obj
     return run
 
 
+def _orphan_stale_attempts(plan: dict[str, object]) -> bool:
+    """Orphan running attempts that never got provider acceptance and whose lease expired (definitively dead)."""
+    import time as _time
+    now = _time.time()
+    changed = False
+    for attempt in plan.get("attempts", []):
+        if attempt.get("state") != "running":
+            continue
+        if attempt.get("provider_accepted"):
+            continue
+        lease = attempt.get("lease_expires_at")
+        if isinstance(lease, (int, float)) and lease < now:
+            attempt["state"] = "orphaned"
+            # Also reset the task to pending so it can be retried
+            task_id = attempt.get("task")
+            for task in plan.get("tasks", []):
+                if task.get("id") == task_id and task.get("state") == "running":
+                    task["state"] = "pending"
+                    break
+            changed = True
+    return changed
+
 def _settle_run(project: Path | str) -> dict[str, object] | None:
     root = _project_root(project)
+    # Auto-heal: orphan stale never-accepted attempts so ordinary pause can drain
+    try:
+        plan = _load_plan(root)
+        if _orphan_stale_attempts(plan):
+            _save_plan(root, plan)
+            render_plan(root)
+    except Exception:
+        pass
     control = _control(root)
     if not control.get("active_run"):
         return None
@@ -1891,6 +1921,14 @@ def pause_run(project: Path | str, *, run_id: str | None = None, emergency: bool
     _write_json(run_path, run)
     control["desired_generation"] = run["desired_generation"]
     _write_json(root / ".book-forge" / "control.json", control)
+    # Ordinary pause should not wait forever on dead never-accepted attempts
+    try:
+        plan = _load_plan(root)
+        if _orphan_stale_attempts(plan):
+            _save_plan(root, plan)
+            render_plan(root)
+    except Exception:
+        pass
     if emergency:
         plan = _load_plan(root)
         for attempt in plan["attempts"]:
