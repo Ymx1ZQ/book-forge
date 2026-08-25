@@ -51,13 +51,13 @@ class RuntimeSyncTests(unittest.TestCase):
         self.assertTrue(report["synced"])
         self.assertEqual(report["model"], MODEL)
         self.assertEqual(report["default_effort"], "high")
-        self.assertEqual(set(report["variants"]), {"low", "high", "max"})
+        self.assertEqual(set(report["variants"]), {"low", "medium", "high", "max"})
 
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
         self.assertEqual(model["options"]["reasoningEffort"], "high")
-        self.assertEqual(set(model["variants"]), {"low", "high", "max"})
+        self.assertEqual(set(model["variants"]), {"low", "medium", "high", "max"})
         # Chorus catalog is restored as well (7 models by default).
         self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
 

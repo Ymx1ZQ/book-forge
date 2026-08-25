@@ -109,13 +109,13 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     "openrouter/deepseek/deepseek-v4-flash-0731": {
         "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
         "default_effort": "high",
-        "variants": {"low": "low", "high": "high", "max": "max"},
+        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
         "limit": {"context": 1310720, "output": 131072},
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
         "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
         "default_effort": "high",
-        "variants": {"low": "low", "high": "high", "max": "max"},
+        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
     },
     "openrouter/z-ai/glm-5.3": {
         "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
