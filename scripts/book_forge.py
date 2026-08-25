@@ -300,11 +300,19 @@ def _block_record(block: str) -> dict[str, str]:
 
 
 def _opencode_config(chorus_models: list[str] | None = None) -> dict[str, object]:
-    """Build opencode.json with primary model + chorus catalog."""
+    """Build opencode.json with primary model + chorus catalog + style review models (even if not in chorus.models)."""
     models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
     # Ensure primary MODEL is included even if caller filters.
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
+    # Always include style review models (used for chapter style, may not be in chorus.models, e.g., grok for spicy)
+    for sm in STYLE_REVIEW_MODELS:
+        if sm not in models:
+            models.append(sm)
+    # Also include grok for spicy rewrite if not already (used via per-tag rule)
+    spicy_grok = "openrouter/x-ai/grok-4.6"
+    if spicy_grok not in models:
+        models.append(spicy_grok)
     models_dict: dict[str, object] = {}
     for mid in models:
         cfg = CHORUS_MODEL_CONFIGS.get(mid)
@@ -458,6 +466,15 @@ def _parse_chorus_csv(csv: str | None) -> list[str] | None:
 
 
 def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
+    # Ensure style review models have advisors even if not in chorus.models
+    if chorus_models is not None:
+        extended = list(chorus_models)
+        for sm in STYLE_REVIEW_MODELS:
+            if sm not in extended:
+                extended.append(sm)
+        if "openrouter/x-ai/grok-4.6" not in extended:
+            extended.append("openrouter/x-ai/grok-4.6")
+        chorus_models = extended
     agents = stage / ".opencode" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
     for name, (mode, variant, steps) in ROLE_SPECS.items():
