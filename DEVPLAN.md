@@ -984,3 +984,18 @@ blocks.
 - [x] Commit nel repo skill (stile fix(review): ...)
 - [x] Reinstall: ./install.sh --force
 - [x] Landfall: run --next → atteso REVISE-BOOK-0001-CH-0005 succeeded (verificato con draft)
+
+## Fix: reviser variant high→medium per reasoning 32k length (Landfall CH-0005) ✅
+
+**Status: ✅ Done — 2026-08-25**
+
+**Problem:** ATT-0104 deepseek-v4-flash variant high consuma reasoning 32000 token e 0 output, finish length. max_output_tokens 8000 limita solo output, non reasoning. Il reviser high su 4000w + 29 findings + 14 consequences esplode sistematicamente (3/3 zero-output dopo fix 8000). ATT-0098/99 riuscirono solo per varianza reasoning corto.
+
+**Fix:** `scripts/book_forge.py:80` ROLE_SPECS["reviser"] ("all","high",8) → ("all","medium",8). Reasoning più corto, stessa capacità output 8000. Coerente con designer medium già adottato. Richiede `runtime sync` su Landfall per rigenerare pin.
+
+**Tasks:**
+- [x] Patch scripts/book_forge.py:80
+- [x] Test: pytest 136+ pass
+- [x] Commit fix(review): reviser high->medium
+- [x] Reinstall ./install.sh --force
+- [x] Landfall: runtime sync + run --next → REVISE-BOOK-0001-CH-0005 succeeded
