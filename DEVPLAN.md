@@ -951,7 +951,7 @@ blocks.
 
 ## Fix: canon-auditor evidence locations must be stable artifacts (M46) ✅
 
-**Status: in-progress — 2026-08-25**
+**Status: 🔄 In progress — 2026-08-25**
 
 **Problem:** `AUDIT-UNI-0001` blocked in loop su Margherita (ATT-0041/0042/0053): l'auditor cita location non risolvibili (`CNT-0001`, `CNT-0001#continuity_material`, `CNT-0001#continuity-material`, `unresolved_questions#1`) e `_bind_audit_evidence` fallisce con `Audit evidence location is not a stable artifact`. Il prompt `assets/prompts/canon-auditor.md` dice genericamente `stable path or block ID`; il modello interpreta `CNT-*`/`UNI-*` come block ID, ma `_resolve_evidence_target` (universe scope) risolve solo `LAW-####|PLC-####|FAC-####|CHR-####` + suffissi di blocco canon, `ERA-####`/`EVT-####` (yaml), `proposal*` (book), e file esistenti.
 
@@ -969,3 +969,18 @@ blocks.
 - [ ] Patch `assets/prompts/canon-auditor.md`
 - [ ] `./install.sh --force`
 - [ ] Verifica Margherita: audit universe chiude
+
+## Fix: reviser ROLE_BUDGETS output budget 6000→8000 (autobloccante b7939dd) ✅
+
+**Status: ✅ Done — 2026-08-25**
+
+**Problem:** b7939dd ha alzato i due call-site del reviser a min(8000,…) ma non ROLE_BUDGETS["reviser"] rimasto (14000, 6000); build_envelope rifiuta allowance 8000 > budget 6000 con "Output allowance 8000 exceeds reviser budget 6000", autobloccante per capitoli ≥3000 parole. 3000 parole è un limite senza senso per reviser che deve gestire prose + beat_map + consequences + dispositions.
+
+**Fix:** `scripts/book_forge.py:2337` → "reviser": (14000, 8000) (una riga, coerenza con call-site 8000 già committato)
+
+**Tasks:**
+- [x] Patch scripts/book_forge.py:2337
+- [x] Test: pytest nel repo skill (136+ pass)
+- [x] Commit nel repo skill (stile fix(review): ...)
+- [x] Reinstall: ./install.sh --force
+- [x] Landfall: run --next → atteso REVISE-BOOK-0001-CH-0005 succeeded (verificato con draft)
