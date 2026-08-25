@@ -3805,7 +3805,13 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
     _failures = _collect_validation_failures(plan, "DESIGN-UNI-0001", limit=5)
     if _failures:
-        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"}}
+        # Scope-aware hint: book design fails on chunk size / JSON, not tier words
+        is_chunk_error = any("chunk exceeds" in str(f) or "chapters.empty" in str(f) or "not contract JSON" in str(f) for f in _failures)
+        if is_chunk_error:
+            hint = "emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB); list keys (chapters) concatenate across objects in order; keep each object valid JSON; for 40 chapters emit e.g. one object with premise/arc/entry_state/exit_boundary and 2-3 objects with slices of chapters"
+        else:
+            hint = "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"
+        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": hint}}
     else:
         repair_context = {}
     should_chorus = (not no_chorus) and _chorus_enabled(config)
@@ -3941,7 +3947,13 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     should_chorus = (not no_chorus) and _chorus_enabled(config)
     _failures = _collect_validation_failures(plan, f"DESIGN-{book_id}", limit=5)
     if _failures:
-        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"}}
+        # Scope-aware hint: book design fails on chunk size / JSON, not tier words
+        is_chunk_error = any("chunk exceeds" in str(f) or "chapters.empty" in str(f) or "not contract JSON" in str(f) for f in _failures)
+        if is_chunk_error:
+            hint = "emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB); list keys (chapters) concatenate across objects in order; keep each object valid JSON; for 40 chapters emit e.g. one object with premise/arc/entry_state/exit_boundary and 2-3 objects with slices of chapters"
+        else:
+            hint = "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"
+        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": hint}}
     else:
         repair_context = {}
     envelope = build_envelope(
@@ -3956,6 +3968,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             **({"chorus_report": _latest_chorus_report(root, f"book-{book_id}")} if with_chorus_context and _latest_chorus_report(root, f"book-{book_id}") else {}),
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
+            "chunking": "You MAY and for 40 chapters you MUST emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB). For example: one object with premise/arc/entry_state/exit_boundary and 2-3 objects each with a slice of the chapters array (e.g. CH-0001..0015, CH-0016..0030, CH-0031..0040). List keys (chapters) are concatenated in order across objects; keep each object valid JSON. A single object is also accepted but will exceed the size limit for 40 chapters.",
             "required_output": {
                 "premise": "string",
                 "entry_state": {},
@@ -4188,6 +4201,8 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=environment,
         check=False,
     )
@@ -4214,7 +4229,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     if raw_finish.get("reason") == "length":
         # still extract text/tokens but mark as length for caller retry
         pass
-    export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, check=False)
+    export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     receipt = None
     try:
         if export.returncode == 0:
