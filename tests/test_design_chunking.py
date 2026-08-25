@@ -45,10 +45,10 @@ class DesignChunkingTests(unittest.TestCase):
         self.assertIn("exceeds", str(cm.exception))
 
     def test_max_tokens_budget_in_range(self):
-        # ROLE_BUDGETS designer must be 8192-12288
+        # ROLE_BUDGETS designer must be 8192-20000
         _, out = bf.ROLE_BUDGETS["designer"]
         self.assertGreaterEqual(out, 8192)
-        self.assertLessEqual(out, 12288)
+        self.assertLessEqual(out, 20000)
         # agents/openai.yaml must reflect same
         yaml = pathlib.Path(bf.__file__).resolve().parents[1] / "agents/openai.yaml"
         text = yaml.read_text()
@@ -58,7 +58,7 @@ class DesignChunkingTests(unittest.TestCase):
         self.assertIsNotNone(m)
         val = int(m.group(1))
         self.assertGreaterEqual(val, 8192)
-        self.assertLessEqual(val, 12288)
+        self.assertLessEqual(val, 20000)
 
     def test_retry_on_length_then_failed_length(self):
         # Test _is_length_finish helper and failed_length not outcome_unknown

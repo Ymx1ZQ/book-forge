@@ -53,7 +53,7 @@ The designer never emits a 41KB monolith. Output is chunked: each chunk JSON
 must be <15KB (`DESIGN_CHUNK_MAX_BYTES=15360`). The helper validates `chunk_bytes(chunk) < 15360`
 and `split_proposal_into_chunks` groups kernel/eras/events/places/factions/characters
 plus tail (themes/style/continuity_material) into per-category chunks. `max_output_tokens`
-is 8192–12288 (see `ROLE_BUDGETS` designer 12288 and envelope 8192). On `finish_reason==length`
+is 8192–20000 (see `ROLE_BUDGETS` designer 20000 and envelope 8192). On `finish_reason==length`
 the helper retries up to 2 times, then marks the attempt `failed_length` (not `outcome_unknown`).
 ## Brief gate
 

@@ -2,6 +2,6 @@ interface:
   display_name: "Book Forge"
   short_description: "Forge, translate, and publish fiction"
   default_prompt: "Use $book-forge to create or continue a token-efficient shared-universe fiction project."
-# M1: per-chunk output budget raised to 8192-12288 to avoid 41KB truncation
-max_output_tokens: 12288
+# M1: per-chunk output budget raised to 8192-20000 to avoid 41KB truncation
+max_output_tokens: 20000
 chunk_max_bytes: 15360

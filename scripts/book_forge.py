@@ -73,7 +73,7 @@ VARIANT_EFFORTS = {"low": "low", "high": "high", "max": "max"}
 DEFAULT_EFFORT = "high"
 ROLE_SPECS = {
     "book-forge-orchestrator": ("primary", "max", 30),
-    "designer": ("all", "high", 10),
+    "designer": ("all", "medium", 10),
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
@@ -2330,7 +2330,7 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
 
 
 ROLE_BUDGETS = {
-    "designer": (16000, 12288),
+    "designer": (20000, 20000),
     "writer": (12000, 6000),
     "cold-reader": (8000, 2500),
     "technical-editor": (10000, 3000),
