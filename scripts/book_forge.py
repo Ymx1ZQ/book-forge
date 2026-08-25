@@ -2334,7 +2334,7 @@ ROLE_BUDGETS = {
     "writer": (12000, 6000),
     "cold-reader": (8000, 2500),
     "technical-editor": (10000, 3000),
-    "reviser": (14000, 6000),
+    "reviser": (14000, 8000),
     "canon-auditor": (32000, 3500),
     "translator": (14000, 6000),
     "judge": (10000, 2000),
