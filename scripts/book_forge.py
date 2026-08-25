@@ -2693,7 +2693,7 @@ def _run_design_chunked(
     runner,
     *,
     chunks: list[dict[str, object]] | None = None,
-    max_output_tokens: int = 8192,
+    max_output_tokens: int = 12288,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
     """Run the designer once per category chunk (M1), then merge the responses.
 
@@ -3728,7 +3728,7 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         imports=["UNI-0001#kernel"],
         state={},
         tools=[],
-        max_output_tokens=8192,
+        max_output_tokens=12288,
     )
     _log_step(1, 7, "brief gate", "→")
     _log_step(1, 7, "brief gate", "✓")
@@ -3872,7 +3872,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         imports=imports,
         state={},
         tools=[],
-        max_output_tokens=8192,
+        max_output_tokens=12288,
     )
     task_id = f"DESIGN-{book_id}"
     _log_step(1, 7, "brief gate", "✓")
