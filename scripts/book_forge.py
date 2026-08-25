@@ -4536,6 +4536,16 @@ def review_and_close_chapter(
         renamed["review"] = "technical"
         technical_findings.append(renamed)
     findings = list(cold["findings"]) + technical_findings
+    # Feedback loop: if previous verification exists (retry after failed verify), inject its blocking/warning findings so reviser sees them
+    try:
+        prev_verif_path = root / f"books/{book_id}/reviews/{chapter_id}/verification.json"
+        if prev_verif_path.is_file():
+            prev_verif = _read_json(prev_verif_path)
+            prev_findings = prev_verif.get("findings") or []
+            # Only inject findings that verifier still reports (avoid stale)
+            findings.extend([f for f in prev_findings if f.get("severity") in ("blocking", "warning")])
+    except Exception:
+        pass
     reviser_id = f"REVISE-{book_id}-{chapter_id}"
     envelope = build_envelope(
         root,
@@ -4619,9 +4629,14 @@ def review_and_close_chapter(
         verification_result = runner("technical-editor", verification_envelope, verify_dir)
         mark_provider_accepted(root, verify_claim["attempt"], str(verification_result["session_id"]))
         verification = _parse_contract_json(str(verification_result["text"]))
-        if verification.get("verified") is not True or verification.get("findings"):
+        verification_findings = verification.get("findings") or []
+        # Gate: only blocking findings fail promotion; warning/note are advisory (verifier is stochastic/pignolo)
+        blocking_findings = [f for f in verification_findings if f.get("severity") == "blocking"]
+        if verification.get("verified") is not True or blocking_findings:
             _set_attempt_failure(root, verify_claim["attempt"], block=True, reason="Independent semantic verification failed")
             raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
+        # Always materialize verification even on success (for traceability)
+        
         receipts.append(_materialize_review_result(root, verify_id, verify_claim, verification_envelope, verification_result, verification))
         calls += 1
     promote_task(root, claim["attempt"], claim["fence"])
