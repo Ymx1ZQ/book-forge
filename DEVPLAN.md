@@ -1463,3 +1463,52 @@ language. The nav lists `4. Title`.
 **Done when:** A chapter opens under its number in both editions, the number is
 absent from every manuscript, and changing its format touches only the
 templates.
+
+## Catalog: qwen3.8-flash, glm-5.3-flash on style review, advisors beyond the default list ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Change requested:** `qwen/qwen3.8-flash` joins the catalog and replaces
+`qwen3.8-max` in the writing flows (1M context and 131k output at 0.16/0.47
+$/Mtok against 2.0/6.0); the final style review swaps `kimi-k3` for
+`glm-5.3-flash`. Kimi stays in the chorus, it just stops doing style review.
+
+**Problem 1 — qwen3.8-flash has no reasoning-effort knob.** It is the only model
+of the ten with `reasoning_effort` absent from its OpenRouter parameters;
+`reasoning` itself is supported. The config shape is `variants: {name: effort}`
+and every entry declares a ladder, so a four-step ladder here would advertise
+four operating points that behave identically — OpenRouter drops the parameter
+before the pinned provider sees it. The entry declares one variant, which is
+what the model actually has.
+
+**Problem 2 — a chorus model outside the default list cannot run.**
+`CHORUS_ADVISOR_SPECS`, `CHORUS_ADVISOR_MODELS` and the advisor `ROLE_BUDGETS`
+are all built from `CHORUS_DEFAULT_MODELS`, while `_chorus_models_from_config`
+accepts any `openrouter/…` string a project names. A project naming a model that
+is in `CHORUS_MODEL_CONFIGS` but not in the defaults gets an advisor with no
+budget and no expected pin, and `_expected_pin` raises `Role cannot run
+headlessly` — as a non-blocking chorus failure. Removing `glm-5.3` from the
+defaults earlier put it in exactly that state. The three maps now cover every
+model the catalog configures.
+
+**Fix:**
+1. `CHORUS_MODEL_CONFIGS` gains `openrouter/qwen/qwen3.8-flash`: alibaba pin,
+   one variant, limit 1000000/131072, and a note on the missing knob.
+2. `CHORUS_DEFAULT_MODELS` swaps qwen3.8-max for qwen3.8-flash;
+   `STYLE_REVIEW_MODELS` swaps kimi-k3 for glm-5.3-flash.
+3. Advisor specs, models and budgets derive from `CHORUS_MODEL_CONFIGS`.
+4. `advisor-qwen-qwen3-8-flash.md` carries the lens qwen held.
+
+**Tasks:**
+- [x] qwen3.8-flash entry with a single variant
+- [x] Default catalog and style-review list
+- [x] Advisor specs cover every configured model
+- [x] Advisor lens copied
+- [x] Test: the swaps hold, a configured non-default model resolves its pin and budget
+- [x] Test: 173 passed, 21 subtests (era 170)
+- [x] Reinstall, opencode global config, Landfall runtime sync
+- [x] Commit & push
+
+**Done when:** Landfall writes with qwen3.8-flash and reviews style with
+glm-5.3-flash, and naming any configured model in `chorus.models` produces an
+advisor that can actually run.

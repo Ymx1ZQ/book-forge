@@ -130,3 +130,26 @@ class ChorusCatalogTests(unittest.TestCase):
                 self.bf.ROLE_BUDGETS.pop("advisor-newvendor-newmodel-1", None)
             generic = (_Path(self.bf.__file__).parents[1] / "assets/prompts/chorus-advisor.md").read_text().strip()
             self.assertEqual(envelope["payload"]["role_prompt"], generic)
+
+    def test_qwen_flash_is_the_default_and_declares_the_one_operating_point_it_has(self):
+        self.assertIn("openrouter/qwen/qwen3.8-flash", self.bf.CHORUS_DEFAULT_MODELS)
+        self.assertNotIn("openrouter/qwen/qwen3.8-max", self.bf.CHORUS_DEFAULT_MODELS)
+        entry = self.bf._opencode_config()["provider"]["openrouter"]["models"]["qwen/qwen3.8-flash"]
+        self.assertEqual(entry["options"]["provider"]["only"], ["alibaba"])
+        # No reasoning_effort on this model: one variant, not a ladder that would be a fiction.
+        self.assertEqual(list(entry["variants"]), ["high"])
+        self.assertEqual(entry["limit"]["context"], 1000000)
+
+    def test_style_review_runs_on_glm_flash_and_kimi_stays_in_the_chorus(self):
+        self.assertIn("openrouter/z-ai/glm-5.3-flash", self.bf.STYLE_REVIEW_MODELS)
+        self.assertNotIn("openrouter/moonshotai/kimi-k3", self.bf.STYLE_REVIEW_MODELS)
+        self.assertIn("openrouter/moonshotai/kimi-k3", self.bf.CHORUS_DEFAULT_MODELS)
+
+    def test_a_configured_model_outside_the_default_fleet_still_resolves(self):
+        """chorus.models accepts any configured model, so its advisor must be runnable."""
+        for model in ("openrouter/qwen/qwen3.8-max", "openrouter/z-ai/glm-5.3"):
+            with self.subTest(model=model):
+                advisor = self.bf._chorus_advisor_name(model)
+                self.assertNotIn(model, self.bf.CHORUS_DEFAULT_MODELS)
+                self.assertIn(advisor, self.bf.ROLE_BUDGETS)
+                self.assertEqual(self.bf._expected_pin(advisor)[0], model.split("/", 1)[1])

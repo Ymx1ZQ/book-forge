@@ -90,14 +90,14 @@ ROLE_SPECS = {
 CHORUS_SYNTHESIZER = "openrouter/deepseek/deepseek-v4-pro-0813"
 STYLE_REVIEW_MODELS: list[str] = [
     "openrouter/openai/gpt-5.6-luna",
-    "openrouter/moonshotai/kimi-k3",
+    "openrouter/z-ai/glm-5.3-flash",
     "openrouter/google/gemini-3.7-flash",
 ]
 CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/deepseek/deepseek-v4-flash-0731",
     "openrouter/deepseek/deepseek-v4-pro-0813",
     "openrouter/z-ai/glm-5.3-flash",
-    "openrouter/qwen/qwen3.8-max",
+    "openrouter/qwen/qwen3.8-flash",
     "openrouter/moonshotai/kimi-k3",
     "openrouter/x-ai/grok-4.6",
     "openrouter/google/gemini-3.7-flash",
@@ -132,6 +132,15 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
         "default_effort": "xhigh",
         "variants": {"medium": "medium", "high": "high", "xhigh": "xhigh"},
+    },
+    # The only model of the catalog whose OpenRouter parameters omit reasoning_effort:
+    # it reasons, but the effort is not steerable, so it declares the one operating
+    # point it has rather than a ladder whose steps would all behave the same.
+    "openrouter/qwen/qwen3.8-flash": {
+        "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"high": "high"},
+        "limit": {"context": 1000000, "output": 131072},
     },
     "openrouter/moonshotai/kimi-k3": {
         "provider": {"order": ["moonshotai"], "only": ["moonshotai"], "allow_fallbacks": False},
@@ -171,14 +180,17 @@ def _chorus_advisor_name(model: str) -> str:
     return f"advisor-{_chorus_slug(model)}"
 
 
+# Every model the catalog configures, not only the default fleet: a project may name
+# any of them in chorus.models, and an advisor missing from these maps has no budget
+# and no expected pin, so it dies as a non-blocking chorus failure.
 CHORUS_ADVISOR_SPECS: dict[str, tuple[str, str, int]] = {
-    _chorus_advisor_name(m): ("all", str(CHORUS_MODEL_CONFIGS[m]["default_effort"]), 6)  # type: ignore[arg-type]
-    for m in CHORUS_DEFAULT_MODELS
+    _chorus_advisor_name(m): ("all", str(CHORUS_MODEL_CONFIGS[m].get("default_effort", DEFAULT_EFFORT)), 6)  # type: ignore[union-attr]
+    for m in CHORUS_MODEL_CONFIGS
 }
 # Dedicated synthesizer agent (pro/max) for chorus synthesis.
 CHORUS_SYNTHESIZER_AGENT = "chorus-synthesizer"
 # Reverse map advisor agent name -> model id, for resolved-pin verification.
-CHORUS_ADVISOR_MODELS: dict[str, str] = {_chorus_advisor_name(m): m for m in CHORUS_DEFAULT_MODELS}
+CHORUS_ADVISOR_MODELS: dict[str, str] = {_chorus_advisor_name(m): m for m in CHORUS_MODEL_CONFIGS}
 
 
 def _expected_pin(role: str) -> tuple[str, str]:
