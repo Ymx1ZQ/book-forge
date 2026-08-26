@@ -951,7 +951,7 @@ blocks.
 
 ## Fix: canon-auditor evidence locations must be stable artifacts (M46) ✅
 
-**Status: 🔄 In progress — 2026-08-25**
+**Status: ✅ Done — 2026-08-25**
 
 **Problem:** `AUDIT-UNI-0001` blocked in loop su Margherita (ATT-0041/0042/0053): l'auditor cita location non risolvibili (`CNT-0001`, `CNT-0001#continuity_material`, `CNT-0001#continuity-material`, `unresolved_questions#1`) e `_bind_audit_evidence` fallisce con `Audit evidence location is not a stable artifact`. Il prompt `assets/prompts/canon-auditor.md` dice genericamente `stable path or block ID`; il modello interpreta `CNT-*`/`UNI-*` come block ID, ma `_resolve_evidence_target` (universe scope) risolve solo `LAW-####|PLC-####|FAC-####|CHR-####` + suffissi di blocco canon, `ERA-####`/`EVT-####` (yaml), `proposal*` (book), e file esistenti.
 
@@ -997,5 +997,21 @@ blocks.
 - [x] Patch scripts/book_forge.py:80
 - [x] Test: pytest 136+ pass
 - [x] Commit fix(review): reviser high->medium
+- [x] Reinstall ./install.sh --force
+- [x] Landfall: runtime sync + run --next → REVISE-BOOK-0001-CH-0005 succeeded
+
+## Fix: reviser variant medium→low per reasoning 32k persistente (Landfall CH-0005 ATT-0106) ✅
+
+**Status: 🔄 In progress — 2026-08-25**
+
+**Problem:** ATT-0106 con medium ha stessi numeri di ATT-0104 high: total 53477 / input 21477 / reasoning 32000 / output 0 su 3 tentativi consecutivi. Variant medium non abbassa il cap reasoning su deepseek-v4-flash, il modello satura senza scrivere. Budget 8000 e fix supersedes/parse già a bordo.
+
+**Fix:** `scripts/book_forge.py:80` ROLE_SPECS["reviser"] ("all","medium",8) → ("all","low",8) (una riga, ultimo test gratis prima di cambiare modello a deepseek-v4-pro). Richiede runtime sync su Landfall.
+
+**Tasks:**
+- [x] Patch scripts/book_forge.py:80
+- [x] Aggiorna test reviser medium→low
+- [x] Test: pytest 136+ pass
+- [x] Commit fix(review): reviser medium->low
 - [x] Reinstall ./install.sh --force
 - [x] Landfall: runtime sync + run --next → REVISE-BOOK-0001-CH-0005 succeeded
