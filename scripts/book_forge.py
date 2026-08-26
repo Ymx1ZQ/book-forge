@@ -2341,6 +2341,139 @@ def register_artifact(
     return row
 
 
+def _source_chapter_artifact(root: Path, book_id: str, chapter_id: str) -> tuple[str, dict[str, object]]:
+    """The one true row for a source chapter, wherever it gets registered from."""
+    contract_path = root / "books" / book_id / "chapters" / f"{chapter_id}.json"
+    contract = _read_json(contract_path) if contract_path.is_file() else {}
+    pov = contract.get("pov")
+    return (
+        f"SOURCE-{book_id}-{chapter_id}",
+        {
+            "kind": "source-chapter",
+            "path": root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md",
+            "dependencies": list(contract.get("imports", [])),
+            "entities": [str(pov)] if pov else [],
+        },
+    )
+
+
+def _translation_chapter_artifact(
+    root: Path, book_id: str, chapter_id: str, locale: str, previous_id: str | None = None
+) -> tuple[str, dict[str, object]]:
+    dependencies = [
+        f"SOURCE-{book_id}-{chapter_id}",
+        f"LOCALE-STYLE-{book_id}-{locale}",
+        f"LOCALE-GLOSSARY-{book_id}-{locale}",
+        f"LOCALE-METADATA-{book_id}-{locale}",
+    ]
+    if previous_id:
+        dependencies.append(previous_id)
+    return (
+        f"TRANSLATION-{book_id}-{chapter_id}-{locale}",
+        {
+            "kind": "translation-chapter",
+            "path": root / "books" / book_id / "translations" / locale / "chapters" / f"{chapter_id}.md",
+            "dependencies": dependencies,
+            "entities": [],
+        },
+    )
+
+
+def _ensure_artifact(root: Path, artifact_id: str, spec: dict[str, object]) -> bool:
+    """Register a missing row, or complete one an earlier call site left partial.
+
+    Registration is opportunistic — export knows a chapter's path but not its
+    canon imports — and `if id not in registry` used to make the first caller's
+    partial knowledge permanent, leaving rows that can never go stale. Returns
+    True when the registry changed."""
+    target = Path(str(spec["path"]))
+    registry = _artifact_registry(root)
+    row = registry["artifacts"].get(artifact_id)
+    if row is None:
+        if not target.is_file():
+            return False
+        register_artifact(
+            root,
+            artifact_id,
+            str(spec["kind"]),
+            path=target,
+            dependencies=list(spec.get("dependencies") or []),
+            entities=list(spec.get("entities") or []),
+        )
+        return True
+    known = list(row.get("dependencies", []))
+    missing = [dependency for dependency in (spec.get("dependencies") or []) if dependency not in known]
+    entities = [entity for entity in (spec.get("entities") or []) if entity not in row.get("entities", [])]
+    if not missing and not entities:
+        return False
+    index = rebuild_indexes(root)
+    dependencies = known + missing
+    row["dependencies"] = dependencies
+    row["dependency_hashes"] = {
+        dependency: _dependency_hash(root, dependency, registry, index) for dependency in dependencies
+    }
+    row["entities"] = list(row.get("entities", [])) + entities
+    registry["edges"] = sorted(
+        [{"from": dependency, "to": target_id} for target_id, artifact in registry["artifacts"].items() for dependency in artifact.get("dependencies", [])],
+        key=lambda edge: (edge["from"], edge["to"]),
+    )
+    _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+    _write_derived_dependency_views(root)
+    return True
+
+
+def _ensure_translation_artifacts(root: Path, book_id: str, locale: str, chapter_ids: list[str]) -> list[str]:
+    """Register the SOURCE/TRANSLATION chain for chapters already promoted.
+
+    Rows are written after the promote, so a chapter translated before the
+    registry existed leaves a hole the next chapter cannot depend on: its
+    `previous` dependency dangles and registration raises with the output
+    already on disk. Walking the promoted chapters in order closes the chain."""
+    _ensure_locale_artifacts(root, book_id, locale)
+    changed: list[str] = []
+    previous_id: str | None = None
+    for chapter_id in chapter_ids:
+        source_id, source_spec = _source_chapter_artifact(root, book_id, chapter_id)
+        if _ensure_artifact(root, source_id, source_spec):
+            changed.append(source_id)
+        if source_id not in _artifact_registry(root)["artifacts"]:
+            continue
+        translation_id, translation_spec = _translation_chapter_artifact(root, book_id, chapter_id, locale, previous_id)
+        if not Path(str(translation_spec["path"])).is_file():
+            continue
+        if _ensure_artifact(root, translation_id, translation_spec):
+            changed.append(translation_id)
+        previous_id = translation_id
+    return changed
+
+
+def backfill_artifacts(project: Path | str, *, book: str | None = None, locale: str | None = None) -> dict[str, object]:
+    """Complete the artifact registry for work promoted before it tracked that work.
+
+    Idempotent: registers rows that are missing, completes rows whose
+    dependencies were never recorded, and leaves everything else untouched."""
+    root = _project_root(project)
+    changed: list[str] = []
+    for book_path in sorted((root / "books").glob("*/book.yaml")):
+        book_id = book_path.parent.name
+        if book and book_id != book:
+            continue
+        chapters = [path.stem for path in sorted((book_path.parent / "manuscript" / "chapters").glob("CH-*.md"))]
+        for chapter_id in chapters:
+            artifact_id, spec = _source_chapter_artifact(root, book_id, chapter_id)
+            if _ensure_artifact(root, artifact_id, spec):
+                changed.append(artifact_id)
+        for state_path in sorted((book_path.parent / "translations").glob("*/state.yaml")):
+            locale_id = state_path.parent.name
+            if locale and locale_id != locale:
+                continue
+            state = _read_json(state_path)
+            completed = [str(value) for value in state.get("completed_chapters", [])]
+            ordered = [chapter for chapter in chapters if chapter in completed]
+            changed.extend(_ensure_translation_artifacts(root, book_id, locale_id, ordered))
+    return {"backfilled": sorted(set(changed)), "count": len(set(changed))}
+
+
 def reconcile_artifacts(project: Path | str) -> list[str]:
     root = _project_root(project)
     index = rebuild_indexes(root)
@@ -5011,17 +5144,7 @@ def review_and_close_chapter(
     machine_state["source_locked"] = True
     machine_state["source_language"] = _read_json(root / "book-forge.yaml")["source_language"]
     _write_json(root / ".book-forge" / "state.json", machine_state)
-    artifact_id = f"SOURCE-{book_id}-{chapter_id}"
-    registry = _artifact_registry(root)
-    if artifact_id not in registry["artifacts"]:
-        register_artifact(
-            root,
-            artifact_id,
-            "source-chapter",
-            path=root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md",
-            dependencies=list(contract.get("imports", [])),
-            entities=[str(contract.get("pov"))],
-        )
+    _ensure_artifact(root, *_source_chapter_artifact(root, book_id, chapter_id))
     return {"state": "closed", "book": book_id, "chapter": chapter_id, "calls": calls, "receipts": receipts}
 
 
@@ -5343,15 +5466,30 @@ def _translate_one(
         }
         if last_error or (must_review and attempt_number == 2):
             capsule["repair"] = {"reason": last_error or "pivotal translation independent self-review", "previous_output": previous_output}
-        envelope = build_envelope(
-            root,
-            role="translator",
-            task_capsule=capsule,
-            imports=list(contract.get("imports", [])),
-            state={"previous_boundary": previous},
-            tools=[],
-            max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
-        )
+
+        def _translator_envelope(task_capsule: dict[str, object]) -> dict[str, object]:
+            return build_envelope(
+                root,
+                role="translator",
+                task_capsule=task_capsule,
+                imports=list(contract.get("imports", [])),
+                state={"previous_boundary": previous},
+                tools=[],
+                max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+            )
+
+        try:
+            envelope = _translator_envelope(capsule)
+        except ContextOverflowError:
+            # The repair attempt carries the whole previous translation on top of a
+            # capsule that already holds the full source, so it is the retry — the
+            # thing that exists to rescue a failed translation — that cannot be
+            # built. Drop it and say so; an overflow without it is a real one.
+            repair = capsule.get("repair")
+            if not isinstance(repair, dict) or "previous_output" not in repair:
+                raise
+            capsule = {**capsule, "repair": {"reason": repair["reason"], "previous_output_omitted": True}}
+            envelope = _translator_envelope(capsule)
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
         attempt_dir = Path(claim["capsule"]).parent
         result = runner("translator", envelope, attempt_dir)
@@ -5414,21 +5552,9 @@ def _translate_one(
         )
         promote_task(root, claim["attempt"], claim["fence"])
         reconcile_artifacts(root)
-        artifact_id = f"TRANSLATION-{book_id}-{chapter_id}-{locale}"
-        registry = _artifact_registry(root)
-        if f"SOURCE-{book_id}-{chapter_id}" not in registry["artifacts"]:
-            register_artifact(root, f"SOURCE-{book_id}-{chapter_id}", "source-chapter", path=source_path)
-        dependencies = [
-            f"SOURCE-{book_id}-{chapter_id}",
-            f"LOCALE-STYLE-{book_id}-{locale}",
-            f"LOCALE-GLOSSARY-{book_id}-{locale}",
-            f"LOCALE-METADATA-{book_id}-{locale}",
-        ]
-        if previous_id:
-            dependencies.append(previous_id)
-        registry = _artifact_registry(root)
-        if artifact_id not in registry["artifacts"]:
-            register_artifact(root, artifact_id, "translation-chapter", path=locale_root / "chapters" / f"{chapter_id}.md", dependencies=dependencies)
+        # Close the whole promoted chain, not just this chapter: an earlier chapter
+        # translated before the registry existed would leave `previous` dangling.
+        _ensure_translation_artifacts(root, book_id, locale, completed)
         return {"chapter": chapter_id, "locale": locale, "calls": calls, "receipt": receipt}
     raise BookForgeError("Unreachable translation state")
 
@@ -5865,22 +5991,20 @@ def _edition_dependencies(root: Path, assembly: dict[str, object]) -> list[str]:
     language = str(assembly["language"])
     source_language = _canonical_locale(str(_read_json(root / "book-forge.yaml")["source_language"]))
     translated = language != source_language
-    registry = _artifact_registry(root)
+    chapter_ids = [str(chapter["id"]) for chapter in assembly["chapters"]]
+    # Go through the shared specs: registering here with only a path is what left
+    # rows carrying no dependencies, which can never be invalidated.
+    if translated:
+        _ensure_translation_artifacts(root, book_id, language, chapter_ids)
+    else:
+        for chapter_id in chapter_ids:
+            _ensure_artifact(root, *_source_chapter_artifact(root, book_id, chapter_id))
     dependencies = []
-    for chapter in assembly["chapters"]:
-        chapter_id = str(chapter["id"])
+    for chapter_id in chapter_ids:
         if translated:
-            artifact_id = f"TRANSLATION-{book_id}-{chapter_id}-{language}"
-            path = root / "books" / book_id / "translations" / language / "chapters" / f"{chapter_id}.md"
-            kind = "translation-chapter"
+            dependencies.append(f"TRANSLATION-{book_id}-{chapter_id}-{language}")
         else:
-            artifact_id = f"SOURCE-{book_id}-{chapter_id}"
-            path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md"
-            kind = "source-chapter"
-        if artifact_id not in registry["artifacts"]:
-            register_artifact(root, artifact_id, kind, path=path)
-            registry = _artifact_registry(root)
-        dependencies.append(artifact_id)
+            dependencies.append(f"SOURCE-{book_id}-{chapter_id}")
     return dependencies
 
 
@@ -6276,6 +6400,11 @@ def build_parser() -> argparse.ArgumentParser:
     runtime = commands.add_parser("runtime")
     runtime_commands = runtime.add_subparsers(dest="runtime_command", required=True)
     runtime_commands.add_parser("sync")
+    artifacts = commands.add_parser("artifacts")
+    artifacts_commands = artifacts.add_subparsers(dest="artifacts_command", required=True)
+    artifacts_backfill = artifacts_commands.add_parser("backfill")
+    artifacts_backfill.add_argument("--book")
+    artifacts_backfill.add_argument("--locale")
     migrate = commands.add_parser("migrate")
     migrate.add_argument("mode", choices=("check", "dry-run", "apply", "rollback"))
     pause = commands.add_parser("pause")
@@ -6363,6 +6492,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"removed": args.collection}, sort_keys=True))
         elif args.command == "runtime" and args.runtime_command == "sync":
             print(json.dumps(sync_runtime(args.project), sort_keys=True))
+        elif args.command == "artifacts" and args.artifacts_command == "backfill":
+            print(json.dumps(backfill_artifacts(args.project, book=args.book, locale=args.locale), sort_keys=True))
         elif args.command == "migrate":
             print(json.dumps(migrate_project(args.project, args.mode), sort_keys=True))
         elif args.command == "pause":

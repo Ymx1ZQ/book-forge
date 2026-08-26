@@ -1103,3 +1103,73 @@ journal variant whose receipt records `provider: none`. Needs a decision on how
 
 **Done when:** an engine-performed repair leaves a journal that
 `recover_transactions` can replay, exactly like a model-produced promote.
+
+## Fix: artifact chain holes and the doubled repair envelope (Landfall translate) ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem 1 — registry rows are created by whoever gets there first, and only
+if missing.** Four call sites register the same ids with whatever they happen to
+know: the chapter-close path passes contract imports and pov, `_translate_one`
+registers a SOURCE with no dependencies, `_edition_dependencies` registers both
+SOURCE and TRANSLATION with no dependencies. Each is guarded by `if id not in
+registry`, so the first caller decides forever whether a row can ever go stale.
+Measured on Landfall: `SOURCE-BOOK-0001-CH-0004` carries `dependencies: []`
+(registered by export) while CH-0002/0003/0005 carry their five canon imports —
+CH-0004 will never be invalidated by a canon change. Worse, rows are written
+*after* the promote and a chapter translated before the registry existed leaves
+a permanent hole: CH-0001..0004 are translated and committed on disk with zero
+TRANSLATION rows, so registering CH-0005 raises `Dangling artifact dependency:
+TRANSLATION-BOOK-0001-CH-0004-it` — after CH-0005's own output is already
+promoted. The hash provenance repair added earlier cures stale rows, not absent
+ones, and no CLI reaches them.
+
+**Problem 2 — the repair attempt doubles the envelope.** `_translate_one`
+attempt 2 adds `repair.previous_output`, the whole previous translation (the raw
+model text on the failure path, the parsed contract on the pivotal-review path),
+on top of a capsule that already carries the full source. Measured on Landfall
+CH-0005: attempt 1 is 16739 tokens, attempt 2 is 27230, against a 20000 budget —
+`build_envelope` hard-fails, so the retry that exists to rescue a failed
+translation is exactly what cannot be built. It is not the base capsule that
+grew: raising the budget to cover a doubled retry buys headroom the first
+attempt never uses, and the ceiling doubles again with chapter length. Pivotal
+chapters take this path on every run, success included
+(`must_review and attempt_number == 2`).
+
+**Fix:**
+1. One authoritative spec per artifact kind (`_source_chapter_artifact`,
+   `_translation_chapter_artifact`) and `_ensure_artifact`, which registers a
+   missing row and completes a partial one instead of accepting it.
+2. `_ensure_translation_artifacts` walks a locale's promoted chapters in order,
+   so the `previous` dependency can never dangle. Called by `_translate_one`
+   before it registers, and by `_edition_dependencies` so export stops minting
+   dependency-less rows.
+3. `book-forge artifacts backfill [--book] [--locale]` — the same pass on
+   demand, for registries holed before the feature existed.
+4. The repair envelope degrades instead of hard-failing: on
+   `ContextOverflowError` rebuild the capsule with `previous_output` dropped and
+   `previous_output_omitted: true`, and document the `repair` field in the
+   pinned translator prompt. A genuine overflow without it still raises.
+
+**Tasks:**
+- [x] `_ensure_artifact` + per-kind specs
+- [x] `_ensure_translation_artifacts` wired into `_translate_one`, `_edition_dependencies` and the chapter-close path
+- [x] CLI `artifacts backfill` + route documented in SKILL.md and references/lifecycle.md
+- [x] Repair envelope degradation + prompt line
+- [x] Test: holed chain (translated chapters, no rows) → backfill registers in order, deps correct
+- [x] Test: partial row (no dependencies) → completed, not left as is
+- [x] Test: repair capsule over budget → built without previous_output; over budget without it → still raises
+- [x] Test: 145 passed, 14 subtests (era 140)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** `translate next` on a project whose earlier chapters predate the
+registry completes without a dangling dependency, export stops creating rows
+that cannot go stale, and a failed translation gets its repair attempt at any
+chapter length.
+
+**Verified on Landfall (copy, project untouched):** `artifacts backfill --book
+BOOK-0001` registered `SOURCE-CH-0001`, `SOURCE-CH-0004` and
+`TRANSLATION-CH-0001..0004-it` in order — each translation carrying its source,
+the three locale rows and the previous chapter — completed `SOURCE-CH-0004`'s
+empty dependency list with its five canon imports, and left `reconcile` clean.

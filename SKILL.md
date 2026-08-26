@@ -70,6 +70,7 @@ book-forge run [--book <id>] [--task <id>] [--next]
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
 book-forge status [--book <id>|--run <id>|--locale <tag>] [--repair-view]
+book-forge artifacts backfill [--book <id>] [--locale <tag>]
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
 book-forge translate <add|next|run|status> <book> <locale>
 book-forge export <book> --lang <tag> --format <epub|pdf|all>
