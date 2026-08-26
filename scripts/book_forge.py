@@ -6032,7 +6032,12 @@ def assemble_edition(project: Path | str, book_id: str, language: str, draft: bo
     for chapter_id in export_chapters:
         path = manuscript_root / f"{chapter_id}.md"
         text_value = _normalize_text(path.read_text(encoding="utf-8"))
-        chapters.append({"id": chapter_id, "title": next((line[2:].strip() for line in text_value.splitlines() if line.startswith("# ")), chapter_id), "markdown": text_value})
+        contract_path = root / "books" / book_id / "chapters" / f"{chapter_id}.json"
+        contract = _read_json(contract_path) if contract_path.is_file() else {}
+        # The number is the edition's, never the prose's: the format can change
+        # without touching a manuscript, and a translation inherits it unretranslated.
+        number = int(contract.get("order") or len(chapters) + 1)
+        chapters.append({"id": chapter_id, "number": number, "title": next((line[2:].strip() for line in text_value.splitlines() if line.startswith("# ")), chapter_id), "markdown": text_value})
         input_hashes[str(path.relative_to(root))] = _sha256_bytes(text_value.encode())
     if translated:
         for name in ("locale.yaml", "metadata.yaml", "state.yaml", "style.md", "glossary.md"):
@@ -6100,6 +6105,12 @@ def _markdown_xhtml(markdown: str) -> str:
     return "\n".join(rendered)
 
 
+def _chapter_number_html(chapter: dict[str, object]) -> str:
+    """The chapter's number as an element of the edition, styled by the templates."""
+    number = chapter.get("number")
+    return f'<p class="chapter-number">{html.escape(str(number))}</p>' if number else ""
+
+
 def _xhtml_document(title: str, language: str, body: str, *, nav: bool = False) -> bytes:
     nav_namespace = ' xmlns:epub="http://www.idpf.org/2007/ops"' if nav else ""
     return (
@@ -6126,8 +6137,9 @@ def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
         filename = f"chapter-{index:04d}.xhtml"
         chapter_items.append(f'<item id="chapter-{index:04d}" href="{filename}" media-type="application/xhtml+xml"/>')
         spine_items.append(f'<itemref idref="chapter-{index:04d}"/>')
-        nav_items.append(f'<li><a href="{filename}">{html.escape(str(chapter["title"]))}</a></li>')
-        members.append((f"OEBPS/{filename}", _xhtml_document(str(chapter["title"]), str(assembly["language"]), _markdown_xhtml(str(chapter["markdown"])))))
+        number = html.escape(str(chapter.get("number", "")))
+        nav_items.append(f'<li><a href="{filename}">{number}. {html.escape(str(chapter["title"]))}</a></li>')
+        members.append((f"OEBPS/{filename}", _xhtml_document(str(chapter["title"]), str(assembly["language"]), _chapter_number_html(chapter) + _markdown_xhtml(str(chapter["markdown"])))))
     modified = "2000-01-01T00:00:00Z"
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
@@ -6366,7 +6378,7 @@ def export_pdf(
         "title_html": html.escape(str(assembly["title"]), quote=True),
         "author_html": html.escape(str(assembly["author"]), quote=True),
         "chapters": [
-            {"id": chapter["id"], "title": chapter["title"], "xhtml": f'<section id="{chapter["id"]}">{_markdown_xhtml(str(chapter["markdown"]))}</section>'}
+            {"id": chapter["id"], "title": chapter["title"], "xhtml": f'<section id="{chapter["id"]}">{_chapter_number_html(chapter)}{_markdown_xhtml(str(chapter["markdown"]))}</section>'}
             for chapter in assembly["chapters"]
         ],
     }

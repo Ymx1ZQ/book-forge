@@ -100,3 +100,17 @@ class PdfTitleValidationTests(unittest.TestCase):
         with self.assertRaises(self.bf.BookForgeError) as caught:
             self.bf.validate_pdf(Path(result["path"]), expected_titles=["A Chapter Never Written"])
         self.assertIn("A Chapter Never Written", str(caught.exception))
+
+
+class PdfChapterNumberTests(PdfTests):
+    def test_the_number_opens_the_chapter_without_costing_a_blank_page(self):
+        result = self.bf.export_pdf(self.base, self.book, "en")
+        text = subprocess.run(["pdftotext", str(result["path"]), "-"], capture_output=True, text=True, check=False).stdout
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        # Each chapter opens on its number, with the title on the next line.
+        self.assertEqual(lines[0], "1")
+        self.assertEqual(lines[1], "Chapter 1")
+        self.assertIn("2", lines)
+        self.assertEqual(lines[lines.index("2") + 1], "Chapter 2")
+        pages = int(subprocess.run(["pdfinfo", str(result["path"])], capture_output=True, text=True, check=False).stdout.split("Pages:")[1].split()[0])
+        self.assertEqual(pages, 2)

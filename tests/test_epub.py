@@ -73,3 +73,26 @@ class EpubTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChapterNumberingTests(EpubTests):
+    def test_the_number_is_rendered_by_the_edition_and_absent_from_the_manuscript(self):
+        result = self.bf.export_epub(self.base, self.book, "en")
+        with zipfile.ZipFile(Path(result["path"])) as archive:
+            nav = archive.read("OEBPS/nav.xhtml").decode()
+            first = archive.read("OEBPS/chapter-0001.xhtml").decode()
+            second = archive.read("OEBPS/chapter-0002.xhtml").decode()
+            css = archive.read("OEBPS/styles/epub.css").decode()
+        self.assertIn(">1. Chapter 1<", nav)
+        self.assertIn(">2. Chapter 2<", nav)
+        self.assertIn('<p class="chapter-number">1</p>', first)
+        self.assertIn('<p class="chapter-number">2</p>', second)
+        self.assertIn("p.chapter-number", css)
+        # The prose never carries the element, so a reorder or a format change touches no manuscript.
+        manuscript = (self.base / f"books/{self.book}/manuscript/chapters/CH-0001.md").read_text()
+        self.assertNotIn("chapter-number", manuscript)
+        self.assertEqual(manuscript.splitlines()[0], "# Chapter 1")
+
+    def test_the_assembly_carries_the_contract_order(self):
+        assembly = self.bf.assemble_edition(self.base, self.book, "en")
+        self.assertEqual([chapter["number"] for chapter in assembly["chapters"]], [1, 2])

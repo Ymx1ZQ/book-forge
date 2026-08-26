@@ -1421,3 +1421,45 @@ prompt: no mechanical test separates it from a deliberately abrupt title.
 
 **Done when:** A chapter designed without a title cannot be promoted under a
 heading that repeats a beat or carries a chapter number.
+
+## Chapter numbering belongs to the edition, not to the title ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** Nothing renders a chapter number. `pdf.css` centres the title with
+`h1 { break-before: page }` and counts pages, never chapters; the EPUB writes
+the title into `<title>` and the body and lists titles alone in the nav. The
+sequence exists only as `order` in the contract and as the `CH-000N` id, and
+never reaches the reader.
+
+That is why the models kept putting it in the title. `Chapter Two — ` and
+`III — ` were the model filling a slot the artifact did not offer. The writer
+validator now rejects those, so without a home for the number the rule costs a
+retry per chapter and teaches nothing: a constraint that forbids without
+offering the alternative gets fought at every chapter.
+
+**Fix:** the number travels in the assembly and is rendered by the templates,
+never written into prose — so the format can change without touching a
+manuscript, and a translation inherits it without being retranslated. A bare
+numeral was chosen over `Chapter 4`: no localizable string, identical in every
+language. The nav lists `4. Title`.
+1. `assemble_edition` carries `number` per chapter, from the contract's `order`.
+2. EPUB: `<p class="chapter-number">` before the title, nav item numbered,
+   `epub.css` styles it and takes over the page break from `h1`.
+3. PDF: same element inside each `<section>`, `pdf.css` moves `break-before:
+   page` and the top margin onto it so the number opens the page and the title
+   follows it.
+
+**Tasks:**
+- [x] `assemble_edition` carries the chapter number
+- [x] EPUB body and nav render it, `epub.css` styles it
+- [x] PDF section and `pdf.css` render it
+- [x] Test: assembly carries it, EPUB nav and body carry it, PDF text carries it
+- [x] Test: two chapters render on two pages, no blank page gained
+- [x] Test: 170 passed, 19 subtests (era 163), determinismo intatto
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A chapter opens under its number in both editions, the number is
+absent from every manuscript, and changing its format touches only the
+templates.
