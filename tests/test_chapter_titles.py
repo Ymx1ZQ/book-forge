@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -61,3 +62,49 @@ class BeatTitleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InventedTitleTests(unittest.TestCase):
+    """With no contract title there is nothing downstream to repair the heading."""
+
+    BEAT = "At the Counting the floor is read: lamps fail in public, riots follow."
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def output(self, heading):
+        body = " ".join(["word"] * 28)
+        return json.dumps({
+            "prose_markdown": f"# {heading}\n\n{body}",
+            "beat_map": [{"beat": self.BEAT, "evidence": "line 3"}],
+            "consequences": [],
+        })
+
+    def contract(self, title=None):
+        value = {"id": "CH-0005", "target_words": 30, "beats": [self.BEAT]}
+        if title:
+            value["title"] = title
+        return value
+
+    def test_a_heading_repeating_a_beat_opening_is_rejected(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.validate_writer_output(self.contract(), self.output("At the counting the floor is"))
+        self.assertIn("repeats the opening of a beat", str(caught.exception))
+
+    def test_a_numbering_prefix_is_rejected(self):
+        for heading in ("Chapter Two — The Mistimed Dawn", "III — Six Spoke, and the Sky Screamed", "4. The Signed Misread"):
+            with self.subTest(heading=heading):
+                with self.assertRaises(self.bf.BookForgeError) as caught:
+                    self.bf.validate_writer_output(self.contract(), self.output(heading))
+                self.assertIn("numbering prefix", str(caught.exception))
+
+    def test_a_real_title_passes_even_when_it_opens_with_a_number_word(self):
+        for heading in ("The Arithmetic of Grace", "Six Spoke, and the Sky Screamed"):
+            with self.subTest(heading=heading):
+                value = self.bf.validate_writer_output(self.contract(), self.output(heading))
+                self.assertEqual(value["prose_markdown"].splitlines()[0], f"# {heading}")
+
+    def test_a_contract_that_names_a_title_is_not_second_guessed(self):
+        # _with_contract_heading overwrites the heading at promote, so there is nothing to check.
+        value = self.bf.validate_writer_output(self.contract("The Arithmetic of Grace"), self.output("Chapter Two — Whatever"))
+        self.assertIn("prose_markdown", value)

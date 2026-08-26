@@ -4333,6 +4333,32 @@ def _parse_chunked_contract(text_value: str) -> dict[str, object]:
     return merged
 
 
+# A numbering marker needs its separator, so "Six Spoke, and the Sky Screamed" is a
+# title while "III — Six Spoke..." and "Chapter Two — ..." are numbering.
+_TITLE_NUMBERING = re.compile(r"^(?:[Cc]hapter\s+\S+|[IVXLCDM]+|\d+)\s*[—–:.)-]\s*\S")
+
+
+def _invented_title_problem(contract: dict[str, object], prose: str) -> str | None:
+    """Hold the writer to the title rule when there is no contract title to fall back on.
+
+    `_with_contract_heading` repairs a heading only when the contract names one,
+    and the design-time guard never sees this chapter again, so a chapter designed
+    without a title takes whatever the writer invents with nothing behind it."""
+    if str(contract.get("title") or "").strip():
+        return None
+    first = prose.lstrip().split("\n", 1)[0]
+    if not first.startswith("#"):
+        return "Writer output has no chapter title line"
+    heading = first.lstrip("# ").strip()
+    if not heading:
+        return "Writer output has an empty chapter title"
+    if _TITLE_NUMBERING.match(heading):
+        return f"Invented title carries a numbering prefix: {heading!r}"
+    if _title_is_beat_prefix({"title": heading, "beats": contract.get("beats", [])}):
+        return f"Invented title repeats the opening of a beat: {heading!r}"
+    return None
+
+
 def validate_writer_output(contract: dict[str, object], text_value: str) -> dict[str, object]:
     value = _parse_contract_json(text_value)
     prose = value.get("prose_markdown")
@@ -4344,6 +4370,9 @@ def validate_writer_output(contract: dict[str, object], text_value: str) -> dict
         raise BookForgeError("Writer output has no consequence disclosure")
     if re.search(r"\b(?:TODO|TBD)\b|\[(?:INSERT|PLACEHOLDER)[^]]*\]", prose, re.IGNORECASE):
         raise BookForgeError("Writer output contains a placeholder")
+    title_problem = _invented_title_problem(contract, prose)
+    if title_problem:
+        raise BookForgeError(title_problem)
     words = len(re.findall(r"\b[\w’'-]+\b", prose, re.UNICODE))
     target = int(contract["target_words"])
     lower = max(1, int(target * 0.70))

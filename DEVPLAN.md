@@ -1380,3 +1380,44 @@ chapter reaches the writer without a title having been asked for.
 written, so the design capsule never runs for them again. Renaming them means
 redesigning the book or editing the three contracts and re-promoting those
 chapters — a separate decision.
+
+## Fix: nothing checks the title the writer invents ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `chapter.title-from-beat` runs at design time, on the designer's
+proposal. A chapter that reaches the writer with no title — because the designer
+never gave one, or because the guard dropped a bad one — gets whatever the
+writer invents, held only by a line in the prompt. `_with_contract_heading`
+cannot help: it repairs a heading only when the contract names one. On Landfall
+that is now seventeen chapters, every one of them unwritten.
+
+The rule the writer is given has three clauses; the two that are mechanically
+checkable are the ones that have actually failed. A beat's opening words
+produced `At the counting the floor is`, and a numbering prefix produced
+`Chapter Two — The Mistimed Dawn` and `III — Six Spoke, and the Sky Screamed`
+in the same book.
+
+**Fix:** `validate_writer_output` checks the invented heading when the contract
+carries no title — `_title_is_beat_prefix` for the first clause, a numbering
+prefix pattern for the second. It raises like every other writer validation, so
+`produce_chapter` retries once with the reason in `repair.validation_error`
+instead of promoting a bad title. A contract that names a title is not checked:
+`_with_contract_heading` already overwrites whatever the writer put there.
+
+The numbering pattern requires a separator, so a title that merely opens with a
+number word (`Six Spoke, and the Sky Screamed`) is not caught; `III — ` and
+`Chapter Two — ` are. The third clause — a title cut mid-phrase — is left to the
+prompt: no mechanical test separates it from a deliberately abrupt title.
+
+**Tasks:**
+- [x] `_invented_title_problem` + numbering pattern
+- [x] `validate_writer_output` calls it
+- [x] Test: beat-opening heading raises, numbering prefix raises, a real title passes
+- [x] Test: a contract with a title is not second-guessed
+- [x] Test: 163 passed, 19 subtests (era 159)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A chapter designed without a title cannot be promoted under a
+heading that repeats a beat or carries a chapter number.
