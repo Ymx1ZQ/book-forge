@@ -4175,6 +4175,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
                     {
                         "id": "CH-0001",
                         "order": 1,
+                        "title": "two to six words naming what the chapter is about; never the opening words of a beat, never a truncated sentence, never a chapter number or numeral prefix (order carries the sequence)",
                         "pov": "stable character ID",
                         "beats": ["causal beat"],
                         "plants": [],

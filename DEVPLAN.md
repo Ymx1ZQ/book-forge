@@ -1333,3 +1333,50 @@ contract, manuscript and translation.
 
 **Done when:** The promoted heading is the contract title whichever path wrote
 the chapter, and a designer cannot pass the opening of a beat off as a title.
+
+## The pipeline names its own chapters: title becomes a required design field ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `title` is never asked for. The book-design capsule's
+`required_output.chapters[0]` lists id, order, pov, beats, plants, reveals,
+target_words, imports, obligations and pivotal — no title — and `designer.md`
+does not mention the word. A field nobody specifies is a field the model fills
+by copying what is next to it: Landfall's CH-0004/0005/0006 carry the first six
+words of their own first beat, lowercased and cut mid-phrase. Downstream,
+`writer.md` says only "otherwise invent a concise title", with no constraint, so
+the chapters that reached the writer with no title got `Chapter Two — The
+Mistimed Dawn` and `III — Six Spoke, and the Sky Screamed` — numbering carried
+in the title, in two different conventions, in the same book.
+
+Naming the chapters is the pipeline's job, not the author's, so the fix is to
+say what a title is at all three points where a model can produce one.
+
+**Fix:** one spec, worded the same everywhere — two to six words, names what the
+chapter is about, never the opening words of a beat or a truncated sentence,
+never a chapter number or numeral prefix, because `order` carries the sequence.
+1. Add `title` to the design capsule's `required_output.chapters[0]` with the
+   spec inline, so the designer is asked for it.
+2. `designer.md` states the rule.
+3. `writer.md` applies the same rule to the title it invents when the contract
+   has none.
+
+The `chapter.title-from-beat` guard stays as the deterministic backstop: the
+prompt asks, the validator checks.
+
+**Tasks:**
+- [x] `title` in the design capsule required_output
+- [x] `designer.md` title rule
+- [x] `writer.md` invented-title rule
+- [x] Test: the designer envelope asks for a title and carries the rule
+- [x] Test: 159 passed, 14 subtests (era 157)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A book designed from scratch names its own chapters, and no
+chapter reaches the writer without a title having been asked for.
+
+**Does not retitle Landfall's CH-0004/0005/0006.** Their contracts are already
+written, so the design capsule never runs for them again. Renaming them means
+redesigning the book or editing the three contracts and re-promoting those
+chapters — a separate decision.

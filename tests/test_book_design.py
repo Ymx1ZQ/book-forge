@@ -362,3 +362,44 @@ class ChapterTitleMaterializationTests(unittest.TestCase):
         second = json.loads((self.project / f"books/{book}/chapters/CH-0002.json").read_text())
         self.assertEqual(first["title"], "The Word Under the Glass")
         self.assertNotIn("title", second)
+
+
+class DesignAsksForTitlesTests(unittest.TestCase):
+    """Naming the chapters is the pipeline's job, so the contract must ask for it."""
+
+    class CapturingProvider(DesignProvider):
+        def __init__(self, value, audit=None):
+            super().__init__(value, audit)
+            self.envelopes = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            self.envelopes.append((role, envelope["payload"]))
+            return super().__call__(role, envelope, attempt_dir)
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def test_the_designer_is_asked_for_a_title_and_told_what_one_is(self):
+        book = self.bf.add_book(self.project, "Named")["id"]
+        (self.project / f"books/{book}/book-brief.json").write_text(json.dumps({"schema": 1, "premise": "A diver must decide.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"}))
+        provider = self.CapturingProvider(proposal())
+        self.bf.execute_book_design(self.project, book, provider=provider)
+
+        payload = next(payload for role, payload in provider.envelopes if role == "designer")
+        chapter_shape = payload["task"]["required_output"]["chapters"][0]
+        self.assertIn("title", chapter_shape)
+        self.assertIn("never the opening words of a beat", chapter_shape["title"])
+        self.assertIn("never the opening words of a beat", payload["role_prompt"])
+
+    def test_the_writer_is_told_what_to_invent_when_the_contract_has_no_title(self):
+        writer_prompt = (Path(self.bf.__file__).parents[1] / "assets/prompts/writer.md").read_text()
+        self.assertIn("otherwise invent one: two to six words", writer_prompt)
+        self.assertIn("never a chapter number or numeral prefix", writer_prompt)
+
