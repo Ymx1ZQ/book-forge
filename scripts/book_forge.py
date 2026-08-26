@@ -6221,6 +6221,32 @@ def _verify_pdf_fonts(font_paths: dict[str, Path]) -> dict[str, str]:
     return observed
 
 
+def _pdf_text_key(value: str, *, packed: bool = False) -> str:
+    """Read a PDF the way a reader does, not the way pdftotext cuts it.
+
+    Extraction breaks a line wherever the renderer wrapped and keeps the font's
+    ligatures, so a raw substring check fails for every title long enough to wrap
+    and every title containing ff, fi or fl. NFKC resolves the ligatures."""
+    folded = unicodedata.normalize("NFKC", value).replace("\u00ad", "")
+    if packed:
+        return re.sub(r"\s+", "", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _missing_pdf_titles(text: str, expected_titles: list[str]) -> list[str]:
+    spaced_text, packed_text = _pdf_text_key(text), _pdf_text_key(text, packed=True)
+    missing = []
+    for title in expected_titles:
+        if _pdf_text_key(title) in spaced_text:
+            continue
+        # A wrap can swallow the space around the break; compare without spaces
+        # before calling a rendered title absent.
+        if _pdf_text_key(title, packed=True) in packed_text:
+            continue
+        missing.append(title)
+    return missing
+
+
 def validate_pdf(path: Path | str, *, expected_titles: list[str]) -> dict[str, object]:
     target = Path(path)
     if not target.read_bytes().startswith(b"%PDF-"):
@@ -6240,8 +6266,11 @@ def validate_pdf(path: Path | str, *, expected_titles: list[str]) -> dict[str, o
         if len(parts) < 8 or parts[-5] != "yes" or parts[-3] != "yes":
             raise BookForgeError("PDF fonts must be embedded with Unicode maps")
     text_result = subprocess.run(["pdftotext", str(target), "-"], capture_output=True, text=True, check=False)
-    if text_result.returncode != 0 or any(title not in text_result.stdout for title in expected_titles):
-        raise BookForgeError("PDF text or chapter order validation failed")
+    if text_result.returncode != 0:
+        raise BookForgeError("PDF text extraction failed")
+    missing = _missing_pdf_titles(text_result.stdout, expected_titles)
+    if missing:
+        raise BookForgeError(f"PDF text validation failed; titles not found: {', '.join(missing)}")
     return {"valid": True, "sha256": _file_hash(target), "pages": next((line.split(":", 1)[1].strip() for line in info.stdout.splitlines() if line.startswith("Pages:")), None)}
 
 

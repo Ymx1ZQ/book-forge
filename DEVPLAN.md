@@ -1225,3 +1225,56 @@ class of failure nobody reads.
 **Done when:** A fresh project is created with glm-5.3-flash, and a chorus model
 the skill does not know is emitted without a provider pin instead of one it
 cannot be served through.
+
+## Fix: PDF title validation reads pdftotext raw (Landfall draft export) ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `validate_pdf` checks `title not in text_result.stdout` against raw
+`pdftotext` output. Extraction breaks a line wherever the renderer wrapped and
+keeps the font's ligatures, so the check fails on titles that are present and
+correctly rendered. Measured on Landfall's draft edition, five of six chapters:
+
+| Chapter | In the PDF text | Why the substring fails |
+|---|---|---|
+| CH-0002 | `Chapter Two — The Mistimed` / `Dawn` | wrapped |
+| CH-0003 | `III — Six Spoke, and the Sky` / `Screamed` | wrapped |
+| CH-0004 | `The voice interrogates binta on` / `suﬀering` | wrapped **and** `ff` ligature |
+| CH-0005 | `At the counting the ﬂoor is` | `fl` ligature, no wrap at all |
+| CH-0006 | `At the counting binta publicly` / `refuses` | wrapped |
+
+Normalizing newlines alone does not fix it: CH-0004 and CH-0005 fail on U+FB00
+and U+FB02, which survive any whitespace handling. The failure is also opaque —
+`PDF text or chapter order validation failed` names neither the title nor the
+reason, and the same message covers an extraction error.
+
+**Fix:** `_pdf_text_key` folds both sides with NFKC (which resolves the
+ligatures), drops soft hyphens and collapses whitespace runs; a packed
+comparison with whitespace removed catches a wrap that also swallowed the space.
+`_missing_pdf_titles` returns which titles are absent, so the error names them.
+A failed extraction gets its own message.
+
+**Tasks:**
+- [x] `_pdf_text_key` + `_missing_pdf_titles`
+- [x] `validate_pdf` uses them and names the missing titles
+- [x] Test: a long title carrying `ff` validates end-to-end, and the raw extraction does not contain it verbatim
+- [x] Test: a title genuinely absent still fails, and the message names it
+- [x] Test: 150 passed, 14 subtests (era 148)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A chapter whose rendered title wraps or contains a ligature
+passes publication validation, and a title that is really missing fails with its
+name in the message.
+
+**Verified on Landfall:** both draft editions validate against the titles taken
+from their own manuscripts — `en` 78 pages, `it` 86 pages, six chapters each.
+
+**Found while doing it, not fixed here** — the manuscript heading is only forced
+to the contract title on the path where the style check finds nothing
+(`recheck_style_closed_chapter`). When the reviser runs, whatever heading it
+returns is promoted: CH-0002 kept `Chapter Two — The Mistimed Dawn` against a
+contract title of `The Mistimed Dawn`, CH-0003 kept `III — `. Separately,
+CH-0004/0005/0006 carry beat text as their contract title (`At the counting the
+floor is`), which no heading enforcement can repair — it is a design defect
+upstream, and the Italian translation reproduces it faithfully.

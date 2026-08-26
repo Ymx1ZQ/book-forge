@@ -64,3 +64,39 @@ class PdfTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PdfTitleValidationTests(unittest.TestCase):
+    """A rendered title that wraps or carries a ligature is present, not missing."""
+
+    LONG_TITLE = "The Voice Interrogates the Offering at the Counting Floor"
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        self.book = self.bf.add_book(self.project, "Glass Tide")["id"]
+        contracts = self.project / f"books/{self.book}/chapters"
+        contracts.mkdir()
+        manuscript = self.project / f"books/{self.book}/manuscript/chapters"
+        (contracts / "CH-0001.json").write_text(json.dumps({"schema": 1, "book": self.book, "id": "CH-0001", "order": 1, "target_words": 10, "imports": []}))
+        (manuscript / "CH-0001.md").write_text(f"# {self.LONG_TITLE}\n\nMara crosses the harbor. The tide answers once.")
+        state_path = self.project / f"books/{self.book}/state.yaml"
+        state = json.loads(state_path.read_text())
+        state["closed_chapters"] = ["CH-0001"]
+        state_path.write_text(json.dumps(state))
+
+    def test_a_wrapped_title_with_a_ligature_validates(self):
+        result = self.bf.export_pdf(self.project, self.book, "en")
+        raw = subprocess.run(["pdftotext", str(result["path"]), "-"], capture_output=True, text=True, check=False).stdout
+        # The regression this guards: the title is rendered but not extractable verbatim.
+        self.assertNotIn(self.LONG_TITLE, raw)
+        self.assertTrue(self.bf.validate_pdf(Path(result["path"]), expected_titles=[self.LONG_TITLE])["valid"])
+
+    def test_a_title_that_is_really_absent_fails_and_is_named(self):
+        result = self.bf.export_pdf(self.project, self.book, "en")
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.validate_pdf(Path(result["path"]), expected_titles=["A Chapter Never Written"])
+        self.assertIn("A Chapter Never Written", str(caught.exception))
