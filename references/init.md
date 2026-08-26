@@ -4,7 +4,7 @@ Use this route only for `init`.
 
 1. Confirm the target directory. The source language is English (`en`) unless
    the user explicitly chooses another valid BCP 47 tag.
-2. At the start of setup, ask which chorus models to use. The helper prompts interactively (TTY) with the 8-model catalog (`flash`, `pro`, `glm-5.3`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`, `luna`; default `all`), accepts `1,3,5` / `all` / `none` or a CSV, confirms, and persists the choice in `book-forge.yaml:chorus.models` (drives `opencode.json` + `.opencode/agents/`). Non-TTY or `--chorus-models <csv>` skips the prompt; `--chorus-models` also works as one-shot override on `design`/`chorus`.
+2. At the start of setup, ask which chorus models to use. The helper prompts interactively (TTY) with the 8-model catalog (`flash`, `pro`, `glm-5.3-flash`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`, `luna`; default `all`), accepts `1,3,5` / `all` / `none` or a CSV, confirms, and persists the choice in `book-forge.yaml:chorus.models` (drives `opencode.json` + `.opencode/agents/`). Non-TTY or `--chorus-models <csv>` skips the prompt; `--chorus-models` also works as one-shot override on `design`/`chorus`.
 3. Run the deterministic helper with `--project TARGET init`, adding
    `--source-language TAG` only when requested. Add `--title TITLE` when the
    requested title differs from the directory name. Pass `--chorus-models <csv>` to pre-select without prompting.

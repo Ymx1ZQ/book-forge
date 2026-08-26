@@ -96,7 +96,7 @@ STYLE_REVIEW_MODELS: list[str] = [
 CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/deepseek/deepseek-v4-flash-0731",
     "openrouter/deepseek/deepseek-v4-pro-0813",
-    "openrouter/z-ai/glm-5.3",
+    "openrouter/z-ai/glm-5.3-flash",
     "openrouter/qwen/qwen3.8-max",
     "openrouter/moonshotai/kimi-k3",
     "openrouter/x-ai/grok-4.6",
@@ -121,6 +121,12 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
         "default_effort": "max",
         "variants": {"high": "high", "max": "max"},
+    },
+    "openrouter/z-ai/glm-5.3-flash": {
+        "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
+        "limit": {"context": 1048576, "output": 131072},
     },
     "openrouter/qwen/qwen3.8-max": {
         "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
@@ -317,19 +323,17 @@ def _opencode_config(chorus_models: list[str] | None = None) -> dict[str, object
     for mid in models:
         cfg = CHORUS_MODEL_CONFIGS.get(mid)
         if cfg is None:
-            # Fallback for unknown model — use primary ladder.
-            cfg = {
-                "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
-                "default_effort": DEFAULT_EFFORT,
-                "variants": VARIANT_EFFORTS,
-            }
+            # Unknown model: primary ladder, but no provider pin. Borrowing another
+            # vendor's pin with allow_fallbacks disabled routes the model to providers
+            # that cannot serve it, and the call dies as a non-blocking advisor error.
+            cfg = {"default_effort": DEFAULT_EFFORT, "variants": VARIANT_EFFORTS}
         model_id = mid.split("/", 1)[1]
         variants = cfg["variants"]  # type: ignore[index]
+        options: dict[str, object] = {"reasoningEffort": cfg["default_effort"]}
+        if "provider" in cfg:
+            options["provider"] = cfg["provider"]
         entry: dict[str, object] = {
-            "options": {
-                "reasoningEffort": cfg["default_effort"],  # type: ignore[index]
-                "provider": cfg["provider"],  # type: ignore[index]
-            },
+            "options": options,
             "variants": {name: {"reasoningEffort": effort} for name, effort in variants.items()},  # type: ignore[union-attr]
         }
         if "limit" in cfg:
@@ -2625,6 +2629,11 @@ def build_envelope(
     if max_output_tokens <= 0 or max_output_tokens > output_budget:
         raise BookForgeError(f"Output allowance {max_output_tokens} exceeds {role} budget {output_budget}")
     prompt_path = Path(__file__).resolve().parents[1] / "assets" / "prompts" / f"{role}.md"
+    if not prompt_path.is_file() and role.startswith("advisor-"):
+        # An advisor's lens is pinned by filename, so a chorus model without its own
+        # prompt would drop out of every run as a non-blocking failure. Let it advise
+        # with the generic lens instead; every other role still fails hard.
+        prompt_path = prompt_path.parent / "chorus-advisor.md"
     if not prompt_path.is_file():
         raise BookForgeError(f"Missing pinned role prompt: {prompt_path.name}")
     role_prompt = prompt_path.read_text(encoding="utf-8").strip()

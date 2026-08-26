@@ -1173,3 +1173,55 @@ BOOK-0001` registered `SOURCE-CH-0001`, `SOURCE-CH-0004` and
 `TRANSLATION-CH-0001..0004-it` in order — each translation carrying its source,
 the three locale rows and the previous chapter — completed `SOURCE-CH-0004`'s
 empty dependency list with its five canon imports, and left `reconcile` clean.
+
+## Chorus catalog: glm-5.3-flash replaces glm-5.3, unknown models lose the borrowed provider pin ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `advisor-glm-5-3` fails with `Model output contains no JSON object`
+in four of the recent chorus reports. It runs at `reasoningEffort: max` and its
+ladder offers only `high` and `max`, so it cannot be dialled down — the same
+reasoning-saturation shape already recorded for the reviser. `z-ai/glm-5.3-flash`
+serves the same 1M context and 131k output at 0.075/0.25 $/Mtok against
+1.4/4.4, and supports `reasoning_effort`.
+
+Adding a model to `book-forge.yaml:chorus.models` was also unsafe: a model
+absent from `CHORUS_MODEL_CONFIGS` fell through to a fallback carrying
+deepseek's provider pin (`only: ["deepseek","baidu"]`, `allow_fallbacks: false`),
+so `_opencode_config` emitted a z-ai model routed to providers that cannot serve
+it. The call then fails as a non-blocking advisor error, which is exactly the
+class of failure nobody reads.
+
+**Fix:**
+1. `CHORUS_MODEL_CONFIGS` gains `openrouter/z-ai/glm-5.3-flash`: z-ai pin,
+   default effort `high`, ladder `low/medium/high/max`, limit 1048576/131072.
+   The `glm-5.3` entry stays so a project that names it still routes correctly.
+2. `CHORUS_DEFAULT_MODELS` swaps glm-5.3 for glm-5.3-flash; new projects are
+   created with flash.
+3. An unknown model gets no provider pin at all, so OpenRouter routes it
+   normally instead of being pinned to a vendor that cannot serve it.
+4. Catalog list in SKILL.md and references/init.md follows.
+5. An advisor's lens is pinned by filename (`assets/prompts/advisor-<slug>.md`),
+   so renaming the model would have dropped the science-coherence lens the
+   glm advisor carries: `advisor-glm-5-3-flash.md` copies it, and
+   `advisor-glm-5-3.md` stays for projects still naming glm-5.3. A chorus model
+   with no prompt of its own now falls back to the generic `chorus-advisor.md`
+   instead of dropping out of every run as a non-blocking failure; every other
+   role still fails hard on a missing pinned prompt.
+
+**Tasks:**
+- [x] `CHORUS_MODEL_CONFIGS` entry for glm-5.3-flash
+- [x] `CHORUS_DEFAULT_MODELS` swap
+- [x] Unknown model emits no provider pin
+- [x] Docs: SKILL.md + references/init.md catalog
+- [x] Test: flash entry carries the z-ai pin and the four-step ladder
+- [x] Test: unknown model gets no provider pin
+- [x] `advisor-glm-5-3-flash.md` carries the science-coherence lens
+- [x] Advisor without its own prompt falls back to `chorus-advisor.md` + test
+- [x] Test: 148 passed, 14 subtests (era 145)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A fresh project is created with glm-5.3-flash, and a chorus model
+the skill does not know is emitted without a provider pin instead of one it
+cannot be served through.

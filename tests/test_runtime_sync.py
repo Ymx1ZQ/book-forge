@@ -96,3 +96,37 @@ class RuntimeSyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChorusCatalogTests(unittest.TestCase):
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_glm_flash_is_the_default_and_carries_its_own_pin_and_ladder(self):
+        self.assertIn("openrouter/z-ai/glm-5.3-flash", self.bf.CHORUS_DEFAULT_MODELS)
+        self.assertNotIn("openrouter/z-ai/glm-5.3", self.bf.CHORUS_DEFAULT_MODELS)
+        entry = self.bf._opencode_config()["provider"]["openrouter"]["models"]["z-ai/glm-5.3-flash"]
+        self.assertEqual(entry["options"]["provider"]["only"], ["z-ai"])
+        self.assertEqual(entry["options"]["reasoningEffort"], "high")
+        self.assertEqual(sorted(entry["variants"]), ["high", "low", "max", "medium"])
+        self.assertEqual(entry["limit"]["context"], 1048576)
+
+    def test_a_model_the_skill_does_not_know_gets_no_borrowed_provider_pin(self):
+        config = self.bf._opencode_config(["openrouter/newvendor/newmodel-1"])
+        entry = config["provider"]["openrouter"]["models"]["newvendor/newmodel-1"]
+        self.assertNotIn("provider", entry["options"])
+        self.assertEqual(entry["options"]["reasoningEffort"], self.bf.DEFAULT_EFFORT)
+
+    def test_an_advisor_without_its_own_lens_falls_back_to_the_generic_prompt(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as temp:
+            project = _Path(temp) / "world"
+            self.bf.init_project(project, "World")
+            self.bf.ROLE_BUDGETS["advisor-newvendor-newmodel-1"] = (16000, 3000)
+            try:
+                envelope = self.bf.build_envelope(project, role="advisor-newvendor-newmodel-1", task_capsule={}, imports=[], state={}, tools=[], max_output_tokens=100)
+            finally:
+                self.bf.ROLE_BUDGETS.pop("advisor-newvendor-newmodel-1", None)
+            generic = (_Path(self.bf.__file__).parents[1] / "assets/prompts/chorus-advisor.md").read_text().strip()
+            self.assertEqual(envelope["payload"]["role_prompt"], generic)
