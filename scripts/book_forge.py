@@ -5454,9 +5454,15 @@ def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
         problems.append("missing glossary_updates")
     if not isinstance(value.get("boundary"), str) or not value["boundary"].strip():
         problems.append("missing translated boundary")
-    source_numbers = re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", source)
-    translated_numbers = re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", translated)
-    if source_numbers != translated_numbers:
+    # A locale writes 5,8 where the source writes 5.8. Comparing the literal strings
+    # made a correctly localized number look like a changed one, and since the repair
+    # attempt carries the failure reason, the loop taught the translator to keep the
+    # source's separator — which is how an Italian edition ends up writing 0.2%.
+    # Normalizing keeps 131 and 1.31 distinct, and order and count still hold.
+    def _numbers(text_value: str) -> list[str]:
+        return [value.replace(",", ".") for value in re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", text_value)]
+
+    if _numbers(source) != _numbers(translated):
         problems.append("numbers differ from source")
     source_headings = len(re.findall(r"(?m)^#{1,6}\s", source))
     translated_headings = len(re.findall(r"(?m)^#{1,6}\s", translated))

@@ -1554,3 +1554,40 @@ one-word title is still left alone.
 is blocked. Clearing the contract title now would promote a chapter whose
 heading is a beat head with no contract title left to repair it from — strictly
 worse than leaving it visible. It needs a decision once the chapter unblocks.
+
+## Fix: the number check reads the source's decimal separator as the only one ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `_translation_validation` collects `(?<!\w)\d+(?:[.,]\d+)?` from
+both texts and compares the literal strings. A locale that writes `5,8` where
+the source writes `5.8` therefore fails with `numbers differ from source` — the
+number is correct and correctly localized, and the check calls it changed. The
+translator gets one repair attempt carrying the failure reason, so the loop
+teaches it to keep the source's separator.
+
+That is not hypothetical: Landfall's Italian edition writes `1.31 g` five times,
+`5.8` four times and `0.2%` once, in CH-0004, CH-0005 and CH-0007. Italian
+typography wants the comma. The validator did not merely reject a good
+translation, it shaped a wrong one — and the failure was read as the
+translator's, twice, before being worked around in the text.
+
+**Fix:** normalize the separator on both sides before comparing, so `5,8` and
+`5.8` are the same number while `131` and `1.31` stay different. Order and count
+are still enforced. A thousands separator written as a space (`12 000`) still
+splits into two tokens and fails; that limitation predates this and is left.
+
+**Tasks:**
+- [x] Normalize the decimal separator in the comparison
+- [x] Test: a comma-localized number passes, a changed number and an integer still fail
+- [x] Test: 176 passed, 21 subtests (era 173)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A translation may write its own decimal separator, and a number
+that actually changed is still caught.
+
+**The ten numbers already in Landfall's Italian text are not corrected here.**
+Fixing the validator stops the pressure; it does not undo what the pressure
+produced. `1.31 g` ×5 in CH-0004, `5.8` ×3 in CH-0005 and once in CH-0007,
+`0.2%` once in CH-0005.

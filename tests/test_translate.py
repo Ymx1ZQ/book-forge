@@ -96,3 +96,27 @@ class TranslateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NumberLocalizationTests(unittest.TestCase):
+    """A locale may write its own decimal separator; a changed number must still fail."""
+
+    SOURCE = "# Chapter\n\nThe Field hummed at 5.8 hertz under 1.31 g, and the exhale read 0.2% candela."
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def value(self, translated):
+        return {"translated_markdown": translated, "glossary_updates": [], "boundary": "Mara sa."}
+
+    def test_a_comma_localized_number_is_not_a_changed_number(self):
+        italian = "# Capitolo\n\nIl Campo ronzava a 5,8 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
+        self.assertNotIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(italian)))
+
+    def test_a_number_that_actually_changed_is_still_caught(self):
+        wrong = "# Capitolo\n\nIl Campo ronzava a 5,9 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
+        self.assertIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(wrong)))
+
+    def test_an_integer_is_not_confused_with_a_decimal(self):
+        wrong = "# Capitolo\n\nIl Campo ronzava a 58 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
+        self.assertIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(wrong)))
