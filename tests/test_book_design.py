@@ -329,3 +329,36 @@ class BookDesignTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ChapterTitleMaterializationTests(unittest.TestCase):
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def test_a_beat_prefix_title_is_dropped_and_reported_while_a_real_title_survives(self):
+        book = self.bf.add_book(self.project, "Titles")["id"]
+        value = proposal()
+        value["chapters"][0]["title"] = "The Word Under the Glass"
+        value["chapters"][1]["title"] = "The choice costs an ally"
+
+        findings = self.bf.validate_book_design(self.project, book, value)
+        self.assertEqual(
+            [f for f in findings if f["code"] == "chapter.title-from-beat"],
+            [{"code": "chapter.title-from-beat", "severity": "warning", "chapter": "CH-0002", "title": "The choice costs an ally"}],
+        )
+        self.assertEqual([f for f in findings if f["severity"] == "blocking"], [])
+
+        (self.project / f"books/{book}/book-brief.json").write_text(json.dumps({"schema": 1, "premise": "A diver must decide.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"}))
+        self.assertEqual(self.bf.apply_book_design(self.project, book, value)["state"], "design_clean")
+        first = json.loads((self.project / f"books/{book}/chapters/CH-0001.json").read_text())
+        second = json.loads((self.project / f"books/{book}/chapters/CH-0002.json").read_text())
+        self.assertEqual(first["title"], "The Word Under the Glass")
+        self.assertNotIn("title", second)

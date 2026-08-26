@@ -3286,6 +3286,8 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
             findings.append({"code": "chapter.contract-incomplete", "severity": "blocking", "chapter": chapter.get("id")})
         if not isinstance(chapter.get("target_words"), int) or not 500 <= int(chapter.get("target_words", 0)) <= 10000:
             findings.append({"code": "chapter.target-words", "severity": "blocking", "chapter": chapter.get("id")})
+        if _title_is_beat_prefix(chapter):
+            findings.append({"code": "chapter.title-from-beat", "severity": "warning", "chapter": chapter.get("id"), "title": chapter.get("title")})
     required, _ = _book_obligations(root, book_id)
     assigned: dict[str, list[str]] = {obligation_id: [] for obligation_id in required}
     for chapter in chapters:
@@ -3329,11 +3331,13 @@ def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) 
         ),
     }
     for chapter in chapters:
-        # title is optional but preserved when designer provides it; writer uses it verbatim when present
+        # title is optional but preserved when designer provides it; writer uses it verbatim
+        # when present. A title that is only the opening of its own beat is dropped: with the
+        # field absent the writer produces a real heading, which beats a beat fragment.
         contract = {
             "schema": 1,
             "book": book_id,
-            **chapter,
+            **{key: value for key, value in chapter.items() if not (key == "title" and _title_is_beat_prefix(chapter))},
             "imports": sorted(set(chapter.get("imports", []) + relation_imports)),
         }
         outputs[f"books/{book_id}/chapters/{chapter['id']}.json"] = _json_bytes(contract)
@@ -4642,6 +4646,39 @@ def _closed_style_pending(root: Path, book_id: str, chapter_id: str) -> bool:
     return not any((root / f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json").is_file() for slug in slugs)
 
 
+def _with_contract_heading(prose: str, contract: dict[str, object]) -> str:
+    """Promote a chapter under its contract title, whichever path wrote the prose.
+
+    The title used to be enforced only on the branch where the style check found
+    nothing, so a chapter that went through the reviser kept whatever heading the
+    model returned: Landfall shipped `Chapter Two — ...` and `III — ...` against
+    contract titles carrying neither prefix, three conventions in one book."""
+    title = str(contract.get("title") or "").strip()
+    lines = prose.split("\n")
+    if not title or not lines or not lines[0].startswith("#"):
+        return prose
+    if lines[0].lstrip("# ").strip() == title:
+        return prose
+    lines[0] = f"# {title}"
+    return "\n".join(lines)
+
+
+def _title_is_beat_prefix(chapter: dict[str, object]) -> bool:
+    """True when a designer's title is only the opening words of its own beat.
+
+    Measured on Landfall: three consecutive chapters carried the first six words
+    of beat one, lowercased and cut mid-phrase (`At the counting the floor is`).
+    Four words is the floor, so a short title coinciding with a beat's opening
+    word is not caught."""
+    title = re.sub(r"\s+", " ", str(chapter.get("title") or "")).strip()
+    if len(title.split()) < 4:
+        return False
+    beats = chapter.get("beats")
+    if not isinstance(beats, list):
+        return False
+    return any(re.sub(r"\s+", " ", str(beat)).strip().casefold().startswith(title.casefold()) for beat in beats)
+
+
 def recheck_style_closed_chapter(
     root: Path,
     book_id: str,
@@ -4708,7 +4745,7 @@ def recheck_style_closed_chapter(
         _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
         raise
     outputs = {
-        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
+        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": _with_contract_heading(str(validated["prose_markdown"]), contract).rstrip() + "\n",
         f"books/{book_id}/reviews/{chapter_id}/style-dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": value["dispositions"]}),
     }
     manifest = stage_outputs(root, claim["attempt"], outputs)
@@ -5094,7 +5131,7 @@ def review_and_close_chapter(
     synthetic_content = f"# Synthetic Previous — {chapter_id}\n\n{value['reader_state'].strip()}\n"
     # Keep last 2 chapters' synthetic chain - append to a cumulative file
     outputs = {
-        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": str(validated["prose_markdown"]).rstrip() + "\n",
+        f"books/{book_id}/manuscript/chapters/{chapter_id}.md": _with_contract_heading(str(validated["prose_markdown"]), contract).rstrip() + "\n",
         f"books/{book_id}/state.yaml": _json_bytes(state),
         f"books/{book_id}/reader-state.md": f"# Reader State\n\n{value['reader_state'].strip()}\n",
         f"books/{book_id}/reviews/{chapter_id}/dispositions.json": _json_bytes({"schema": 1, "chapter": chapter_id, "dispositions": stored_dispositions}),

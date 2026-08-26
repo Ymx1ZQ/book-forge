@@ -1278,3 +1278,58 @@ contract title of `The Mistimed Dawn`, CH-0003 kept `III — `. Separately,
 CH-0004/0005/0006 carry beat text as their contract title (`At the counting the
 floor is`), which no heading enforcement can repair — it is a design defect
 upstream, and the Italian translation reproduces it faithfully.
+
+## Fix: contract title is enforced on one path only, and a beat can pass as a title ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem 1 — the heading is forced to the contract title only when the style
+check finds nothing.** `recheck_style_closed_chapter` repairs the `# ` line on
+its clean branch; when the reviser runs, whatever heading the model returned is
+promoted unchanged, and `produce_chapter` never enforces it either. Landfall
+shipped `Chapter Two — The Mistimed Dawn` and `III — Six Spoke, and the Sky
+Screamed` against contract titles carrying neither prefix, while four other
+chapters carry no prefix at all: three conventions in one book, and the
+prefixes reach the EPUB, the PDF and the Italian translation.
+
+**Problem 2 — a designer title that is only the opening words of its own beat
+is accepted.** `title` is optional and preserved verbatim when present, and
+nothing checks what it contains. Measured on Landfall, three consecutive
+chapters carry the first six words of beat one, lowercased and cut mid-phrase:
+
+| Chapter | title | beats[0] |
+|---|---|---|
+| CH-0004 | `The voice interrogates binta on suffering` | `The Voice interrogates Binta on suffering under 1.31 g and unhoods…` |
+| CH-0005 | `At the counting the floor is` | `At the Counting the floor is read: lamps fail in public, riots…` |
+| CH-0006 | `At the counting binta publicly refuses` | `At the Counting Binta publicly refuses to repeat the Faith's misread…` |
+
+No title is better than a beat fragment: with the field absent the writer
+produces a real heading, which is what the other chapters got.
+
+**Fix:**
+1. `_with_contract_heading` applies the contract title to the promoted prose at
+   both manuscript staging sites (`produce_chapter` and the style reviser), so
+   the heading no longer depends on which path ran.
+2. `_title_is_beat_prefix` drops a `title` of four words or more that is a
+   verbatim case-insensitive prefix of one of its own beats, and
+   `validate_book_design` reports it as a `chapter.title-from-beat` warning —
+   non-blocking, so a design does not fail over an optional field. Four words is
+   the floor so a short title coinciding with a beat's opening word is not
+   caught.
+
+**Note:** this does not rename Landfall's CH-0004/0005/0006, whose contracts are
+already written. Those three need real titles from the author, propagated to
+contract, manuscript and translation.
+
+**Tasks:**
+- [x] `_with_contract_heading` at both staging sites
+- [x] `_title_is_beat_prefix` + contract materialization drops it
+- [x] `chapter.title-from-beat` warning in `validate_book_design`
+- [x] Test: reviser returns a prefixed heading → promoted manuscript carries the contract title
+- [x] Test: beat-prefix title is dropped from the contract, real title survives, design still applies
+- [x] Test: 157 passed, 14 subtests (era 150)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** The promoted heading is the contract title whichever path wrote
+the chapter, and a designer cannot pass the opening of a beat off as a title.
