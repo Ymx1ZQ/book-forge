@@ -1609,6 +1609,19 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
         attempt = attempts.get(str(value.get("attempt")), {})
         value["_role"] = str(attempt.get("role") or tasks.get(str(value.get("task")), {}).get("role", "unknown"))
         receipts.append(value)
+    # Chorus rounds are billed but bypass the attempt machinery, so their telemetry
+    # is collected from the round file instead of an execution receipt.
+    for path in sorted((root / ".book-forge" / "chorus").glob("*/*/chorus-telemetry.json")):
+        round_value = _read_json(path)
+        for entry in round_value.get("advisors", []):
+            if not isinstance(entry, dict):
+                continue
+            row = dict(entry)
+            row["task"] = str(round_value.get("task", ""))
+            row["_run"] = f"chorus/{path.parts[-3]}/{path.parts[-2]}"
+            row["_path"] = str(path.relative_to(root))
+            row["_role"] = str(entry.get("role", "unknown"))
+            receipts.append(row)
 
     by_role: dict[str, dict[str, object]] = {}
     by_book: dict[str, dict[str, object]] = {}
@@ -1635,8 +1648,18 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
                 bucket = mapping.setdefault(str(key), _telemetry_bucket())
                 _add_telemetry(bucket, receipt)
         expected = ROLE_SPECS.get(role)
-        if receipt.get("provider") != "openrouter" or str(receipt.get("model")) not in {MODEL, MODEL.split("/", 1)[1]}:
-            violations.append({"code": "model_pin", "task": task_id, "detail": "provider or model differs from the OpenRouter pin"})
+        # A chorus advisor and the style-review models run their own pinned model by
+        # design; measuring them against the primary pin turned every style review into
+        # a violation. Each is checked against its own pin instead.
+        pinned = {MODEL, MODEL.split("/", 1)[1]}
+        if role.startswith("advisor-") or role == CHORUS_SYNTHESIZER_AGENT:
+            try:
+                own = _expected_pin(role)[0]
+                pinned = {own, f"openrouter/{own}"}
+            except BookForgeError:
+                pinned = set()
+        if receipt.get("provider") != "openrouter" or (pinned and str(receipt.get("model")) not in pinned):
+            violations.append({"code": "model_pin", "task": task_id, "role": role, "detail": "provider or model differs from the role's OpenRouter pin"})
         if expected and receipt.get("variant") != expected[1]:
             violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected[1]}, found {receipt.get('variant')}"})
         estimated = int(receipt.get("estimated_input_tokens", 0) or 0)
@@ -3663,8 +3686,10 @@ def run_chorus(
         chorus_tmp_root = root / ".book-forge" / "chorus" / ".tmp"
         chorus_tmp_root.mkdir(parents=True, exist_ok=True)
         tmp = Path(_tmp.mkdtemp(prefix=f".chorus-{_chorus_slug(model)}-", dir=chorus_tmp_root))
+        telemetry: dict[str, object] | None = None
         try:
             result = runner(advisor, adv_envelope, tmp)
+            telemetry = _chorus_telemetry(result, adv_envelope)
             raw = _parse_contract_json(str(result["text"]))
             validated = _validate_chorus_output(raw)
             # Bind hashes for evidence (advisory, fail-closed per item, skip invalid instead of blocking).
@@ -3684,10 +3709,11 @@ def run_chorus(
                     except Exception:
                         fixed_ev.append({**item, "location": loc, "hash": item.get("hash", "unvalidated")})
                 bound_findings.append({**f, "evidence": fixed_ev})
-            return advisor, {"findings": bound_findings, "suggestions": validated["suggestions"], "raw": raw, "envelope_hash": adv_envelope["hash"]}
+            return advisor, {"findings": bound_findings, "suggestions": validated["suggestions"], "raw": raw, "envelope_hash": adv_envelope["hash"], "telemetry": telemetry}
         except Exception as exc:
-            # Advisory-only: a malformed single advisor must not kill the run.
-            return advisor, {"findings": [], "suggestions": [], "error": str(exc), "envelope_hash": adv_envelope["hash"]}
+            # Advisory-only: a malformed single advisor must not kill the run. The call
+            # was still billed if it reached the provider, so its telemetry is kept.
+            return advisor, {"findings": [], "suggestions": [], "error": str(exc), "envelope_hash": adv_envelope["hash"], "telemetry": telemetry}
         finally:
             import shutil as _sh
             if tmp.exists():
@@ -3705,6 +3731,22 @@ def run_chorus(
     chorus_dir.mkdir(parents=True, exist_ok=True)
     for advisor, data in results.items():
         _write_json(chorus_dir / f"{advisor}.json", data)
+    # A chorus call is billed like any other; without this the whole round is spend
+    # nobody can account for, which is how "what did grok cost" became an estimate.
+    _write_json(
+        chorus_dir / "chorus-telemetry.json",
+        {
+            "schema": 1,
+            "scope": scope_id,
+            "timestamp": timestamp,
+            "task": f"CHORUS-{scope_id}",
+            "advisors": [
+                {"role": advisor, **data["telemetry"]}
+                for advisor, data in sorted(results.items())
+                if isinstance(data.get("telemetry"), dict)
+            ],
+        },
+    )
     # Human report
     report_lines = [f"# Chorus Report — {scope_id} — {timestamp}", "", f"Advisors: {confirmed}", ""]
     total_findings = sum(len(v["findings"]) for v in results.values())
@@ -4857,6 +4899,18 @@ def _provider_telemetry(result: dict[str, object], envelope: dict[str, object], 
     telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
     if "chunk_telemetry" in result:
         telemetry["chunk_telemetry"] = result["chunk_telemetry"]
+    return telemetry
+
+
+def _chorus_telemetry(result: dict[str, object], envelope: dict[str, object]) -> dict[str, object]:
+    """Telemetry for an advisory call, tolerant by design.
+
+    `_provider_telemetry` indexes the provider's answer and is right to: a promoted
+    task must account for itself. A chorus advisor is advisory, and the run already
+    refuses to die on a malformed one — so it must not die on a missing telemetry
+    field either. Whatever the provider reported is recorded, the rest is None."""
+    telemetry = {key: result.get(key) for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
+    telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"]})
     return telemetry
 
 
@@ -6111,6 +6165,17 @@ def _edition_dependencies(root: Path, assembly: dict[str, object]) -> list[str]:
     return dependencies
 
 
+def _edition_stem(assembly: dict[str, object]) -> str:
+    """Name an edition after the book and its language, not after the id.
+
+    `BOOK-0001.draft.pdf` says nothing to whoever opens or receives the file, and
+    two languages differ only by a path segment."""
+    folded = unicodedata.normalize("NFKD", str(assembly.get("title") or ""))
+    ascii_only = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", ascii_only).strip("-").lower()
+    return f"{slug or str(assembly['book']).lower()}-{assembly['language']}"
+
+
 def _markdown_xhtml(markdown: str) -> str:
     blocks = re.split(r"\n\s*\n", markdown.strip())
     rendered = []
@@ -6264,7 +6329,7 @@ def export_epub(project: Path | str, book_id: str, language: str, draft: bool = 
     output_dir = root / "dist" / book_id / str(assembly["language"])
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = ".draft" if draft else ""
-    output_path = output_dir / f"{book_id}{suffix}.epub"
+    output_path = output_dir / f"{_edition_stem(assembly)}{suffix}.epub"
     _write_bytes_atomic(output_path, epub_bytes)
     validation = validate_epub(output_path, expected_chapters=len(assembly["chapters"]))
     manifest = {
@@ -6282,7 +6347,7 @@ def export_epub(project: Path | str, book_id: str, language: str, draft: bool = 
         "draft": draft,
         "partial": draft,
     }
-    manifest_path = output_dir / f"{book_id}{suffix}.epub.manifest.json"
+    manifest_path = output_dir / f"{_edition_stem(assembly)}{suffix}.epub.manifest.json"
     _write_json(manifest_path, manifest)
     if draft:
         # Draft exports are for review only, not registered as final edition artifacts
@@ -6411,7 +6476,7 @@ def export_pdf(
     output_dir = root / "dist" / book_id / str(assembly["language"])
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = ".draft" if draft else ""
-    output_path = output_dir / f"{book_id}{suffix}.pdf"
+    output_path = output_dir / f"{_edition_stem(assembly)}{suffix}.pdf"
     temporary_path = output_dir / f".{book_id}{suffix}.pdf.rendering"
     environment = dict(os.environ)
     environment.update({"TZ": "UTC", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0", "SOURCE_DATE_EPOCH": str(assembly["source_epoch"]), "UV_PYTHON": "3.13.12"})

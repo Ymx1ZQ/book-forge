@@ -1591,3 +1591,58 @@ that actually changed is still caught.
 Fixing the validator stops the pressure; it does not undo what the pressure
 produced. `1.31 g` ×5 in CH-0004, `5.8` ×3 in CH-0005 and once in CH-0007,
 `0.2%` once in CH-0005.
+
+## Chorus spend is invisible, and editions are named after an id ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem 1 — chorus calls record no cost.** `run_chorus` bypasses
+`claim_task`/`promote_task` deliberately (advisory, at-most-once not required)
+and writes `advisor-<slug>.json` with `findings`, `suggestions`, `raw` and
+`envelope_hash`. No tokens, no cost, no session. On Landfall that is eight
+advisors over seven rounds — fifty-six billed provider calls outside the
+telemetry, including the two most expensive models in the catalog. Asked what
+grok had cost, the honest answer was an estimate from list prices.
+
+**Problem 2 — the model pin check fires on every legitimate multi-model call.**
+`telemetry_report` compares each receipt's model against the primary `MODEL`.
+Style review runs three other models by design, so twenty of the project's
+twenty-one `model_pin` violations are style-review receipts doing exactly what
+they are supposed to. Folding chorus receipts in would have multiplied that
+noise. An advisor role has its own pin: check it against that.
+
+**Problem 3 — editions are named after the book id.**
+`dist/BOOK-0001/en/BOOK-0001.draft.pdf` says nothing to whoever opens or
+receives it, and the two languages differ only by a path segment.
+
+**Fix:**
+1. `run_chorus` captures `_provider_telemetry` per advisor, stores it in the
+   advisor file and writes `chorus-telemetry.json` per round;
+   `telemetry_report` folds those in as receipts under the advisor's role and a
+   `CHORUS-<scope>` task, so book and locale attribution work as usual.
+2. The pin check resolves an advisor's own model through `_expected_pin`
+   instead of the primary. Variant checking stays where it was.
+3. Editions are named `<title-slug>-<language>[.draft].<ext>`, so the file is
+   `landfall-the-lost-candle-it.draft.pdf`. The directory keeps the id, which is
+   the machine path.
+
+**Tasks:**
+- [x] Chorus telemetry captured and persisted, tolerantly: accounting cannot kill an advisory call
+- [x] `telemetry_report` folds chorus rounds in
+- [x] Pin check resolves an advisor's own model
+- [x] Editions named after the title and the language
+- [x] Test: a chorus round reports cost under its advisor role; an advisor on its own model is not a pin violation
+- [x] Test: 183 passed, 21 subtests (era 176)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** `telemetry` answers what an advisor cost instead of estimating it,
+a style review is not reported as a pin violation, and an edition is named after
+the book.
+
+**Caught by the tests, worth keeping:** the first version built the telemetry
+with `_provider_telemetry`, which indexes the provider's answer. A stub omitting
+`variant` raised `KeyError` inside the advisor's own `except Exception`, and the
+round returned zero findings — accounting killing an advisory call, which is the
+one thing that function is written not to do. `_chorus_telemetry` records what
+the provider reported and leaves the rest `None`.

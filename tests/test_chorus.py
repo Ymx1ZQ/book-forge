@@ -127,3 +127,39 @@ class ChorusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChorusAccountingTests(ChorusTests):
+    def test_a_round_records_what_each_advisor_cost(self):
+        envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=[], state={}, tools=[], max_output_tokens=100)
+        models = ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"]
+        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, models, provider=mock_runner_for({}))
+
+        rounds = sorted((self.project / ".book-forge/chorus").glob("*/*/chorus-telemetry.json"))
+        self.assertEqual(len(rounds), 1)
+        value = json.loads(rounds[0].read_text())
+        self.assertEqual(value["task"], "CHORUS-universe")
+        self.assertEqual(
+            sorted(entry["role"] for entry in value["advisors"]),
+            ["advisor-deepseek-deepseek-v4-flash-0731", "advisor-grok-4-6"],
+        )
+        # The round reaches the report under each advisor's own role.
+        report = self.bf.telemetry_report(self.project)
+        self.assertIn("advisor-grok-4-6", report["by_role"])
+
+    def test_an_advisor_running_its_own_model_is_not_a_pin_violation(self):
+        """The primary pin is not the advisor's pin: measuring one against the other
+        turned every legitimate multi-model call into a violation."""
+        def runner(role, envelope, attempt_dir):
+            return {
+                "text": json.dumps({"findings": [], "suggestions": []}),
+                "session_id": "s", "provider": "openrouter", "model": "x-ai/grok-4.6",
+                "variant": "high", "tokens": {"input": 100, "output": 50}, "cost": 0.001,
+                "latency_ms": 5, "finish": "stop",
+            }
+        envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=[], state={}, tools=[], max_output_tokens=100)
+        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/x-ai/grok-4.6"], provider=runner)
+
+        report = self.bf.telemetry_report(self.project)
+        self.assertEqual([v for v in report["violations"] if v["code"] == "model_pin"], [])
+        self.assertEqual(report["by_role"]["advisor-grok-4-6"]["cost"], 0.001)
