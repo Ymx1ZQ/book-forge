@@ -4708,12 +4708,16 @@ def _with_contract_heading(prose: str, contract: dict[str, object]) -> str:
 def _title_is_beat_prefix(chapter: dict[str, object]) -> bool:
     """True when a designer's title is only the opening words of its own beat.
 
-    Measured on Landfall: three consecutive chapters carried the first six words
-    of beat one, lowercased and cut mid-phrase (`At the counting the floor is`).
-    Four words is the floor, so a short title coinciding with a beat's opening
-    word is not caught."""
+    Measured on Landfall's twenty-one designer titles: the beat heads run from two
+    words (`At waelu`) to six (`At the counting the floor is`), so a four-word floor
+    caught none of the short ones. At floors 3 and 2 alike, none of the six titles
+    known to be good is flagged — including the three-word `The Mistimed Dawn`.
+    The floor is 2 because the errors are not symmetric: a false positive costs a
+    suggestion and the writer names the chapter instead, a false negative ships a
+    broken title through both editions and the translation. One word is left alone;
+    a single common word coincides with a beat's opening too easily to mean anything."""
     title = re.sub(r"\s+", " ", str(chapter.get("title") or "")).strip()
-    if len(title.split()) < 4:
+    if len(title.split()) < 2:
         return False
     beats = chapter.get("beats")
     if not isinstance(beats, list):

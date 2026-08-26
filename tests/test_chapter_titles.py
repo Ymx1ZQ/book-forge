@@ -55,9 +55,14 @@ class BeatTitleTests(unittest.TestCase):
         }
         self.assertFalse(self.bf._title_is_beat_prefix(chapter))
 
-    def test_a_short_title_coinciding_with_the_beat_opening_is_not_caught(self):
-        chapter = {"id": "CH-0003", "title": "Six Spoke", "beats": ["Six Spoke, and the sky screamed over Port Cradle."]}
-        self.assertFalse(self.bf._title_is_beat_prefix(chapter))
+    def test_a_two_word_beat_head_is_caught_and_a_single_word_is_not(self):
+        """Measured trade-off: the beat heads in the wild run from two words up, and a
+        false positive only costs a suggestion — the writer names the chapter instead."""
+        caught = {"id": "CH-0010", "title": "At waelu", "beats": ["At Waelu the party crosses the spore line and Chalk joins."]}
+        self.assertTrue(self.bf._title_is_beat_prefix(caught))
+        # One common word coincides with a beat's opening too easily to mean anything.
+        spared = {"id": "CH-0003", "title": "Landfall", "beats": ["Landfall is remembered wrong by every order that survived it."]}
+        self.assertFalse(self.bf._title_is_beat_prefix(spared))
 
 
 if __name__ == "__main__":

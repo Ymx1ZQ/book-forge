@@ -1512,3 +1512,45 @@ model the catalog configures.
 **Done when:** Landfall writes with qwen3.8-flash and reviews style with
 glm-5.3-flash, and naming any configured model in `chorus.models` produces an
 advisor that can actually run.
+
+## Fix: the beat-prefix floor was set too high to catch anything ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `_title_is_beat_prefix` ignores titles under four words, a floor
+chosen to spare a short title that coincides with its beat's opening. Measured
+against Landfall's twenty-one designer-written titles it catches none of the
+four beat-head titles that remain, because they are two and three words long:
+`The pre-eclipse vigil` (CH-0007), `A one-page coda` (CH-0027), `Lowlands
+flash-pockets` (CH-0009), `At waelu` (CH-0010). CH-0007 is already staged for
+promotion under that heading.
+
+**Decision:** floor 2. Against the six titles known to be good — including the
+three-word `The Mistimed Dawn` and `The Signed Misread` — floors 3 and 2 both
+produce zero false positives, and floor 2 catches all four. The errors are not
+symmetric: a false positive costs a designer's suggestion and the writer names
+the chapter instead, which is the project's policy anyway, while a false
+negative ships a broken title through the manuscript, both editions and the
+translation. The floor stays at 2 rather than 1 because a single common word
+coincides with a beat's opening too easily to mean anything.
+
+This overrules the test written the day before, which treated a two-word
+coincidence as worth protecting. With the measurement in hand that caution costs
+more than it protects.
+
+**Tasks:**
+- [x] Floor 4 → 2, docstring carries the measurement
+- [x] Rewrite the short-title test to encode the new trade-off
+- [x] Test: 173 passed, 21 subtests
+- [x] Reinstall ./install.sh --force
+- [x] Landfall: cleared CH-0009, CH-0010, CH-0027; CH-0007 left alone, see below
+- [x] Commit & push
+
+**Done when:** A two-word beat head cannot pass as a chapter title, and a
+one-word title is still left alone.
+
+**CH-0007 was left alone deliberately.** Its `REVISE` sits in
+`promotion_pending` with `# The pre-eclipse vigil` already staged, and `VERIFY`
+is blocked. Clearing the contract title now would promote a chapter whose
+heading is a beat head with no contract title left to repair it from — strictly
+worse than leaving it visible. It needs a decision once the chapter unblocks.
