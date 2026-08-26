@@ -1015,3 +1015,18 @@ blocks.
 - [x] Commit fix(review): reviser medium->low
 - [x] Reinstall ./install.sh --force
 - [x] Landfall: runtime sync + run --next → REVISE-BOOK-0001-CH-0005 succeeded
+
+## Fix: translator ROLE_BUDGETS 14000→16000 per context budget 14748 (Landfall CH-0001) 🔄
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** Translate CH-0001 hard-fail 14748 > 14000. Capsule = source 4000w (~10.8k token) + contract + canon imports + style/glossary/metadata. 14000 sotto di ~750 token; blocca tutti i translate.
+
+**Fix:** `scripts/book_forge.py:2339` ROLE_BUDGETS["translator"] (14000,6000) → (16000,6000). Allinea con advisor (16000), copre capitoli più lunghi. Solo translator.
+
+**Tasks:**
+- [x] Patch scripts/book_forge.py:2339
+- [x] Test: pytest 136+ pass
+- [x] Commit fix(translate): translator 14000->16000
+- [x] Reinstall ./install.sh --force
+- [x] Landfall: translate next ×5 → 5 completed_chapters, poi export en/it
