@@ -2336,7 +2336,7 @@ ROLE_BUDGETS = {
     "technical-editor": (10000, 3000),
     "reviser": (14000, 8000),
     "canon-auditor": (32000, 3500),
-    "translator": (14000, 6000),
+    "translator": (16000, 6000),
     "judge": (10000, 2000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
