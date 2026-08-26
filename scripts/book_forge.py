@@ -4800,6 +4800,12 @@ def _validate_revision(
         if not required <= disposition.keys():
             raise BookForgeError(f"Incomplete disposition for {finding['id']}")
         disposition.setdefault("supersedes", [])
+        # Preserve supersedes via get with default for validated copy (JSON round-trip)
+        validated_dispositions = validated.get("dispositions") if isinstance(validated.get("dispositions"), list) else []
+        validated_by = {str(row.get("finding")): row for row in validated_dispositions if isinstance(row, dict)}
+        validated_row = validated_by.get(str(finding["id"]))
+        if isinstance(validated_row, dict):
+            validated_row.setdefault("supersedes", disposition.get("supersedes", []))
         if finding.get("objective") and finding["severity"] == "blocking" and disposition["action"] != "repaired":
             raise BookForgeError(f"Objective blocker {finding['id']} cannot be dismissed")
     revised_rows = value.get("consequences", [])
