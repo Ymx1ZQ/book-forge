@@ -77,7 +77,7 @@ ROLE_SPECS = {
     "writer": ("all", "low", 8),
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
-    "reviser": ("all", "medium", 8),
+    "reviser": ("all", "low", 8),
     "canon-auditor": ("all", "max", 8),
     "translator": ("all", "low", 7),
     "judge": ("all", "max", 6),

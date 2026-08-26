@@ -32,7 +32,7 @@ class RoleProvider:
             text = self.responses[role].pop(0)
             number = len(self.calls) + 1
             self.calls.append(role)
-        variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "medium"}
+        variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "low"}
         return {
             "text": json.dumps(text), "provider": "openrouter", "model": MODEL,
             "variant": variants[role], "session_id": f"ses-{number}",

@@ -47,7 +47,7 @@ class RoleTopologyTests(unittest.TestCase):
             "writer": ("all", "low"),
             "cold-reader": ("all", "low"),
             "technical-editor": ("all", "high"),
-            "reviser": ("all", "medium"),
+            "reviser": ("all", "low"),
             "canon-auditor": ("all", "max"),
             "translator": ("all", "low"),
             "judge": ("all", "max"),
