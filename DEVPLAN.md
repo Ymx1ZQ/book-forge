@@ -1002,7 +1002,7 @@ blocks.
 
 ## Fix: reviser variant medium→low per reasoning 32k persistente (Landfall CH-0005 ATT-0106) ✅
 
-**Status: 🔄 In progress — 2026-08-25**
+**Status: ✅ Done — 2026-08-25**
 
 **Problem:** ATT-0106 con medium ha stessi numeri di ATT-0104 high: total 53477 / input 21477 / reasoning 32000 / output 0 su 3 tentativi consecutivi. Variant medium non abbassa il cap reasoning su deepseek-v4-flash, il modello satura senza scrivere. Budget 8000 e fix supersedes/parse già a bordo.
 
@@ -1016,7 +1016,7 @@ blocks.
 - [x] Reinstall ./install.sh --force
 - [x] Landfall: runtime sync + run --next → REVISE-BOOK-0001-CH-0005 succeeded
 
-## Fix: translator ROLE_BUDGETS 14000→16000 per context budget 14748 (Landfall CH-0001) 🔄
+## Fix: translator ROLE_BUDGETS 14000→16000 per context budget 14748 (Landfall CH-0001) ✅
 
 **Status: ✅ Done — 2026-08-26**
 
@@ -1030,3 +1030,76 @@ blocks.
 - [x] Commit fix(translate): translator 14000->16000
 - [x] Reinstall ./install.sh --force
 - [x] Landfall: translate next ×5 → 5 completed_chapters, poi export en/it
+
+## Fix: promoted writes desync the artifact registry (Landfall CH-0002/0003) ✅
+
+**Status: ✅ Done — 2026-08-26**
+
+**Problem:** `reconcile_artifacts` raises `Derived artifact was edited directly:
+SOURCE-<book>-<chapter>` for chapters the pipeline itself rewrote. The registry
+row is written once by `register_artifact` at the first promote and never
+updated: `_recover_transaction` installs promoted files without touching
+`artifact-deps.json`, and `register_artifact` refuses an existing id. So the
+second promoted write of the same path (`REVISE-STYLE-*` after `REVISE-*`)
+leaves the row pinned to the previous hash, and the guard reads the pipeline's
+own transactional write as tampering. Measured on Landfall: CH-0002 registry
+`c9d41888` = TXN-0016 `REVISE`, on disk `2c656141` = TXN-0026 `REVISE-STYLE`;
+CH-0003 `5f442568` = TXN-0020 vs `e7704c1b` = TXN-0031. Blocks translate and
+publication (`Publication refused by artifact currentness`) on every chapter
+that gets a style pass. Second path to the same desync:
+`recheck_style_closed_chapter` rewrites the `# ` heading with a direct
+`ms_path.write_text`, outside the transaction — no journal, no scoped commit,
+no receipt.
+
+**Fix:**
+1. `_recover_transaction`: after installing, refresh the registry hash of every
+   artifact whose `path` matches an installed row, from `row["target_hash"]`
+   (already computed at staging — no re-hash). Dependents still invalidate:
+   a refreshed SOURCE makes its TRANSLATION stale, which is the wanted
+   behaviour.
+2. `reconcile_artifacts`: before raising, check provenance — if the on-disk
+   hash appears as a `target_hash` for that path in a completed transaction
+   journal, it is a pipeline write, so refresh instead of raising. Repairs
+   registries already desynced by (1) with no hand-edit; a real hand-edit has
+   no journal and still raises.
+3. `recheck_style_closed_chapter`: the heading rewrite becomes an atomic
+   `_write_bytes_atomic` that refreshes the registry row and takes its own
+   scoped git commit (`_scoped_git_commit` gained an optional `message`). Not a
+   journalled transaction: the attempt/receipt lifecycle is bound to a provider
+   attempt and this repair makes no model call. Full journalling of
+   deterministic repairs is deferred to the follow-up item below.
+
+**Tasks:**
+- [x] `_recover_transaction` refreshes registry hashes from the install manifest
+- [x] `reconcile_artifacts` provenance check before the tampering error
+- [x] Heading rewrite becomes atomic + registry-consistent + committed
+- [x] Test: promoted second write to a registered path → reconcile clean, dependent stale
+- [x] Test: real out-of-band edit → still raises
+- [x] Test: pre-desynced registry + journal → repaired by reconcile
+- [x] Test: pytest 140 passed, 14 subtests (era 136)
+- [x] Reinstall ./install.sh --force
+- [x] Close out the two dangling markers (translator 14000→16000, reviser medium→low)
+- [x] Commit & push
+
+**Done when:** A chapter that goes through `REVISE` then `REVISE-STYLE`
+translates and publishes without a manual touch of `artifact-deps.json`, and an
+out-of-band edit of a derived file still fails the guard.
+
+## Fix: deterministic repairs are not journalled (follow-up)
+
+**Status: ⏸ Open — 2026-08-26**
+
+**Problem:** `promote_task` is bound to a provider attempt: it needs a claim, an
+envelope hash, an execution receipt and telemetry. A repair the engine performs
+on its own — today the `# ` heading rewrite in `recheck_style_closed_chapter`,
+tomorrow any migration — has no model call to hang that lifecycle on, so it
+writes outside the transaction journal: atomic and committed, but with no
+rollback record and no promotion receipt.
+
+**Fix (sketch):** a deterministic transaction reusing the journal and the
+`_recover_transaction` install/commit path with a synthetic attempt, or a
+journal variant whose receipt records `provider: none`. Needs a decision on how
+`status` and `telemetry` should count repairs before it is worth building.
+
+**Done when:** an engine-performed repair leaves a journal that
+`recover_transactions` can replay, exactly like a model-produced promote.

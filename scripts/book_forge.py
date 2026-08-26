@@ -1354,7 +1354,7 @@ def stage_outputs(project: Path | str, attempt_id: str, outputs: dict[str, str |
     return manifest
 
 
-def _scoped_git_commit(root: Path, paths: list[str], transaction_id: str) -> tuple[str | None, bool]:
+def _scoped_git_commit(root: Path, paths: list[str], transaction_id: str, *, message: str | None = None) -> tuple[str | None, bool]:
     if not paths or not _inside_git_repo(root):
         return None, False
     add = subprocess.run(["git", "-C", str(root), "add", "--", *paths], capture_output=True, text=True, check=False)
@@ -1365,7 +1365,7 @@ def _scoped_git_commit(root: Path, paths: list[str], transaction_id: str) -> tup
         head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
         return (head.stdout.strip() or None), False
     commit = subprocess.run(
-        ["git", "-C", str(root), "commit", "-m", f"book-forge: promote {transaction_id}", "--", *paths],
+        ["git", "-C", str(root), "commit", "-m", message or f"book-forge: promote {transaction_id}", "--", *paths],
         capture_output=True,
         text=True,
         check=False,
@@ -1388,6 +1388,49 @@ def _complete_promoted_attempt(root: Path, attempt_id: str, receipt_path: Path) 
     _save_plan(root, plan)
     render_plan(root)
     _settle_run(root)
+
+
+def _refresh_registry_hashes(root: Path, rows: list[dict[str, object]]) -> None:
+    """Keep the artifact registry in step with the pipeline's own promoted writes.
+
+    A promoted transaction is the only sanctioned way a derived file changes, so
+    an artifact registered on one of its paths must adopt the installed hash.
+    Without this the row stays pinned to the first promote and the next
+    `reconcile_artifacts` reads the pipeline's write as a hand edit."""
+    registry_path = root / ".book-forge" / "artifact-deps.json"
+    if not registry_path.is_file():
+        return
+    registry = _artifact_registry(root)
+    installed = {str(row["path"]): str(row["target_hash"]) for row in rows}
+    changed = False
+    for artifact in registry.get("artifacts", {}).values():
+        promoted_hash = installed.get(str(artifact["path"]))
+        if promoted_hash is not None and promoted_hash != artifact["hash"]:
+            artifact["hash"] = promoted_hash
+            changed = True
+    if changed:
+        _write_json(registry_path, registry)
+
+
+def _promoted_path_hashes(root: Path) -> dict[str, set[str]]:
+    """Hashes the pipeline itself installed at each path, from transaction journals.
+
+    Provenance for `reconcile_artifacts`: a derived file whose current hash was
+    installed by a transaction is a pipeline write, not tampering."""
+    promoted: dict[str, set[str]] = {}
+    transactions = root / ".book-forge" / "transactions"
+    if not transactions.is_dir():
+        return promoted
+    for path in sorted(transactions.glob("TXN-*/journal.json")):
+        try:
+            journal = _read_json(path)
+        except (OSError, ValueError, BookForgeError):
+            continue
+        installed = {str(value) for value in journal.get("installed", [])}
+        for row in journal.get("files", []):
+            if str(row.get("path")) in installed:
+                promoted.setdefault(str(row["path"]), set()).add(str(row["target_hash"]))
+    return promoted
 
 
 def _recover_transaction(root: Path, transaction: Path, *, fault_hook=None) -> dict[str, object]:
@@ -1417,6 +1460,8 @@ def _recover_transaction(root: Path, transaction: Path, *, fault_hook=None) -> d
         _write_json(journal_path, journal)
         if fault_hook:
             fault_hook(f"after_install:{row['path']}")
+
+    _refresh_registry_hashes(root, journal["files"])
 
     if not journal.get("commit_recorded"):
         commit, sync_pending = _scoped_git_commit(root, [str(row["path"]) for row in journal["files"]], str(journal["id"]))
@@ -2301,12 +2346,18 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
     index = rebuild_indexes(root)
     registry = _artifact_registry(root)
     direct_stale: set[str] = set()
+    promoted_hashes: dict[str, set[str]] | None = None
     for artifact_id, artifact in registry["artifacts"].items():
         target = root / artifact["path"]
         current_hash = _file_hash(target)
         if current_hash != artifact["hash"]:
             if not artifact.get("authored"):
-                raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}")
+                # A registry desynced by an earlier promote is repairable: accept the
+                # hash only if a transaction journal shows the pipeline installed it.
+                if promoted_hashes is None:
+                    promoted_hashes = _promoted_path_hashes(root)
+                if current_hash not in promoted_hashes.get(str(artifact["path"]), set()):
+                    raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}")
             artifact["hash"] = current_hash
         for dependency in artifact.get("dependencies", []):
             current_dependency = _dependency_hash(root, dependency, registry, index)
@@ -4468,7 +4519,14 @@ def recheck_style_closed_chapter(
         lines = prose.split("\n")
         if lines and lines[0].startswith("#") and lines[0].lstrip("# ").strip() != title:
             lines[0] = f"# {title}"
-            ms_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+            # Deterministic repair, no model call: still atomic, still recorded in the
+            # registry and in git, so it cannot desync the artifact hash the way a bare
+            # write_text did.
+            relative = str(ms_path.relative_to(root))
+            payload = ("\n".join(lines).rstrip() + "\n").encode()
+            _write_bytes_atomic(ms_path, payload)
+            _refresh_registry_hashes(root, [{"path": relative, "target_hash": _sha256_bytes(payload)}])
+            _scoped_git_commit(root, [relative], f"heading-{chapter_id}", message=f"book-forge: repair heading {book_id} {chapter_id}")
             return {"state": "style_clean", "book": book_id, "chapter": chapter_id, "findings": 0, "heading": title}
         return {"state": "style_clean", "book": book_id, "chapter": chapter_id, "findings": 0}
     if not style_findings:
