@@ -1672,3 +1672,42 @@ exporter, which is what was missing the first time.
 
 **Done when:** Every file an export writes is named after the book and its
 language, temporaries included.
+
+## Fix: the EPUB carries no NCX, and readers stall on it ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** three e-readers process the generated EPUB forever. The container is
+conformant — `mimetype` stored first with no extra field and `application/epub+zip`
+at offset 38, `META-INF/container.xml` present, every XHTML and the OPF
+well-formed — and WeasyPrint paginates a chapter in eleven pages without
+looping, so it is neither a broken archive nor a pathological stylesheet.
+
+What the package lacks is the EPUB 2 navigation: no `toc.ncx`, no `toc`
+attribute on `<spine>`. An EPUB 3 is valid with only the XHTML nav document, but
+every reader built on Adobe RMSDK — Kobo, PocketBook, Nook, Sony, Digital
+Editions — reads the NCX, which is why three different devices behave the same
+way. Real-world EPUB 3 files ship both. `<dc:creator></dc:creator>` is also
+emitted empty when the book has no author.
+
+**Fix:** emit `OEBPS/toc.ncx` with one `navPoint` per chapter in spine order,
+manifest it as `application/x-dtbncx+xml`, point `<spine toc="ncx">` at it, and
+drop `dc:creator` when there is no author. `validate_epub` requires the NCX, the
+spine reference, and one navPoint per chapter, so publication cannot regress to
+a package half the readers stall on.
+
+**Not verified here:** no e-reader and no epubcheck on this machine (epubcheck
+needs a JRE, absent). The diagnosis is a standards gap that matches the symptom
+across three unrelated devices, not a reproduction.
+
+**Tasks:**
+- [x] `toc.ncx` emitted, manifested and referenced from the spine
+- [x] Empty `dc:creator` omitted
+- [x] `validate_epub` requires the NCX and its navPoints
+- [x] Test: spine-referenced NCX with one navPoint per chapter, determinismo intatto
+- [x] Test: 190 passed, 23 subtests (era 186)
+- [x] Reinstall, regenerate both editions
+- [x] Commit & push
+
+**Done when:** The EPUB carries both navigations, and validation refuses one that
+does not.

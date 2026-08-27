@@ -96,3 +96,25 @@ class ChapterNumberingTests(EpubTests):
     def test_the_assembly_carries_the_contract_order(self):
         assembly = self.bf.assemble_edition(self.base, self.book, "en")
         self.assertEqual([chapter["number"] for chapter in assembly["chapters"]], [1, 2])
+
+
+class NavigationTests(EpubTests):
+    NCX = "{http://www.daisy.org/z3986/2005/ncx/}"
+
+    def test_the_package_carries_both_navigations(self):
+        """An EPUB 3 is valid with the XHTML nav alone; Adobe RMSDK readers are not."""
+        result = self.bf.export_epub(self.base, self.book, "en")
+        with zipfile.ZipFile(Path(result["path"])) as archive:
+            opf = archive.read("OEBPS/content.opf").decode()
+            ncx = archive.read("OEBPS/toc.ncx").decode()
+        self.assertIn('<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>', opf)
+        self.assertIn('<spine toc="ncx">', opf)
+        import xml.etree.ElementTree as ET
+        points = ET.fromstring(ncx).findall(f".//{self.NCX}navPoint")
+        self.assertEqual([p.find(f"{self.NCX}content").attrib["src"] for p in points], ["chapter-0001.xhtml", "chapter-0002.xhtml"])
+        self.assertEqual([p.find(f"{self.NCX}navLabel/{self.NCX}text").text for p in points], ["1. Chapter 1", "2. Chapter 2"])
+
+    def test_an_empty_author_does_not_become_an_empty_creator(self):
+        result = self.bf.export_epub(self.base, self.book, "en")
+        with zipfile.ZipFile(Path(result["path"])) as archive:
+            self.assertNotIn("<dc:creator></dc:creator>", archive.read("OEBPS/content.opf").decode())

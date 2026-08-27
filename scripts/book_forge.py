@@ -6213,6 +6213,7 @@ def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
     chapter_items = []
     spine_items = []
     nav_items = []
+    ncx_points: list[str] = []
     members: list[tuple[str, bytes]] = [
         ("mimetype", b"application/epub+zip"),
         (
@@ -6225,7 +6226,15 @@ def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
         chapter_items.append(f'<item id="chapter-{index:04d}" href="{filename}" media-type="application/xhtml+xml"/>')
         spine_items.append(f'<itemref idref="chapter-{index:04d}"/>')
         number = html.escape(str(chapter.get("number", "")))
-        nav_items.append(f'<li><a href="{filename}">{number}. {html.escape(str(chapter["title"]))}</a></li>')
+        label = f'{number}. {html.escape(str(chapter["title"]))}'
+        nav_items.append(f'<li><a href="{filename}">{label}</a></li>')
+        # EPUB 2 navigation as well: an EPUB 3 is valid with the XHTML nav alone, but
+        # every Adobe RMSDK reader — Kobo, PocketBook, Nook, Sony, Digital Editions —
+        # reads the NCX, and stalls without it.
+        ncx_points.append(
+            f'<navPoint id="navPoint-{index}" playOrder="{index}">'
+            f'<navLabel><text>{label}</text></navLabel><content src="{filename}"/></navPoint>'
+        )
         members.append((f"OEBPS/{filename}", _xhtml_document(str(chapter["title"]), str(assembly["language"]), _chapter_number_html(chapter) + _markdown_xhtml(str(chapter["markdown"])))))
     modified = "2000-01-01T00:00:00Z"
     opf = (
@@ -6233,16 +6242,17 @@ def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id" xml:lang="{lang}">'
         '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
         '<dc:identifier id="book-id">urn:uuid:{identifier}</dc:identifier><dc:title>{title}</dc:title>'
-        '<dc:language>{lang}</dc:language><dc:creator>{author}</dc:creator>'
+        '<dc:language>{lang}</dc:language>{creator}'
         '<meta property="dcterms:modified">{modified}</meta></metadata>'
         '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+        '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
         '<item id="css" href="styles/epub.css" media-type="text/css"/>{items}</manifest>'
-        '<spine>{spine}</spine></package>\n'
+        '<spine toc="ncx">{spine}</spine></package>\n'
     ).format(
         lang=html.escape(str(assembly["language"])),
         identifier=assembly["identifier"],
         title=html.escape(str(assembly["title"])),
-        author=html.escape(str(assembly["author"])),
+        creator=f'<dc:creator>{html.escape(str(assembly["author"]))}</dc:creator>' if str(assembly.get("author") or "").strip() else "",
         modified=modified,
         items="".join(chapter_items),
         spine="".join(spine_items),
@@ -6252,6 +6262,21 @@ def _epub_members(assembly: dict[str, object]) -> list[tuple[str, bytes]]:
     members.extend(
         [
             ("OEBPS/content.opf", opf),
+            (
+                "OEBPS/toc.ncx",
+                (
+                    '<?xml version="1.0" encoding="utf-8"?>\n'
+                    '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="{lang}">'
+                    '<head><meta name="dtb:uid" content="urn:uuid:{identifier}"/><meta name="dtb:depth" content="1"/>'
+                    '<meta name="dtb:totalPageCount" content="0"/><meta name="dtb:maxPageNumber" content="0"/></head>'
+                    '<docTitle><text>{title}</text></docTitle><navMap>{points}</navMap></ncx>\n'
+                ).format(
+                    lang=html.escape(str(assembly["language"])),
+                    identifier=assembly["identifier"],
+                    title=html.escape(str(assembly["title"])),
+                    points="".join(ncx_points),
+                ).encode(),
+            ),
             ("OEBPS/nav.xhtml", _xhtml_document("Contents", str(assembly["language"]), nav_body, nav=True)),
             ("OEBPS/styles/epub.css", css),
         ]
@@ -6299,6 +6324,19 @@ def validate_epub(path: Path | str, *, expected_chapters: int) -> dict[str, obje
                     chapter_items.append(member)
             if len(chapter_items) != expected_chapters:
                 raise BookForgeError("EPUB chapter completeness check failed")
+            # Both navigations, or the Adobe RMSDK readers stall on the package.
+            ncx_ids = {
+                item.attrib.get("id")
+                for item in opf.findall(".//opf:item", namespace)
+                if item.attrib.get("media-type") == "application/x-dtbncx+xml"
+            }
+            spine = opf.find(".//opf:spine", namespace)
+            if not ncx_ids or spine is None or spine.attrib.get("toc") not in ncx_ids:
+                raise BookForgeError("EPUB has no spine-referenced NCX navigation")
+            ncx = ET.fromstring(archive.read("OEBPS/toc.ncx"))
+            points = ncx.findall(".//{http://www.daisy.org/z3986/2005/ncx/}navPoint")
+            if len(points) != expected_chapters:
+                raise BookForgeError("EPUB NCX navigation is incomplete")
             for member in chapter_items + ["OEBPS/nav.xhtml"]:
                 ET.fromstring(archive.read(member))
     except (zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
