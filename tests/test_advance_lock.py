@@ -82,6 +82,40 @@ class AdvanceReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["outline_chapters"], 0)
         self.assertFalse(receipt["ready_to_write"])
 
+    def test_a_blocking_design_audit_keeps_the_book_not_ready(self):
+        self._design(2)
+        self.bf._write_json(
+            self.root / "books" / self.book / "design-audit.json",
+            {"schema": 1, "state": "blocked", "findings": [
+                {"id": "F-0001", "severity": "blocking", "issue": "The drowned person changes gender across chapters.", "repair_scope": ["CH-0001"]},
+                {"id": "F-0002", "severity": "warning", "issue": "A minor clash."},
+            ]},
+        )
+        receipt = self.bf._advance_receipt(self.root, self.book)
+        self.assertFalse(receipt["ready_to_write"])
+        self.assertEqual(receipt["design_audit"], {"state": "blocked", "blocking": 1})
+        self.assertEqual([row["id"] for row in receipt["blocked_by"]], ["F-0001"])
+
+    def test_warnings_alone_do_not_hold_the_book_back(self):
+        self._design(2)
+        self.bf._write_json(
+            self.root / "books" / self.book / "design-audit.json",
+            {"schema": 1, "state": "design_clean", "findings": [{"id": "F-0002", "severity": "warning", "issue": "A minor clash."}]},
+        )
+        receipt = self.bf._advance_receipt(self.root, self.book)
+        self.assertTrue(receipt["ready_to_write"])
+        self.assertNotIn("blocked_by", receipt)
+
+    def _design(self, count):
+        chapters = [{"id": f"CH-{i:04d}", "order": i, "pov": "CHR-0001", "beats": ["b"], "target_words": 900} for i in range(1, count + 1)]
+        self.bf._write_json(self.root / "books" / self.book / "outline.yaml", {"schema": 1, "chapters": chapters})
+        for chapter in chapters:
+            self.bf._write_json(self.root / "books" / self.book / "chapters" / f"{chapter['id']}.json", chapter)
+        self.bf.add_task(self.project, f"DESIGN-{self.book}", "designer", deps=[], priority=50, outputs=[])
+        plan = self.bf._load_plan(self.root)
+        next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{self.book}")["state"] = "succeeded"
+        self.bf._save_plan(self.root, plan)
+
     def test_a_designed_book_is_reported_as_ready(self):
         chapters = [{"id": f"CH-{i:04d}", "order": i, "pov": "CHR-0001", "beats": ["b"], "target_words": 900} for i in (1, 2)]
         self.bf._write_json(self.root / "books" / self.book / "outline.yaml", {"schema": 1, "chapters": chapters})

@@ -2085,3 +2085,21 @@ The instruction that produced it is one I wrote this morning: *"Mechanisms, prop
 - [x] Reinstall, commit & push
 
 **Done when:** The prompt that drives a book to writing is about the book.
+
+
+## The readiness receipt called a book ready that the auditor had blocked ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the receipt read contracts on disk and the design task's state, and reported `ready_to_write: true` for a book whose independent audit had just returned a blocking finding — the drowned person in Margherita's design flips from a man to a young woman to a boy across four chapters, and a mid-century photograph clashes with a drowning twenty years ago. `advance` halted correctly and said so; the receipt beside it said the opposite.
+
+**Fix:** readiness reads `design-audit.json` too. A blocking finding there means the book would be written around a contradiction, so the receipt says `NOT ready to write`, names the findings that hold it, and lists the chapters each one touches.
+
+**Tasks:**
+- [x] `_advance_receipt` reads the design audit and gates readiness on it
+- [x] The printed line names the blocking findings
+- [x] Test: a blocking finding holds the book back; warnings alone do not
+- [x] Suite green: 284 passed, 23 subtests (era 280)
+- [x] Reinstall, commit & push
+
+**Done when:** The receipt and the auditor cannot disagree.

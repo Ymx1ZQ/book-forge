@@ -5423,11 +5423,24 @@ def _advance_receipt(root: Path, book_id: str) -> dict[str, object]:
         "tasks": states,
         "cost": round(float(telemetry_report(root).get("by_book", {}).get(book_id, {}).get("cost", 0.0)), 4),
     }
+    audit_path = book / "design-audit.json"
+    audit = _read_json(audit_path) if audit_path.is_file() else {}
+    blocking = [row for row in audit.get("findings", []) if row.get("severity") == "blocking"]
+    receipt["design_audit"] = {"state": audit.get("state"), "blocking": len(blocking)}
+    # Contracts on disk are not readiness. The independent audit reads the design
+    # against canon, and a blocking finding there means the book would be written
+    # around a contradiction.
     receipt["ready_to_write"] = bool(
         receipt["outline_chapters"]
         and receipt["chapter_contracts"] == receipt["outline_chapters"]
         and states.get(f"DESIGN-{book_id}") == "succeeded"
+        and not blocking
     )
+    if blocking:
+        receipt["blocked_by"] = [
+            {"id": row.get("id"), "issue": str(row.get("issue", ""))[:200], "chapters": row.get("repair_scope", [])}
+            for row in blocking
+        ]
     return receipt
 
 
@@ -5439,7 +5452,8 @@ def _log_receipt(done: dict[str, object]) -> None:
         f"contracts {ready.get('chapter_contracts', 0)} · "
         f"manuscript {ready.get('manuscript_chapters', 0)} · "
         f"cost ${ready.get('cost', 0)} · "
-        f"{'ready to write' if ready.get('ready_to_write') else 'not ready to write'}",
+        f"{'ready to write' if ready.get('ready_to_write') else 'NOT ready to write'}"
+        + (f" — design audit blocking on {', '.join(str(row['id']) for row in ready.get('blocked_by', []))}" if ready.get("blocked_by") else ""),
         file=sys.stderr,
     )
 
