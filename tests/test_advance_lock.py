@@ -136,3 +136,50 @@ class AdvanceReceiptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeadDriverResumeTests(unittest.TestCase):
+    """An OOM kill leaves the run marked running with an accepted attempt whose
+    lease has expired. One command must clear that."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.root = self.bf._project_root(self.project)
+        self.bf.add_task(self.project, "DESIGN-BOOK-0001", "designer", deps=[], priority=50, outputs=[])
+        self.bf.start_run(self.root)
+
+    def _stale_accepted_attempt(self, lease):
+        plan = self.bf._load_plan(self.root)
+        task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-BOOK-0001")
+        task["state"] = "running"
+        task["attempt"] = "ATT-9001"
+        plan["attempts"].append({
+            "id": "ATT-9001", "task": "DESIGN-BOOK-0001", "role": "designer", "state": "running",
+            "provider_accepted": True, "lease_expires_at": lease, "run": "RUN-0001",
+        })
+        self.bf._save_plan(self.root, plan)
+
+    def test_resume_clears_what_a_killed_driver_left_behind(self):
+        self._stale_accepted_attempt(lease=1.0)
+
+        self.bf.resume_run(self.project, resolutions={"DESIGN-BOOK-0001": "retry"})
+
+        plan = self.bf._load_plan(self.root)
+        task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-BOOK-0001")
+        self.assertEqual(task["state"], "pending")
+
+    def test_a_run_with_a_live_lease_still_refuses(self):
+        self._stale_accepted_attempt(lease=2 ** 40)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.resume_run(self.project, resolutions={"DESIGN-BOOK-0001": "retry"})
+        self.assertIn("Run cannot resume while running", str(caught.exception))
+
+    def test_the_refusal_says_what_to_do_instead(self):
+        self._stale_accepted_attempt(lease=2 ** 40)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.resume_run(self.project, resolutions={})
+        self.assertIn("pause", str(caught.exception))

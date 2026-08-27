@@ -2158,3 +2158,23 @@ It is the same shape as every other failure tonight — the engine repeating an 
 - [x] Reinstall, commit & push
 
 **Done when:** A truncation makes the next request smaller instead of identical.
+
+## Recovering a run whose driver died takes ten minutes of reading the engine's source ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** an OOM kill left a run marked `running` with a dead driver and an accepted attempt whose lease had expired. The operator ran the documented command and got `Error: Run cannot resume while running`, then spent ten minutes grepping the engine — `cannot resume`, `_orphan_stale_attempts`, `_settle_run`, `recover_run`, `recover_before_dispatch` — before working out that `pause --emergency` is what converts the accepted call to `outcome_unknown` and blocks the run so `resume` will accept it.
+
+The sequence it found is correct. That it had to be found by reading the source is the defect: `resume` refuses on a state that `resume` itself could reach. Nothing about the situation requires a human to know the order — only the retry-or-abandon decision does.
+
+**Fix:** `resume` recovers before it judges. It runs the same stale-claim recovery the dispatch path already runs, so an accepted attempt with an expired lease becomes `outcome_unknown` and the run blocks, and only then does it ask whether every unknown outcome has a resolution. The two-step dance disappears, and `pause --emergency` goes back to meaning what it says. `references/lifecycle.md` states what a dead driver leaves behind and the single command that clears it.
+
+**Tasks:**
+- [x] `resume_run` recovers stale claims before checking the run state
+- [x] Test: `resume --resolve-unknown` works on a run still marked running whose driver is dead
+- [x] Test: a run genuinely running with a live lease still refuses to resume
+- [x] `references/lifecycle.md` documents the dead-driver case
+- [x] Suite green: 297 passed, 23 subtests (era 294)
+- [x] Reinstall, commit & push
+
+**Done when:** One command clears what a killed driver leaves behind.

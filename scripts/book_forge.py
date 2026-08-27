@@ -2279,10 +2279,18 @@ def resume_run(
         raise BookForgeError("No active run")
     if run_id and run_id != control["active_run"]:
         raise BookForgeError(f"Requested run {run_id} is not the active run {control['active_run']}")
+    # A killed driver leaves the run marked running with an accepted attempt whose
+    # lease has expired. Recovering first turns that into the outcome_unknown the
+    # caller is here to resolve, instead of refusing on a state resume can reach
+    # itself and making them find `pause --emergency` by reading the source.
+    recover_run(root)
     run_path = _run_path(root, str(control["active_run"]))
     run = _read_json(run_path)
     if run["state"] not in {"paused", "blocked"}:
-        raise BookForgeError(f"Run cannot resume while {run['state']}")
+        raise BookForgeError(
+            f"Run cannot resume while {run['state']}: nothing is waiting on a decision. "
+            "Use `pause` to stop it first, or let `advance` drive it."
+        )
     plan = _load_plan(root)
     unknown_tasks = {str(task["id"]): task for task in plan["tasks"] if task["state"] == "outcome_unknown"}
     choices = resolutions or {}

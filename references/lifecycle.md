@@ -37,3 +37,11 @@ never completion evidence.
 - `--yes` is required. Without it the command refuses and changes nothing.
 - The receipt names every removed path, dropped task and dropped artifact. Report it rather than summarizing it.
 
+## When the driver was killed
+
+A driver killed mid-call — by the OOM killer, by a closed terminal, by `kill` — leaves the run marked `running`, its task `running`, and its attempt holding a lease that then expires. If the provider had already accepted that call, its outcome is unknown: it may have completed and been paid for.
+
+`resume --resolve-unknown TASK:retry|abandon` is the whole recovery. It settles the stale claim first, so it works whether or not anything has converted the attempt yet; there is no pause step to find. `retry` accepts that the accepted call may be paid for twice, `abandon` gives the task up and blocks whatever depended on it. That decision is the only part a person owns.
+
+`pause --emergency` is for stopping a *live* run immediately and is not part of this. A run that is genuinely running, with a lease that has not expired, still refuses to resume — there is nothing waiting on a decision.
+
