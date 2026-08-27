@@ -92,6 +92,7 @@ STYLE_REVIEW_MODELS: list[str] = [
     "openrouter/openai/gpt-5.6-luna",
     "openrouter/z-ai/glm-5.3-flash",
     "openrouter/google/gemini-3.7-flash",
+    "openrouter/qwen/qwen3.8-flash",
 ]
 CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/deepseek/deepseek-v4-flash-0731",
@@ -103,6 +104,14 @@ CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/google/gemini-3.7-flash",
     "openrouter/openai/gpt-5.6-luna",
 ]
+# Prose style presets. A project picks one in book-forge.yaml under `style.preset`;
+# the named file is appended to the role prompt of every role that writes or judges
+# prose, so the register is part of the envelope hash and a change to it makes
+# unwritten work stale rather than silently mixing two registers in one book.
+DEFAULT_STYLE_PRESET = "plain-concrete"
+STYLE_PROMPT_ROLES = frozenset({"writer", "reviser", "style-review"})
+
+
 # Per-model provider pin and reasoning ladder — taken from the global config.
 # Each entry mirrors provider.openrouter.models[<id>] in ~/.config/opencode/opencode.json.
 CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
@@ -403,6 +412,64 @@ def _style_review_models(config: dict[str, object]) -> list[str]:
             return [m for m in sr["default_models"] if isinstance(m, str) and "/" in m]
     return list(STYLE_REVIEW_MODELS)
 
+def _style_preset_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "assets" / "prompts" / "style"
+
+
+def available_style_presets() -> list[str]:
+    directory = _style_preset_dir()
+    if not directory.is_dir():
+        return []
+    return sorted(path.stem for path in directory.glob("*.md"))
+
+
+def _style_config(config: dict[str, object]) -> dict[str, object]:
+    style = config.get("style")
+    if style is None:
+        return {}
+    if not isinstance(style, dict):
+        raise BookForgeError("book-forge.yaml: style must be an object")
+    return style
+
+
+def _style_preset_name(config: dict[str, object]) -> str:
+    style = _style_config(config)
+    preset = style.get("preset", DEFAULT_STYLE_PRESET)
+    if not isinstance(preset, str) or not preset.strip():
+        raise BookForgeError("book-forge.yaml: style.preset must be a non-empty string")
+    return preset.strip()
+
+
+def _style_directives(config: dict[str, object]) -> list[str]:
+    style = _style_config(config)
+    directives = style.get("directives", [])
+    if not isinstance(directives, list) or any(not isinstance(row, str) for row in directives):
+        raise BookForgeError("book-forge.yaml: style.directives must be a list of strings")
+    return [row.strip() for row in directives if row.strip()]
+
+
+def _style_block(config: dict[str, object]) -> str:
+    """The project's prose register, as it is appended to a prose role's prompt.
+
+    An unknown preset fails: falling back to the default would write a whole book
+    in a register nobody chose, and the mistake would only surface in the prose.
+    """
+    preset = _style_preset_name(config)
+    path = _style_preset_dir() / f"{preset}.md"
+    if not path.is_file():
+        known = ", ".join(available_style_presets()) or "none installed"
+        raise BookForgeError(f"Unknown style preset: {preset} (available: {known})")
+    body = path.read_text(encoding="utf-8").strip()
+    lines = [body] if body else []
+    directives = _style_directives(config)
+    if directives and lines:
+        lines.append("")
+    lines.extend(f"- {directive}" for directive in directives)
+    if not lines:
+        return ""
+    return "## Prose style\n\n" + "\n".join(lines)
+
+
 def _style_review_rules(config: dict[str, object]) -> list[dict[str, object]]:
     chorus = config.get("chorus")
     if isinstance(chorus, dict):
@@ -453,6 +520,31 @@ def _prompt_chorus_models(default: list[str] | None = None) -> list[str]:
                     selected.append(full)
                     break
     return selected or default
+
+
+def _prompt_style_preset(default: str | None = None) -> str:
+    """Prompt TTY for the prose register at setup. Returns a preset name."""
+    default = default or DEFAULT_STYLE_PRESET
+    presets = available_style_presets()
+    if not presets or not __import__("sys").stdin.isatty():
+        return default
+    import sys as _sys
+    print("Select the prose style for this project:", file=_sys.stderr)
+    for index, name in enumerate(presets, 1):
+        marker = " [default]" if name == default else ""
+        print(f"  {index}. {name}{marker}", file=_sys.stderr)
+    print(f"Enter a number or a name [{default}]: ", file=_sys.stderr, end="", flush=True)
+    try:
+        answer = input().strip()
+    except EOFError:
+        return default
+    if not answer:
+        return default
+    if answer.isdigit() and 1 <= int(answer) <= len(presets):
+        return presets[int(answer) - 1]
+    if answer in presets:
+        return answer
+    return default
 
 
 def _parse_chorus_csv(csv: str | None) -> list[str] | None:
@@ -656,8 +748,9 @@ def _validate_existing(project: Path, title: str, source_language: str) -> dict[
     return {"created": False, "project": str(project)}
 
 
-def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool, chorus_models: list[str] | None = None) -> None:
+def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool, chorus_models: list[str] | None = None, style_preset: str | None = None) -> None:
     _cm = list(chorus_models) if chorus_models is not None else list(CHORUS_DEFAULT_MODELS)
+    _style = style_preset or DEFAULT_STYLE_PRESET
     config = {
         "schema": SCHEMA_VERSION,
         "title": title,
@@ -668,6 +761,7 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "context": {"writer_max_input_tokens": 12000, "cold_reader_max_input_tokens": 8000, "technical_editor_max_input_tokens": 10000, "design_max_input_tokens": 16000, "hard_fail_on_overflow": True},
         "audit": {"input_budget": 32000},
         "chorus": {"enabled": True, "post_enabled": True, "models": _cm, "synthesizer": CHORUS_SYNTHESIZER},
+        "style": {"preset": _style, "directives": []},
     }
     _write_json(stage / "book-forge.yaml", config)
     _write_json(stage / "opencode.json", _opencode_config(_cm))
@@ -732,9 +826,15 @@ def init_project(
     *,
     fault_hook=None,
     chorus_models: list[str] | None = None,
+    style_preset: str | None = None,
 ) -> dict[str, object]:
     if chorus_models is None:
         chorus_models = _prompt_chorus_models()
+    if style_preset is None:
+        style_preset = _prompt_style_preset()
+    known = available_style_presets()
+    if known and style_preset not in known:
+        raise BookForgeError(f"Unknown style preset: {style_preset} (available: {', '.join(known)})")
     target = Path(project).expanduser().resolve()
     language = _canonical_language(source_language)
     if target.exists() and any(target.iterdir()):
@@ -744,7 +844,7 @@ def init_project(
     stage = Path(tempfile.mkdtemp(prefix=f".{target.name}-book-forge-", dir=target.parent))
     target_was_empty = target.exists()
     try:
-        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent), chorus_models=chorus_models)
+        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent), chorus_models=chorus_models, style_preset=style_preset)
         if fault_hook is not None:
             fault_hook("before_promote")
         if target_was_empty:
@@ -2675,6 +2775,13 @@ def build_envelope(
     if not prompt_path.is_file():
         raise BookForgeError(f"Missing pinned role prompt: {prompt_path.name}")
     role_prompt = prompt_path.read_text(encoding="utf-8").strip()
+    # The register is the project's, not the role's: a writer, a reviser and the
+    # style pass must all judge sentences by the same standard, or the pass that
+    # is meant to hold the register is the one that erodes it.
+    if (prompt_role or role) in STYLE_PROMPT_ROLES:
+        style_block = _style_block(_read_json(root / "book-forge.yaml"))
+        if style_block:
+            role_prompt = f"{role_prompt}\n\n{style_block}"
     clean_task = dict(task_capsule)
     if role in {"cold-reader", "technical-editor", "canon-auditor", "judge"}:
         clean_task.pop("author_history", None)
@@ -6617,6 +6724,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--title")
     init.add_argument("--source-language", default="en")
     init.add_argument("--chorus-models", help="Comma-separated openrouter/... models; when omitted and TTY, prompts interactively")
+    init.add_argument("--style", help="Prose style preset; when omitted and TTY, prompts interactively")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
     continuity_add = continuity_commands.add_parser("add")
@@ -6721,7 +6829,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init":
             title = args.title or args.project.name.replace("-", " ").title()
             cm = _parse_chorus_csv(args.chorus_models) if getattr(args, "chorus_models", None) is not None else None
-            print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm), sort_keys=True))
+            print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm, style_preset=getattr(args, "style", None)), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "add-book":

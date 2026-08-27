@@ -1768,3 +1768,28 @@ for less.
 **Applies to what is written from here on.** The seven chapters already promoted
 carry the register the old instructions produced; nothing in this change
 rewrites them.
+
+## The prose register is hardcoded in the role prompt, so every project writes in the same voice ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `writer.md` now carries craft instruction, but that instruction is one fixed register for every book the skill ever writes. A literary science-fiction novel and an erotic romance need the same structural rules — a person, a want, an obstacle — and opposite sentence-level ones. Today the second can only be got by editing the skill's own prompt, which changes it for every other project on the machine.
+
+**Fix:** the register becomes project configuration. `book-forge.yaml` gains a `style` block naming a preset shipped in `assets/prompts/style/`, plus optional per-project directives. `build_envelope` appends the resolved block to the role prompt of the three roles that write or judge prose — `writer`, `reviser`, `style-review` — and to no other: cold-reader, technical-editor, canon-auditor and translator judge facts, not register. Three presets ship: `plain-concrete` (the default), `erotic-romance`, and `neutral`, which adds nothing.
+
+Two design choices worth recording. The block lands **inside the role prompt and therefore inside the envelope hash**, so changing a project's register makes unwritten work stale instead of silently mixing two registers inside one book. And an unknown preset **fails** rather than falling back to the default: a silent fallback writes a whole novel in a register nobody chose, and the mistake surfaces only in the prose, chapters later.
+
+`qwen3.8-flash` joins `STYLE_REVIEW_MODELS`, taking the default style ensemble to four.
+
+**Tasks:**
+- [x] `assets/prompts/style/{plain-concrete,erotic-romance,neutral}.md`
+- [x] `_style_block` + preset validation, unknown preset fails loud
+- [x] Injection in `build_envelope` for `writer` / `reviser` / `style-review`
+- [x] Wizard `_prompt_style_preset`, `--style` flag, `style` written by `_build_project`
+- [x] `qwen3.8-flash` added to the default style-review ensemble
+- [x] Test: default in the absence of config, preset resolution, excluded roles, directives, hash changes with the register
+- [x] Test: 206 passed, 23 subtests (era 191)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** Two projects on the same machine write in two registers, and neither can reach the other's prompt file.
