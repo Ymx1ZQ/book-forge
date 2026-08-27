@@ -42,6 +42,27 @@ class DesignProvider:
         self.audit = audit if audit is not None else {"findings": []}
         self.calls = []
 
+    def _designer_payload(self, envelope):
+        """Answer one design chunk from the fixture proposal.
+
+        The engine drives the book design in slices — a spine call, then one call
+        per range of chapters — so a fixture that returns the whole proposal to
+        every call no longer describes what the designer is asked for."""
+        chunk = envelope["payload"]["task"].get("chunk") or {}
+        chapters = list(self.value.get("chapters", []))
+        if chunk.get("category") == "spine":
+            return {
+                **{key: value for key, value in self.value.items() if key != "chapters"},
+                "chapter_outline": [
+                    {key: row[key] for key in ("id", "order", "pov") if key in row}
+                    for row in chapters
+                ],
+            }
+        if chunk.get("category") == "chapters":
+            first, last = int(chunk["first_order"]), int(chunk["last_order"])
+            return {"chapters": [row for row in chapters if first <= int(row["order"]) <= last]}
+        return self.value
+
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
         if role.startswith("advisor-") or role == "chorus-synthesizer":
@@ -56,7 +77,7 @@ class DesignProvider:
                 "latency_ms": 5,
                 "finish": "stop",
             }
-        payload = self.value if role == "designer" else self.audit
+        payload = self._designer_payload(envelope) if role == "designer" else self.audit
         return {
             "text": json.dumps(payload),
             "provider": "openrouter",
@@ -127,7 +148,7 @@ class BookDesignTests(unittest.TestCase):
         result = self.bf.execute_book_design(self.project, book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
         self.assertEqual(result["calls"], 2)
-        self.assertEqual(provider.calls, ["designer", "canon-auditor"])
+        self.assertEqual(provider.calls, ["designer", "designer", "canon-auditor"])
         self.assertTrue((self.project / f"books/{book}/chapters/CH-0001.json").is_file())
 
     def test_binds_book_scoped_proposal_evidence_to_helper_hashes(self):

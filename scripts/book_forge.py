@@ -3053,6 +3053,10 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
 
 # M1 per-chunk design calls: the helper invokes the designer once per category
 # (each call well inside the per-response output budget), then merges.
+# Chapters per book-design call. Small enough that a heavy reasoning burn still
+# leaves room for the slice's own output.
+BOOK_DESIGN_SLICE_SIZE = 8
+
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
     {"category": "eras"},
@@ -3158,45 +3162,123 @@ def _run_design_chunked(
     results: list[dict[str, object]] = []
     chunk_telemetry: list[dict[str, object]] = []
     for chunk in chunk_specs:
-        capsule = dict(base_capsule)
-        capsule["chunk"] = chunk
-        envelope = build_envelope(
-            root,
-            role="designer",
-            task_capsule=capsule,
-            imports=imports,
-            state={},
-            tools=[],
-            max_output_tokens=max_output_tokens,
+        parsed, telemetry, chunk_results = _run_design_chunk(
+            root, task_id, claim, attempt_dir, base_capsule, chunk, imports, runner, max_output_tokens
         )
-        _write_bytes_atomic(attempt_dir / f"envelope-{_chunk_slug(chunk)}.json", envelope["bytes"])
-        result = None
-        for attempt in range(3):
-            result = runner("designer", envelope, attempt_dir)
-            results.append(result)
-            mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
-            if result["finish"] != "length":
-                break
-            _write_bytes_atomic(
-                attempt_dir / f"raw-{_chunk_slug(chunk)}-attempt{attempt + 1}.txt",
-                str(result.get("text", "")).encode(),
-            )
-        if result is None or _is_length_finish(result):
-            _block_task_failed_length(root, task_id, claim)
-            raise BookForgeError(f"Design {task_id} failed_length on chunk {_chunk_slug(chunk)}")
-        _write_bytes_atomic(attempt_dir / f"raw-{_chunk_slug(chunk)}.txt", str(result.get("text", "")).encode())
-        chunk_telemetry.append(
-            {
-                "chunk": _chunk_slug(chunk),
-                "estimated_input_tokens": envelope["estimated_input_tokens"],
-                "tokens": result.get("tokens") or {},
-            }
+        results.extend(chunk_results)
+        chunk_telemetry.append(telemetry)
+        merged = _merge_design_chunks(merged, parsed)
+    return claim, merged, results, chunk_telemetry
+
+
+def _run_design_chunk(
+    root: Path,
+    task_id: str,
+    claim: dict[str, object],
+    attempt_dir: Path,
+    base_capsule: dict[str, object],
+    chunk: dict[str, object],
+    imports: list[str],
+    runner,
+    max_output_tokens: int,
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
+    """Run the designer for one chunk under an already-claimed task.
+
+    Length truncation is retried locally up to three times; exhaustion blocks the
+    task as failed_length rather than leaving it outcome_unknown.
+    """
+    capsule = dict(base_capsule)
+    capsule["chunk"] = chunk
+    slug = _chunk_slug(chunk)
+    envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule=capsule,
+        imports=imports,
+        state={},
+        tools=[],
+        max_output_tokens=max_output_tokens,
+    )
+    _write_bytes_atomic(attempt_dir / f"envelope-{slug}.json", envelope["bytes"])
+    results: list[dict[str, object]] = []
+    result = None
+    for attempt in range(3):
+        result = runner("designer", envelope, attempt_dir)
+        results.append(result)
+        mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+        if result["finish"] != "length":
+            break
+        _write_bytes_atomic(attempt_dir / f"raw-{slug}-attempt{attempt + 1}.txt", str(result.get("text", "")).encode())
+    if result is None or _is_length_finish(result):
+        _block_task_failed_length(root, task_id, claim)
+        raise BookForgeError(f"Design {task_id} failed_length on chunk {slug}")
+    _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
+    telemetry = {
+        "chunk": slug,
+        "estimated_input_tokens": envelope["estimated_input_tokens"],
+        "tokens": result.get("tokens") or {},
+    }
+    try:
+        parsed = _parse_chunked_contract(str(result.get("text", "")))
+    except BookForgeError as exc:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+        raise
+    return parsed, telemetry, results
+
+
+def _book_design_chunks(chapter_count: int) -> list[dict[str, object]]:
+    """One chunk per slice of chapters, in order."""
+    chunks: list[dict[str, object]] = []
+    for start in range(1, chapter_count + 1, BOOK_DESIGN_SLICE_SIZE):
+        end = min(start + BOOK_DESIGN_SLICE_SIZE - 1, chapter_count)
+        chunks.append({"category": "chapters", "part": f"{start}-{end}", "first_order": start, "last_order": end})
+    return chunks
+
+
+def _run_book_design_chunked(
+    root: Path,
+    task_id: str,
+    base_capsule: dict[str, object],
+    imports: list[str],
+    runner,
+    *,
+    max_output_tokens: int = 12288,
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+    """Design a book in engine-controlled slices: the spine, then the chapters.
+
+    A whole 40-chapter proposal does not fit in one call. Measured on three
+    consecutive attempts, reasoning consumed 27045, 29441 and 31998 tokens of a
+    ceiling near 32000, leaving 4955, 2559 and finally zero tokens of output —
+    24 chapters, then 9, then none. Asking the model to split its own answer into
+    several JSON objects cannot help, because those objects share one output
+    budget. So the engine decides the split: the spine call returns the arc and a
+    one-line outline per chapter, and each following call expands one slice of
+    that outline into full chapter contracts.
+    """
+    request_hash = _sha256_bytes(_json_bytes({"task": task_id, "chunks": ["spine", "chapters"]}))
+    claim = claim_task(root, task_id, request_hash=request_hash)
+    attempt_dir = Path(claim["capsule"]).parent
+    results: list[dict[str, object]] = []
+    chunk_telemetry: list[dict[str, object]] = []
+
+    spine, telemetry, spine_results = _run_design_chunk(
+        root, task_id, claim, attempt_dir, base_capsule, {"category": "spine"}, imports, runner, max_output_tokens
+    )
+    results.extend(spine_results)
+    chunk_telemetry.append(telemetry)
+    outline = spine.get("chapter_outline")
+    if not isinstance(outline, list) or not outline:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason="spine returned no chapter_outline")
+        raise BookForgeError("Book design spine returned no chapter_outline")
+
+    merged = {key: value for key, value in spine.items() if key != "chapter_outline"}
+    slice_capsule = {**base_capsule, "spine": merged, "chapter_outline": outline}
+    for chunk in _book_design_chunks(len(outline)):
+        parsed, telemetry, slice_results = _run_design_chunk(
+            root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens
         )
-        try:
-            parsed = _parse_chunked_contract(str(result.get("text", "")))
-        except BookForgeError as exc:
-            _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
-            raise
+        results.extend(slice_results)
+        chunk_telemetry.append(telemetry)
         merged = _merge_design_chunks(merged, parsed)
     return claim, merged, results, chunk_telemetry
 
@@ -4317,10 +4399,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": hint}}
     else:
         repair_context = {}
-    envelope = build_envelope(
-        root,
-        role="designer",
-        task_capsule={
+    base_capsule = {
             "scope": "book",
             "book": book,
             "brief": brief,
@@ -4329,7 +4408,6 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             **({"chorus_report": _latest_chorus_report(root, f"book-{book_id}")} if with_chorus_context and _latest_chorus_report(root, f"book-{book_id}") else {}),
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
-            "chunking": "You MAY and for 40 chapters you MUST emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB). For example: one object with premise/arc/entry_state/exit_boundary and 2-3 objects each with a slice of the chapters array (e.g. CH-0001..0015, CH-0016..0030, CH-0031..0040). List keys (chapters) are concatenated in order across objects; keep each object valid JSON. A single object is also accepted but will exceed the size limit for 40 chapters.",
             "required_output": {
                 "premise": "string",
                 "entry_state": {},
@@ -4351,7 +4429,11 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
                     }
                 ],
             },
-        },
+    }
+    envelope = build_envelope(
+        root,
+        role="designer",
+        task_capsule=base_capsule,
         imports=imports,
         state={},
         tools=[],
@@ -4371,14 +4453,13 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         _log_step(2, 7, "chorus", "✓ (skipped)")
     _log_step(3, 7, "designer envelope", "✓")
     _log_step(4, 7, "designer call", "→")
-    claim, result = _run_with_length_retry(root, task_id, "designer", envelope, runner)
-    if _is_length_finish(result):
-        _log_step(4, 7, "designer call", "✗ length → retry")
-    else:
-        _log_step(4, 7, "designer call", "✓")
+    claim, merged, results, chunk_telemetry = _run_book_design_chunked(root, task_id, base_capsule, imports, runner)
+    result = _synthetic_chunk_result(results, merged)
+    result["chunk_telemetry"] = chunk_telemetry
+    _log_step(4, 7, "designer call", f"✓ ({len(chunk_telemetry)} slices)")
     _log_step(5, 7, "validate", "→")
     try:
-        proposal = _parse_chunked_contract(str(result["text"]))
+        proposal = merged
         findings = validate_book_design(root, book_id, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             _log_step(5, 7, "validate", "✗")
@@ -4575,6 +4656,8 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     environment = dict(os.environ)
     environment.pop("OPENROUTER_API_KEY", None)
     started = time.monotonic()
+    envelope_path = attempt_dir / "envelope.json"
+    _write_bytes_atomic(envelope_path, envelope["bytes"])
     result = subprocess.run(
         [
             binary,
@@ -4588,7 +4671,13 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             "json",
             "--title",
             f"book-forge-{attempt_dir.name.lower()}",
-            envelope["bytes"].decode("utf-8"),
+            # `opencode run` declares `-f, --file` as a yargs array, so it consumes
+            # every following non-flag token. A prompt placed after it is parsed as
+            # a second file path and the call dies with "File not found: Process the
+            # attached envelope...". The message positional goes first.
+            "Process the attached envelope and return the requested output contract.",
+            "--file",
+            str(envelope_path),
         ],
         capture_output=True,
         text=True,

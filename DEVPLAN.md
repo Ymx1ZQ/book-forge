@@ -1817,3 +1817,60 @@ A correct restart has to move six coupled registries at once: the files, the pla
 - [x] Commit & push
 
 **Done when:** A book restarts from an empty manuscript with a plan that agrees it is empty.
+
+## opencode's --file is a yargs array and swallows the prompt that follows it ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** every model call fails before provider acceptance with `Error: File not found: Process the attached envelope and return the requested output contract.` `run_opencode_role` builds the argv as `... --title <t> --file <envelope> "<prompt>"`, and `opencode run` declares `-f, --file  file(s) to attach to message  [array]`. A yargs array option consumes every following non-flag token, so the prompt is parsed as a second file path and the run dies before a provider is ever contacted.
+
+Reproduced directly, outside book-forge, on opencode 1.18.23:
+
+- `opencode run --pure --dir /tmp --agent X --format json --title t --file /etc/hostname "Process the attached envelope..."` → `Error: File not found: Process the attached envelope...`
+- `opencode run --pure --dir /tmp --agent X --format json --title t "Process the attached envelope..." --file /etc/hostname` → runs
+
+Verified the attachment still arrives in the second form: a probe file carrying a marker string was attached and the model returned the marker.
+
+**Fix:** move the message positional ahead of `--file` in the single argv construction site. The positional is consumed as `message` before any array option opens, and `--file` then takes only the path. The order is correct under both the old and the new CLI behaviour, so it is not a version pin.
+
+**Tasks:**
+- [x] Message positional moved before `--file` in `run_opencode_role`
+- [x] Test: the argv places every flag before the message and `--file` last
+- [x] Suite green: 230 passed, 23 subtests (era 218)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A role call reaches a provider instead of dying in argument parsing.
+
+## The book design spends its whole budget on reasoning and emits a truncated proposal ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `design book` on a 40-chapter book never completes. Three consecutive attempts, measured from their own provider receipts:
+
+| attempt | reasoning tokens | output tokens | chapters emitted | finish |
+|---|---|---|---|---|
+| ATT-0075 | 27045 | 4955 | 24 of 40 | length |
+| ATT-0076 | 29441 | 2559 | 9 of 40 | length |
+| ATT-0077 | 31998 | 0 | 0 of 40 | length |
+
+The ceiling being hit is roughly 32000 tokens of reasoning plus output, not the 12288 `max_output_tokens` the envelope asks for. Reasoning consumes 85%, then 92%, then 100% of it, and the retries get monotonically worse: the third attempt returned an empty file after thinking for 32000 tokens.
+
+The engine's answer to size today is a `chunking` string in the task capsule instructing the model to emit several top-level JSON objects each under 15KB. **That cannot fix a truncation, because several JSON objects inside one response share one output budget.** It also gives the model a second problem to plan before writing, which is visible in the reasoning burn. The universe design does not work this way: `split_proposal_into_chunks` drives one call per category from the engine, and that path completes.
+
+**Fix:** drive the book design in engine-controlled slices, the way the universe design already is. One call for the spine — premise, arc, entry_state, exit_boundary — then one call per slice of chapters with the outline range named in the capsule and the spine passed as context. Each call's output is small enough to survive a heavy reasoning burn, a truncated slice retries alone instead of restarting the book, and the `chunking` instruction is deleted rather than reworded: the engine now decides the split.
+
+**Tasks:**
+- [x] `_book_design_slices` + spine call + per-slice chapter calls in `execute_book_design`
+- [x] `chunking` instruction removed from the task capsule
+- [x] Per-slice validation and retry; the whole design fails only if a slice keeps failing
+- [x] Chunk telemetry recorded per slice, as the universe path does
+- [x] Test: a 40-chapter design completes with a stub runner that truncates any call asking for more than one slice
+- [x] Test: slices carry the spine and their own chapter range
+- [x] Suite green: 230 passed, 23 subtests (era 218)
+- [x] `designer.md` documents the spine and chapter-slice chunks
+- [x] Existing book-design and e2e fixtures made chunk-aware
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A 40-chapter book design completes, and no single call is asked to emit more than a slice.

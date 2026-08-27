@@ -33,6 +33,20 @@ def universe_proposal():
     }
 
 
+def book_design_chunk(chunk):
+    """The book design is driven in slices: a spine call, then one call per
+    range of chapters. Answer whichever chunk the engine asked for."""
+    whole = book_proposal()
+    chapters = whole["chapters"]
+    if chunk.get("category") == "chapters":
+        first, last = int(chunk["first_order"]), int(chunk["last_order"])
+        return {"chapters": [row for row in chapters if first <= int(row["order"]) <= last]}
+    return {
+        **{key: value for key, value in whole.items() if key != "chapters"},
+        "chapter_outline": [{"id": row["id"], "order": row["order"], "pov": row["pov"]} for row in chapters],
+    }
+
+
 def book_proposal():
     return {
         "premise": "Mara must decide whether one memory can belong to a city.",
@@ -67,7 +81,7 @@ class FixtureProvider:
         with self.lock:
             task = envelope["payload"]["task"]
             if role == "designer":
-                value = universe_proposal() if task["scope"] == "universe" else book_proposal()
+                value = universe_proposal() if task["scope"] == "universe" else book_design_chunk(task.get("chunk") or {})
             elif role == "canon-auditor":
                 value = {"findings": []}
             elif role == "writer":
@@ -141,9 +155,12 @@ class EndToEndTests(unittest.TestCase):
             self.assertTrue(bf.migrate_project(project, "check")["compatible"])
             report = bf.telemetry_report(project, strict=True)
             self.assertTrue(report["valid"])
-            # The chunked universe design folds 8 per-category calls into one
-            # accepted attempt, so accepted counts attempts, not provider calls.
-            self.assertEqual(report["calls"]["accepted"], len(provider.calls) - (len(bf.UNIVERSE_DESIGN_CHUNKS) - 1))
+            # Both chunked designs fold their per-chunk calls into one accepted
+            # attempt each, so accepted counts attempts, not provider calls: eight
+            # category calls for the universe, and a spine plus one chapter slice
+            # for the single-chapter book.
+            folded = (len(bf.UNIVERSE_DESIGN_CHUNKS) - 1) + (1 + len(bf._book_design_chunks(1)) - 1)
+            self.assertEqual(report["calls"]["accepted"], len(provider.calls) - folded)
             self.assertFalse(any(path.name.upper() == "CLAUDE.MD" for path in project.rglob("*")))
             self.assertFalse(any(path.suffix == ".sh" for path in project.rglob("*")))
 
