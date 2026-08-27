@@ -5079,10 +5079,28 @@ def draft_chapter(
 
 
 ADVANCE_STAGES = ("design", "chapters", "translate", "export")
+MAX_STAGE_ATTEMPTS = 3
 
 
 class AdvanceHalted(BookForgeError):
     """The driver stopped on something only a person can decide."""
+
+
+def _halt_if_a_person_is_needed(state: dict[str, object], *, context: str = "") -> None:
+    """Every halt names the failure, the task, and the command that resolves it."""
+    suffix = f" ({context})" if context else ""
+    if state["needs_a_person"]:
+        raise AdvanceHalted(
+            "outcome unknown for "
+            + ", ".join(state["needs_a_person"])
+            + " — the provider accepted the call and a retry may pay twice; resolve with "
+            f"`resume --resolve-unknown TASK:retry|abandon`{suffix}"
+        )
+    if state["exhausted"]:
+        row = state["exhausted"][0]
+        raise AdvanceHalted(
+            f"{row['task']} failed {row['retries']} times in a row and will not be retried again: {row['failure']}{suffix}"
+        )
 
 
 def _advance_needs_design(root: Path, book_id: str) -> bool:
@@ -5121,31 +5139,44 @@ def advance_book(
 
     def guard() -> None:
         state = recover_before_dispatch(root)
-        if state["needs_a_person"]:
-            raise AdvanceHalted(
-                "outcome unknown for "
-                + ", ".join(state["needs_a_person"])
-                + " — the provider accepted the call and a retry may pay twice; resolve with "
-                "`resume --resolve-unknown TASK:retry|abandon`"
-            )
-        if state["exhausted"]:
-            row = state["exhausted"][0]
-            raise AdvanceHalted(
-                f"{row['task']} failed {row['retries']} times in a row and will not be retried again: {row['failure']}"
-            )
+        _halt_if_a_person_is_needed(state)
+
+    def stage(name: str, action) -> object:
+        """Run one stage, recovering and retrying when it fails.
+
+        Recovery used to happen only between stages, so a failure inside one
+        reached the caller as the engine's own message with the run left blocked
+        and nothing said about what to do next.
+        """
+        last = ""
+        for attempt in range(MAX_STAGE_ATTEMPTS):
+            guard()
+            try:
+                return action()
+            except AdvanceHalted:
+                raise
+            except BookForgeError as exc:
+                last = str(exc)
+                state = recover_before_dispatch(root)
+                _halt_if_a_person_is_needed(state, context=f"{name} failed: {last}")
+                if not state["recovered"]:
+                    raise AdvanceHalted(
+                        f"{name} failed and nothing could be recovered: {last}. "
+                        "Read the attempt's raw output before spending another call."
+                    ) from exc
+                print(f"[advance] {name} failed ({last}); recovered and retrying {attempt + 2}/{MAX_STAGE_ATTEMPTS}", file=sys.stderr)
+        raise AdvanceHalted(f"{name} failed {MAX_STAGE_ATTEMPTS} times in a row: {last}")
 
     if "design" in wanted and _advance_needs_design(root, book_id):
-        guard()
         _log_step(1, len(wanted), "design", "→")
-        execute_book_design(root, book_id, provider=runner)
+        stage("design", lambda: execute_book_design(root, book_id, provider=runner))
         done["stages"].append("design")
 
     if "chapters" in wanted:
         for step in range(max_steps):
-            guard()
             try:
-                run_next(root, book_id=book_id, provider=runner)
-            except BookForgeError as exc:
+                stage("chapters", lambda: run_next(root, book_id=book_id, provider=runner))
+            except AdvanceHalted as exc:
                 if "No ordinary chapter draft is ready" in str(exc):
                     break
                 raise
@@ -5158,9 +5189,8 @@ def advance_book(
     targets = list(locales or [])
     if "translate" in wanted and targets:
         for locale in targets:
-            guard()
             _log_step(3, len(wanted), f"translate {locale}", "→")
-            translate_next(root, book_id, locale, provider=runner, run_all=True)
+            stage(f"translate {locale}", lambda locale=locale: translate_next(root, book_id, locale, provider=runner, run_all=True))
         done["stages"].append("translate")
 
     if "export" in wanted:

@@ -138,6 +138,34 @@ class AdvanceEndToEndTests(AdvanceFixture):
             self.bf.advance_book(self.project, self.book, until="publish", provider=ScriptedProvider(self.bf))
 
 
+class StageRetryTests(AdvanceFixture):
+    """A failure inside a stage used to reach the caller as the engine's own message
+    with the run left blocked and nothing said about what to do next."""
+
+    def test_a_stage_that_fails_once_and_then_succeeds_is_never_surfaced(self):
+        provider = ScriptedProvider(self.bf, fail={"designer": 3})
+        result = self.bf.advance_book(self.project, self.book, until="design", provider=provider)
+        self.assertEqual(result["stages"], ["design"])
+        self.assertTrue((self.project / f"books/{self.book}/chapters/CH-0001.json").is_file())
+
+    def test_a_stage_that_keeps_failing_halts_naming_the_failure(self):
+        provider = ScriptedProvider(self.bf, fail={"designer": 999})
+        with self.assertRaises(self.bf.AdvanceHalted) as caught:
+            self.bf.advance_book(self.project, self.book, until="design", provider=provider)
+        message = str(caught.exception)
+        self.assertIn("design", message)
+        self.assertTrue("DESIGN" in message or "failed" in message)
+
+    def test_a_halt_always_says_what_to_do_next(self):
+        self.bf.add_task(self.project, "DRAFT-Q", "writer", deps=[], priority=50, outputs=[])
+        plan = self.plan()
+        next(row for row in plan["tasks"] if row["id"] == "DRAFT-Q")["state"] = "outcome_unknown"
+        self.bf._save_plan(self.project, plan)
+        with self.assertRaises(self.bf.AdvanceHalted) as caught:
+            self.bf.advance_book(self.project, self.book, until="design", provider=ScriptedProvider(self.bf))
+        self.assertIn("resolve-unknown", str(caught.exception))
+
+
 class RecoveryTests(AdvanceFixture):
     def test_a_task_blocked_by_a_length_failure_returns_to_pending(self):
         self.bf.add_task(self.project, "DRAFT-X", "writer", deps=[], priority=50, outputs=[])

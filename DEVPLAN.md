@@ -1982,3 +1982,21 @@ Live on Margherita: `ATT-0078` is `running`, `provider_accepted: true`, lease ex
 - [x] Reinstall, commit & push
 
 **Done when:** The fifth slice's envelope is the same size as the first.
+
+## A failure inside a stage escapes `advance` as a bare engine error with no way forward ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `advance` recovers *between* stages, but a failure *inside* one propagates untouched. When the book design failed, the driver stopped with the engine's own message and the run left `blocked` — no recovery attempted, no instruction printed. The agent watching it reported exactly that: *"advance si è fermato da solo — il run è blocked, non ha stampato comandi di recupero"*. It is the complaint the driver exists to answer: stopping is acceptable, stopping without saying what happens next is not.
+
+**Fix:** each stage runs inside a recovery loop. A failure recovers and retries the stage; it halts only when recovery cannot help — nothing was recovered, a task spent its retries, or a person must decide — and the halt always names the failure, the task, and the command that resolves it.
+
+**Tasks:**
+- [x] Each stage retried after recovery, bounded by `MAX_STAGE_ATTEMPTS`
+- [x] Every halt carries the original failure and the next command
+- [x] Test: a stage that fails once and then succeeds is not surfaced to the caller
+- [x] Test: a stage that keeps failing halts naming the failure and the task
+- [x] Suite green: 263 passed, 23 subtests (era 260)
+- [x] Reinstall, commit & push
+
+**Done when:** `advance` never ends on an engine error the reader cannot act on.
