@@ -385,6 +385,41 @@ class ChapterTitleMaterializationTests(unittest.TestCase):
         self.assertNotIn("title", second)
 
 
+class ObligationFieldTests(unittest.TestCase):
+    """`chapter.obligations` joins a chapter to a promise another book is owed. A
+    designer that writes its own foreshadowing there fails the whole design after
+    every call has been paid for."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+
+    def test_free_text_in_obligations_is_blocking(self):
+        value = proposal()
+        value["chapters"][0]["obligations"] = ["The screen must wake once more at the book's end."]
+        findings = self.bf.validate_book_design(self.project, self.book, value)
+        unknown = [row for row in findings if row["code"] == "obligation.unknown"]
+        self.assertEqual(len(unknown), 1)
+        self.assertEqual(unknown[0]["severity"], "blocking")
+
+    def test_a_book_with_no_registered_obligations_wants_empty_lists(self):
+        value = proposal()
+        for chapter in value["chapters"]:
+            chapter["obligations"] = []
+        blocking = [row for row in self.bf.validate_book_design(self.project, self.book, value) if row["severity"] == "blocking"]
+        self.assertEqual(blocking, [])
+
+    def test_the_designer_is_told_what_the_field_is_for(self):
+        prompt = (Path(self.bf.__file__).resolve().parents[1] / "assets" / "prompts" / "designer.md").read_text()
+        self.assertIn("`obligations` is not one of those fields", prompt)
+        self.assertIn("plants", prompt)
+        self.assertIn("reveals", prompt)
+
+
 class DesignAsksForTitlesTests(unittest.TestCase):
     """Naming the chapters is the pipeline's job, so the contract must ask for it."""
 

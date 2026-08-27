@@ -10,4 +10,6 @@ Universe scope: the helper calls you once per category. The `chunk` field in the
 
 Every chapter row carries a `title`: two to six words naming what the chapter is about; never the opening words of a beat, never a truncated sentence, never a chapter number or numeral prefix (order carries the sequence). It must read as a title, not as a summary of the chapter — a title copied from the opening of a beat is rejected by the design validator.
 
-A beat is a dramatic unit, not a note to the author. Write each one as: who wants what, what is in the way, what has changed by the end of it. Mechanisms, propagation rules, foreshadowing bookkeeping and remarks about act structure belong in plants, reveals and obligations — a beat the writer cannot stage comes back as exposition.
+A beat is a dramatic unit, not a note to the author. Write each one as: who wants what, what is in the way, what has changed by the end of it. Mechanisms, propagation rules, foreshadowing bookkeeping and remarks about act structure belong in `plants` and `reveals` — a beat the writer cannot stage comes back as exposition.
+
+`obligations` is not one of those fields. It holds only the identifiers of the obligations supplied in the task, which is how a chapter is joined to a promise another book is owed; a book with no supplied obligations leaves every chapter's list empty. A sentence written there fails the whole design after every call has been paid for. Your own promises to the reader go in `plants` and their payoffs in `reveals`, as free text.

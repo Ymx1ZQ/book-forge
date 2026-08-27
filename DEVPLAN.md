@@ -2037,3 +2037,23 @@ A second arbitrary constant surfaced behind it: a slice that *did* answer correc
 **Limit kept honest:** a single indivisible value larger than one attachment is refused with a message naming its size, never sent to be truncated.
 
 **Done when:** No envelope is too large to arrive, and the part that arrives first is the one that says what to do.
+
+## `designer.md` sends the author's bookkeeping into a field the engine reserves for IDs ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** a book design that completed every slice was rejected with **sixty blocking findings**, all `obligation.unknown`, each carrying a sentence of the designer's own foreshadowing bookkeeping: *"The screen must wake once more and die on 'revert' at the book's end (chapter 27)."* `validate_book_design` reads `chapter.obligations` as a list of IDs of the book's registered obligations — the cross-book promises in `universe/relations.yaml` — and this book has none, so every entry was unknown.
+
+The instruction that produced it is one I wrote this morning: *"Mechanisms, propagation rules, foreshadowing bookkeeping and remarks about act structure belong in plants, reveals and obligations."* The first two are free-text fields for exactly that. The third is not: it is the engine's join to the relation registry, and putting prose in it fails the whole design after every call has been paid for.
+
+**Fix:** `designer.md` states what `obligations` is — the IDs supplied in the task, and nothing else — and sends the author's own bookkeeping to `plants` and `reveals`. The capsule's `required_output` says the same at the point of use, so the rule is visible where the field is filled in.
+
+**Tasks:**
+- [x] `designer.md` separates the engine's `obligations` from the author's `plants` and `reveals`
+- [x] `required_output` in the book capsule names the constraint at the field
+- [x] Test: a design whose chapters carry free-text obligations is rejected with a finding that says what to use instead
+- [x] Test: a design that uses registered IDs still validates
+- [x] Suite green: 273 passed, 23 subtests (era 270)
+- [x] Reinstall, commit & push
+
+**Done when:** The field that joins to the registry holds only what the registry knows.

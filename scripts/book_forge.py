@@ -4550,7 +4550,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
                         "reveals": [],
                         "target_words": 2000,
                         "imports": chapter_imports,
-                        "obligations": [],
+                        "obligations": "identifiers taken from the task's obligations list and nothing else; empty when that list is empty. Your own setups go in plants and their payoffs in reveals",
                         "pivotal": None,
                     }
                 ],
