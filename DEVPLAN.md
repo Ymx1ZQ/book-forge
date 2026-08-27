@@ -2000,3 +2000,40 @@ Live on Margherita: `ATT-0078` is `running`, `provider_accepted: true`, lease ex
 - [x] Reinstall, commit & push
 
 **Done when:** `advance` never ends on an engine error the reader cannot act on.
+
+## An envelope larger than one attachment cannot reach the model, and the contract is what gets cut ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `opencode run` truncates an attachment at about 50 KB, on top of the 2000-character line limit already handled. Landfall's design envelope is 146358 bytes, so the model reads a third of it — and because JSON keys are serialised in sorted order, `task` sits near the end, which means **the contract is precisely the part that is cut**. The model said so itself, in the answer that stopped the run:
+
+> The supplied envelope is truncated at 50 KB — the `task` object's `chunk` field, which names this call's chunk, sits in the unread remainder past line 439.
+
+It then declined to guess a chapter range, which is the right call: emitting the wrong range would be worse than emitting nothing. The spine call before it had succeeded only because "spine" is guessable. Margherita's envelope is around 40 KB and slips under, which is why the same book design behaves differently in the two projects.
+
+Where the size comes from, measured on the failing envelope: `worldbuilding` **85102 bytes**, `brief` 18263, `chapter_outline` 8949, `spine` 4920 — and the whole canon context only 24011 across 43 blocks. One document is 70% of every call.
+
+A second arbitrary constant surfaced behind it: a slice that *did* answer correctly was rejected by `Design chunk exceeds 15360 bytes: 23746`. That guard was written to catch a model ignoring the chunking instruction and emitting a monolith. With engine-driven slices the engine decides the split, so the only meaningful ceiling is what a single call can physically produce.
+
+**Fix:**
+
+- The envelope is delivered across as many attachments as it needs, each under the cap, **smallest-first**, so the contract is always in the first file and can never be the part that is cut. The split is structural and recursive: a dict too large for one file is emitted key by key, a list is chunked, and a `__chunks__` value is split further. Every part is valid JSON and the parts merge back to the canonical payload — checked at run time, not only in tests.
+- The parse-time chunk ceiling is derived from the call's own output allowance instead of a fixed 15 KB.
+
+**Tasks:**
+- [x] `_wire_attachments` splits the wire rendering into parts under `WIRE_MAX_ATTACHMENT`, contract first
+- [x] Parts merge back to the canonical payload, verified before dispatch
+- [x] `run_opencode_role` attaches every part, and the prompt says how they merge
+- [x] Parse ceiling derived from `max_output_tokens` rather than `DESIGN_CHUNK_MAX_BYTES`
+- [x] Test: a 150 KB envelope splits, every part is under the cap and valid JSON, and the merge is exact
+- [x] Test: the first part always carries `task` and `role_prompt`
+- [x] Test: a single oversized value is split rather than emitted whole
+- [x] Test: a small envelope still ships as one file
+- [x] Test: a legitimate 23 KB slice answer is no longer rejected
+- [x] Suite green: 270 passed, 23 subtests (era 263)
+- [x] Measured: the ~50 KB cap is **per attachment**, not on the total — four 42 KB files delivered 168 KB whole (provider input 157483 tokens)
+- [x] Reinstall, commit & push
+
+**Limit kept honest:** a single indivisible value larger than one attachment is refused with a message naming its size, never sent to be truncated.
+
+**Done when:** No envelope is too large to arrive, and the part that arrives first is the one that says what to do.

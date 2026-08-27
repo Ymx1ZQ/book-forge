@@ -3339,7 +3339,9 @@ def _run_design_chunk(
         "tokens": result.get("tokens") or {},
     }
     try:
-        parsed = _parse_chunked_contract(str(result.get("text", "")))
+        # The engine decides the split now, so the only meaningful ceiling on one
+        # answer is what a single call can physically produce.
+        parsed = _parse_chunked_contract(str(result.get("text", "")), max_bytes=max_output_tokens * 4)
     except BookForgeError as exc:
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
@@ -4644,7 +4646,7 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
     return value
 
 
-def _parse_chunked_contract(text_value: str) -> dict[str, object]:
+def _parse_chunked_contract(text_value: str, *, max_bytes: int = DESIGN_CHUNK_MAX_BYTES) -> dict[str, object]:
     """Parse a designer response that may contain multiple top-level JSON
     objects — one per category (M1 per-chunk generation) — and merge them
     into a single proposal.
@@ -4684,8 +4686,8 @@ def _parse_chunked_contract(text_value: str) -> dict[str, object]:
             raise BookForgeError("Model output contract must be an object")
         found += 1
         chunk_size = len(json.dumps(value, ensure_ascii=False))
-        if chunk_size > DESIGN_CHUNK_MAX_BYTES:
-            raise BookForgeError(f"Design chunk exceeds {DESIGN_CHUNK_MAX_BYTES} bytes: {chunk_size}")
+        if chunk_size > max_bytes:
+            raise BookForgeError(f"Design chunk exceeds {max_bytes} bytes: {chunk_size}")
         # Accept both direct category keys and the labeled form
         # {"_contract": "kernel", "rows": [...]}.
         contract = value.get("_contract")
@@ -4760,10 +4762,17 @@ def validate_writer_output(contract: dict[str, object], text_value: str) -> dict
 WIRE_MAX_LINE = 1200
 WIRE_CHUNK = 700
 WIRE_CHUNK_KEY = "__chunks__"
+# `opencode run` also truncates a whole attachment at about 50 KB, and JSON keys are
+# serialised in sorted order, so on a large envelope `task` — the contract — is exactly
+# what gets cut. The envelope is therefore delivered in as many parts as it needs,
+# smallest first, so the contract always arrives in the first one.
+WIRE_MAX_ATTACHMENT = 36000
 WIRE_PROMPT = (
     "Process the attached envelope and return the requested output contract. "
-    f'In the envelope, a value written as {{"{WIRE_CHUNK_KEY}": ["...", "..."]}} is one string '
-    "split for transport: concatenate its parts in order, adding nothing between them."
+    "The envelope may arrive split across several attached files: merge them in the "
+    "order given — later objects add keys, and values that are lists concatenate. "
+    f'A value written as {{"{WIRE_CHUNK_KEY}": ["...", "..."]}} is one string split for '
+    "transport: concatenate its parts in order, adding nothing between them."
 )
 
 
@@ -4804,6 +4813,139 @@ def _wire_decode(value: object) -> object:
     if isinstance(value, list):
         return [_wire_decode(row) for row in value]
     return value
+
+
+def _wire_merge(base: object, part: object) -> object:
+    """Merge one transport part into the whole. Inverse of `_wire_partition`."""
+    if isinstance(base, dict) and isinstance(part, dict):
+        if WIRE_CHUNK_KEY in base and WIRE_CHUNK_KEY in part:
+            return {WIRE_CHUNK_KEY: list(base[WIRE_CHUNK_KEY]) + list(part[WIRE_CHUNK_KEY])}
+        merged = dict(base)
+        for key, value in part.items():
+            merged[key] = _wire_merge(merged[key], value) if key in merged else value
+        return merged
+    if isinstance(base, list) and isinstance(part, list):
+        return base + part
+    return part
+
+
+def _wire_partition(value: object, budget: int) -> list[object]:
+    """Split a structure into parts that each serialise under `budget`.
+
+    Smallest first: a dict emits everything that already fits in one part before it
+    descends into the keys that do not, so the contract is never in the tail. Merging
+    the parts in order returns the original.
+    """
+    if _wire_size(value) <= budget:
+        return [value]
+    if isinstance(value, dict):
+        if WIRE_CHUNK_KEY in value and isinstance(value[WIRE_CHUNK_KEY], list):
+            return [{WIRE_CHUNK_KEY: piece} for piece in _wire_group(value[WIRE_CHUNK_KEY], budget)]
+        small = {key: item for key, item in value.items() if _wire_size({key: item}) <= budget}
+        parts: list[object] = []
+        for group in _wire_group([{key: item} for key, item in sorted(small.items())], budget):
+            merged: dict[str, object] = {}
+            for row in group:
+                merged.update(row)
+            if merged:
+                parts.append(merged)
+        for key, item in value.items():
+            if key in small:
+                continue
+            parts.extend({key: piece} for piece in _wire_partition(item, budget))
+        return parts or [value]
+    if isinstance(value, list):
+        parts = []
+        for group in _wire_group(value, budget):
+            parts.extend([group] if _wire_size(group) <= budget or len(group) == 1 else [[row] for row in group])
+        return parts or [value]
+    return [value]
+
+
+def _wire_hoist_contract(parts: list[object]) -> list[object]:
+    """Pull the small head of the task into the first part.
+
+    Every part is attached and every part arrives, but the first one is what a reader
+    sees first, and it should be the one that says what to do rather than the bulk of
+    the worldbuilding.
+    """
+    if len(parts) < 2 or not isinstance(parts[0], dict):
+        return parts
+    for index in range(1, len(parts)):
+        candidate = parts[index]
+        if not isinstance(candidate, dict) or set(candidate) != {"task"}:
+            continue
+        rest = parts[1:index] + parts[index + 1:]
+        merged = _wire_merge(parts[0], candidate)
+        if _wire_size(merged) <= WIRE_MAX_ATTACHMENT:
+            return [merged] + rest
+        # The head did not fit beside the canon context. The context is bulk and the
+        # contract is not, so the context moves out and the contract stays first.
+        head = {key: value for key, value in parts[0].items() if key != "context"}
+        evicted = {key: value for key, value in parts[0].items() if key == "context"}
+        merged = _wire_merge(head, candidate)
+        if evicted and _wire_size(merged) <= WIRE_MAX_ATTACHMENT:
+            return [merged, evicted] + rest
+        break
+    return parts
+
+
+def _wire_size(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=1))
+
+
+def _wire_group(rows: list, budget: int) -> list[list]:
+    """Greedily pack rows into groups that each serialise under `budget`."""
+    groups: list[list] = []
+    current: list = []
+    for row in rows:
+        candidate = current + [row]
+        if current and _wire_size(candidate) > budget:
+            groups.append(current)
+            current = [row]
+        else:
+            current = candidate
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _wire_attachments(payload: object, directory: Path) -> list[Path]:
+    """Write the envelope as one or more attachments, contract first.
+
+    The parts are decoded and merged back before the call; a rendering that does not
+    reproduce the canonical payload is refused rather than sent.
+    """
+    encoded = json.loads(_wire_bytes(payload).decode())
+    # Wrapping a piece back under its key costs bytes the recursion did not budget
+    # for, so the split is verified and the budget halved until every part fits.
+    budget = WIRE_MAX_ATTACHMENT
+    while True:
+        parts = _wire_partition(encoded, budget)
+        if all(_wire_size(part) <= WIRE_MAX_ATTACHMENT for part in parts) or budget <= 512:
+            break
+        budget = max(512, budget // 2)
+    parts = _wire_hoist_contract(parts)
+    oversized = [part for part in parts if _wire_size(part) > WIRE_MAX_ATTACHMENT]
+    if oversized:
+        # One indivisible value is larger than a single attachment. Refusing is the
+        # honest answer: sending it means the provider silently truncates it.
+        raise BookForgeError(
+            f"Envelope holds a single value of {_wire_size(oversized[0])} bytes that cannot be split "
+            f"below the {WIRE_MAX_ATTACHMENT}-byte attachment limit; shorten it at the source"
+        )
+    rebuilt: object = {}
+    for part in parts:
+        rebuilt = _wire_merge(rebuilt, part)
+    if _wire_decode(rebuilt) != payload:
+        raise BookForgeError("Wire attachments do not merge back to the canonical envelope")
+    paths: list[Path] = []
+    for index, part in enumerate(parts, 1):
+        name = "envelope.wire.json" if len(parts) == 1 else f"envelope.wire.part{index:02d}.json"
+        path = directory / name
+        _write_bytes_atomic(path, (json.dumps(part, ensure_ascii=False, sort_keys=True, indent=1) + "\n").encode())
+        paths.append(path)
+    return paths
 
 
 def _wire_bytes(payload: object) -> bytes:
@@ -4859,8 +5001,9 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     # The canonical bytes stay the audit surface and keep the hash on the receipt; the
     # wire rendering is what the provider is handed, and it is refused unless it decodes
     # back to those same bytes.
-    wire_path = attempt_dir / "envelope.wire.json"
-    _write_bytes_atomic(wire_path, _wire_bytes(json.loads(envelope["bytes"])))
+    for stale in attempt_dir.glob("envelope.wire.part*.json"):
+        stale.unlink()
+    wire_paths = _wire_attachments(json.loads(envelope["bytes"]), attempt_dir)
     result = subprocess.run(
         [
             binary,
@@ -4880,7 +5023,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             # attached envelope...". The message positional goes first.
             WIRE_PROMPT,
             "--file",
-            str(wire_path),
+            *[str(path) for path in wire_paths],
         ],
         capture_output=True,
         text=True,

@@ -71,6 +71,80 @@ class WireRoundTripTests(unittest.TestCase):
                 self.bf._wire_bytes({"role": "writer"})
 
 
+class WireAttachmentTests(unittest.TestCase):
+    """opencode truncates each attachment at about 50 KB and serialises JSON keys in
+    sorted order, so on a large envelope `task` — the contract — is what gets cut.
+    The envelope is split across attachments, contract first."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.dir = Path(self.temp.name)
+
+    def big_payload(self):
+        return {
+            "schema": 1, "model": "m", "role": "designer", "role_prompt": "Write the design.",
+            "max_output_tokens": 12288, "tools": [], "state": {},
+            "context": [{"id": f"CHR-{i:04d}#summary", "hash": "h", "content": "A character. " * 40} for i in range(43)],
+            "task": {
+                "scope": "book", "chunk": {"category": "chapters", "first_order": 9, "last_order": 16},
+                "worldbuilding": "\n".join(f"## Region {i}\n\nSalt and light." for i in range(2000)),
+                "brief": {"premise": "A diver decides.", "notes": "n" * 18000},
+                "chapter_outline": [{"id": f"CH-{i:04d}", "order": i, "title": "The Ninth Tide"} for i in range(1, 28)],
+            },
+        }
+
+    def test_a_large_envelope_splits_into_parts_that_all_fit(self):
+        payload = self.big_payload()
+        self.assertGreater(len(json.dumps(payload)), 100000)
+        paths = self.bf._wire_attachments(payload, self.dir)
+        self.assertGreater(len(paths), 1)
+        for path in paths:
+            text = path.read_text()
+            self.assertLessEqual(len(text), self.bf.WIRE_MAX_ATTACHMENT, path.name)
+            self.assertLessEqual(max(len(line) for line in text.split("\n")), self.bf.WIRE_MAX_LINE)
+            json.loads(text)
+
+    def test_the_parts_merge_back_to_the_canonical_envelope(self):
+        payload = self.big_payload()
+        merged = {}
+        for path in self.bf._wire_attachments(payload, self.dir):
+            merged = self.bf._wire_merge(merged, json.loads(path.read_text()))
+        self.assertEqual(self.bf._wire_decode(merged), payload)
+
+    def test_the_first_part_carries_the_contract_and_not_the_bulk(self):
+        paths = self.bf._wire_attachments(self.big_payload(), self.dir)
+        first = json.loads(paths[0].read_text())
+        self.assertIn("role_prompt", first)
+        self.assertIn("chunk", first["task"])
+        self.assertNotIn("worldbuilding", first["task"])
+
+    def test_a_single_oversized_value_is_split_rather_than_emitted_whole(self):
+        payload = {"schema": 1, "task": {"blob": "z" * 300000}}
+        paths = self.bf._wire_attachments(payload, self.dir)
+        self.assertGreater(len(paths), 1)
+        merged = {}
+        for path in paths:
+            merged = self.bf._wire_merge(merged, json.loads(path.read_text()))
+        self.assertEqual(self.bf._wire_decode(merged), payload)
+
+    def test_a_value_too_large_to_split_is_refused_rather_than_truncated(self):
+        payload = {"schema": 1, "task": {"beats": ["z" * 200000]}}
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._wire_attachments(payload, self.dir)
+        self.assertIn("cannot be split", str(caught.exception))
+
+    def test_a_small_envelope_still_ships_as_one_file(self):
+        paths = self.bf._wire_attachments({"schema": 1, "role": "writer", "task": {"id": "CH-0001"}}, self.dir)
+        self.assertEqual([path.name for path in paths], ["envelope.wire.json"])
+
+    def test_a_split_that_loses_content_is_refused(self):
+        with mock.patch.object(self.bf, "_wire_partition", side_effect=lambda value, budget: [{"tampered": True}]):
+            with self.assertRaises(self.bf.BookForgeError):
+                self.bf._wire_attachments({"schema": 1, "role": "writer"}, self.dir)
+
+
 class WireDeliveryTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
@@ -80,7 +154,7 @@ class WireDeliveryTests(unittest.TestCase):
         self.bf.init_project(self.project, "World", chorus_models=[])
         self.attempt_dir = self.project / ".book-forge" / "runs" / "RUN-0001" / "attempts" / "ATT-0001"
         self.attempt_dir.mkdir(parents=True)
-        payload = {"schema": 1, "role": "writer", "task": {"beats": ["z" * 40000]}, "tools": []}
+        payload = {"schema": 1, "role": "writer", "task": {"notes": "z" * 90000}, "tools": []}
         self.canonical = (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
         self.envelope = {"bytes": self.canonical, "hash": "abc", "estimated_input_tokens": 10}
 
@@ -101,20 +175,25 @@ class WireDeliveryTests(unittest.TestCase):
                 pass
         return next(args for args in captured if "run" in args)
 
-    def test_the_attached_file_is_the_wire_rendering_not_the_canonical_one(self):
+    def test_the_attached_files_are_the_wire_rendering_not_the_canonical_one(self):
         argv = self._argv()
-        attached = Path(argv[argv.index("--file") + 1])
-        self.assertEqual(attached.name, "envelope.wire.json")
-        self.assertLessEqual(max(len(line) for line in attached.read_text().split("\n")), self.bf.WIRE_MAX_LINE)
+        attached = [Path(value) for value in argv[argv.index("--file") + 1:]]
+        self.assertTrue(attached)
+        for path in attached:
+            self.assertTrue(path.name.startswith("envelope.wire"), path.name)
+            self.assertLessEqual(len(path.read_text()), self.bf.WIRE_MAX_ATTACHMENT)
+            self.assertLessEqual(max(len(line) for line in path.read_text().split("\n")), self.bf.WIRE_MAX_LINE)
 
     def test_the_canonical_envelope_is_still_written_unchanged_for_the_audit(self):
         self._argv()
         self.assertEqual((self.attempt_dir / "envelope.json").read_bytes(), self.canonical)
 
-    def test_the_wire_file_decodes_back_to_the_canonical_envelope(self):
-        self._argv()
-        wire = json.loads((self.attempt_dir / "envelope.wire.json").read_text())
-        self.assertEqual(self.bf._wire_decode(wire), json.loads(self.canonical))
+    def test_the_wire_files_merge_back_to_the_canonical_envelope(self):
+        argv = self._argv()
+        merged = {}
+        for value in argv[argv.index("--file") + 1:]:
+            merged = self.bf._wire_merge(merged, json.loads(Path(value).read_text()))
+        self.assertEqual(self.bf._wire_decode(merged), json.loads(self.canonical))
 
     def test_the_prompt_tells_the_role_how_a_split_value_reassembles(self):
         argv = self._argv()
