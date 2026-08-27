@@ -2197,3 +2197,26 @@ Nothing catches it either. `_title_is_beat_prefix` rejects a title copied from a
 - [x] Reinstall, commit & push
 
 **Done when:** The language of the book is something the designer is told, not something it guesses.
+
+## The reviser must formally disposition praise ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the reviser failed with `Revision must disposition every finding exactly once` on a 1600-word chapter. It had been handed **35 findings** — four style reviewers, a cold reader and a technical editor — and had to rewrite the whole chapter and account for every one of them in the same answer. It returned 3945 tokens and stopped normally; it simply did not comply.
+
+Of those 35, **none was blocking, 21 were warnings, and 14 were notes** — including *"Both plants are seeded cleanly with no contradiction"*, which is praise. A note is an observation, not a request for a change, and making the reviser produce a formal `action`/`evidence`/`loss` record for a compliment is overhead that crowds out the work.
+
+**Fix:** `_validate_revision` requires a disposition for every finding a reader must act on — blocking and warning — and accepts, without requiring, dispositions for notes. The reviser still receives the notes as context and may act on them; it is no longer failed for leaving one unremarked. `reviser.md` says which it owes.
+
+**Tasks:**
+- [x] `_validate_revision` requires dispositions for blocking and warning only
+- [x] A disposition offered for a note is still validated for shape
+- [x] `reviser.md` states which findings must be dispositioned
+- [x] Test: a revision that dispositions every warning and no note validates
+- [x] Test: a missing warning disposition still fails
+- [x] Test: a malformed note disposition still fails
+- [x] Suite green: 304 passed, 23 subtests (era 299)
+- [x] A disposition for a finding nobody raised is refused by name
+- [x] Reinstall, commit & push
+
+**Done when:** The reviser owes an answer for what it was asked to change, not for what it was told it did well.

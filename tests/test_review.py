@@ -223,3 +223,51 @@ class StyleLensTests(unittest.TestCase):
         self.assertIn("You are the style reviewer", prompt)
         self.assertIn("shorter than the original", prompt)
         self.assertNotIn("science-coherence", prompt)
+class DispositionScopeTests(unittest.TestCase):
+    """The reviser was failed for leaving praise unremarked: of 35 findings on a
+    1600-word chapter, none was blocking, 21 were warnings and 14 were notes."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.contract = {"id": "CH-0001", "book": "BOOK-0001", "target_words": 20, "beats": ["Mara opens the log"], "pov": "CHR-0001"}
+        self.findings = [
+            {"id": "F-1", "severity": "warning", "dimension": "style", "evidence": "e", "issue": "i", "fix_required": True},
+            {"id": "F-2", "severity": "note", "dimension": "style", "evidence": "e", "issue": "the plants are clean", "fix_required": False},
+        ]
+
+    def revision(self, dispositions):
+        return {
+            "prose_markdown": "# The Ninth Tide\n\n" + " ".join(["Mara opened the log and the warden said nothing."] * 2),
+            "beat_map": [{"beat": "Mara opens the log", "evidence": "Mara opened the log"}],
+            "consequences": [], "dispositions": dispositions, "reader_state": "Mara opened it.",
+        }
+
+    def disposition(self, finding_id):
+        return {"finding": finding_id, "action": "repaired", "evidence": "cut the clause", "loss": "none"}
+
+    def test_a_revision_that_answers_the_warnings_and_no_note_validates(self):
+        value = self.bf._validate_revision(self.contract, self.revision([self.disposition("F-1")]), self.findings, [])
+        self.assertEqual([row["finding"] for row in value["dispositions"]], ["F-1"])
+
+    def test_a_note_may_still_be_dispositioned(self):
+        value = self.bf._validate_revision(self.contract, self.revision([self.disposition("F-1"), self.disposition("F-2")]), self.findings, [])
+        self.assertEqual(len(value["dispositions"]), 2)
+
+    def test_a_missing_warning_still_fails_and_names_it(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._validate_revision(self.contract, self.revision([self.disposition("F-2")]), self.findings, [])
+        self.assertIn("F-1", str(caught.exception))
+
+    def test_a_disposition_for_a_finding_nobody_raised_fails(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._validate_revision(self.contract, self.revision([self.disposition("F-1"), self.disposition("F-9")]), self.findings, [])
+        self.assertIn("F-9", str(caught.exception))
+
+    def test_a_malformed_note_disposition_still_fails(self):
+        bad = {"finding": "F-2", "action": "repaired"}
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._validate_revision(self.contract, self.revision([self.disposition("F-1"), bad]), self.findings, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

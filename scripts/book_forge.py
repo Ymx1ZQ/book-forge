@@ -6114,10 +6114,21 @@ def _validate_revision(
     if not isinstance(dispositions, list):
         raise BookForgeError("Revision has no finding dispositions")
     by_finding = {str(row.get("finding")): row for row in dispositions if isinstance(row, dict)}
-    if set(by_finding) != {str(finding["id"]) for finding in findings}:
-        raise BookForgeError("Revision must disposition every finding exactly once")
+    # A note is an observation, not a request for a change — one of them read
+    # "both plants are seeded cleanly with no contradiction". Owing a formal
+    # action/evidence/loss record for praise crowded out the actual revision.
+    owed = {str(finding["id"]) for finding in findings if finding.get("severity") in {"blocking", "warning"}}
+    known = {str(finding["id"]) for finding in findings}
+    if not owed <= set(by_finding):
+        missing = ", ".join(sorted(owed - set(by_finding)))
+        raise BookForgeError(f"Revision must disposition every blocking and warning finding exactly once; missing {missing}")
+    if not set(by_finding) <= known:
+        stray = ", ".join(sorted(set(by_finding) - known))
+        raise BookForgeError(f"Revision dispositions a finding that was not raised: {stray}")
     for finding in findings:
-        disposition = by_finding[str(finding["id"])]
+        disposition = by_finding.get(str(finding["id"]))
+        if disposition is None:
+            continue
         required = {"action", "evidence", "loss"}
         if not required <= disposition.keys():
             raise BookForgeError(f"Incomplete disposition for {finding['id']}")
