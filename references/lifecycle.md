@@ -26,3 +26,14 @@ Use this route for `status`, `pause`, and `resume`.
 
 Every command first reconciles incomplete promotion journals. Session memory is
 never completion evidence.
+
+## Restarting a book
+
+`reset` is zero-model and destructive. It returns a book to its pre-writing state without leaving the plan claiming work whose output is gone: a hand-deleted manuscript leaves every `DRAFT-` task reporting `succeeded`, so the writer is never re-run and the restart silently does nothing.
+
+- `--scope prose` removes the manuscript chapters, the translated chapters, the reviews, the pivotal-variant work, the cold-read state and the editions; drops every chapter-scoped task; reseeds the book state and each translation workspace; drops the artifact rows whose files are gone and rebuilds the derived views.
+- `--scope design` does all of that and additionally reseeds the outline, the chapter contracts, `design.md`, `reader-state.md` and the design audit, and drops the book's `DESIGN-` and `AUDIT-` tasks. Use it when the beats are what needs rewriting, not just the prose.
+- Neither scope touches the universe canon, `book.yaml`, `book-brief.json`, `continuity.yaml` or the locale aids — glossary, style guide and metadata. Those are input, not output.
+- `--yes` is required. Without it the command refuses and changes nothing.
+- The receipt names every removed path, dropped task and dropped artifact. Report it rather than summarizing it.
+

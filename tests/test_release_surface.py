@@ -31,7 +31,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
         subcommands = next(action for action in parser._actions if action.dest == "command").choices
         self.assertEqual(
             set(subcommands),
-            {"init", "runtime", "migrate", "continuity", "add-book", "relate", "collection", "design", "run", "pause", "resume", "status", "artifacts", "translate", "audit", "chorus", "export"},
+            {"init", "runtime", "migrate", "continuity", "add-book", "relate", "collection", "design", "run", "pause", "resume", "status", "reset", "artifacts", "translate", "audit", "chorus", "export"},
         )
 
     def test_fresh_project_has_agent_config_but_no_claude_or_project_shell_dependency(self):

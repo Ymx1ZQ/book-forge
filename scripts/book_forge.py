@@ -6691,6 +6691,127 @@ def export_pdf(
     return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0}
 
 
+RESET_KEPT = (
+    "universe canon",
+    "books/<book>/book.yaml",
+    "books/<book>/book-brief.json",
+    "books/<book>/continuity.yaml",
+    "books/<book>/translations/<locale>/{glossary,style,metadata}",
+)
+
+
+def _reset_paths(root: Path, book_id: str, scope: str) -> list[Path]:
+    """Every derived path a reset removes, in the order it removes them."""
+    book = root / "books" / book_id
+    targets: list[Path] = []
+    targets.extend(sorted(book.glob("manuscript/chapters/*.md")))
+    targets.extend(sorted(book.glob("translations/*/chapters/*.md")))
+    for directory in ("reviews", "work", "coldread-state"):
+        targets.extend(sorted(path for path in (book / directory).glob("*") if path.exists()))
+    editions = root / "dist" / book_id
+    targets.extend(sorted(path for path in editions.glob("*") if path.exists()))
+    if scope == "design":
+        targets.extend(sorted(book.glob("chapters/*.json")))
+        audit = book / "design-audit.json"
+        if audit.is_file():
+            targets.append(audit)
+    return targets
+
+
+def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str) -> list[str]:
+    dropped = []
+    for task in plan["tasks"]:
+        task_id = str(task["id"])
+        if book_id not in task_id:
+            continue
+        if scope == "prose" and task_id.startswith(("DESIGN-", "AUDIT-")):
+            continue
+        dropped.append(task_id)
+    return sorted(dropped)
+
+
+def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confirm: bool = False) -> dict[str, object]:
+    """Return a book to its pre-writing state without leaving the control plane
+    claiming work whose output is gone.
+
+    A hand-deleted manuscript leaves the plan reporting every DRAFT task as
+    succeeded, so the writer is never re-run and the restart silently does
+    nothing. Six registries move together here: the files, the plan, the book
+    state, each translation workspace, the artifact registry and its derived
+    views. Canon, the brief, the continuity and the locale aids are input and
+    are never touched.
+    """
+    if scope not in {"prose", "design"}:
+        raise BookForgeError(f"Unknown reset scope: {scope} (prose, design)")
+    if not confirm:
+        raise BookForgeError("reset removes written work; pass --yes to confirm")
+    root = _project_root(project)
+    book = root / "books" / book_id
+    if not (book / "book.yaml").is_file():
+        raise BookForgeError(f"Unknown book: {book_id}")
+    title = str(_read_json(book / "book.yaml").get("title", book_id))
+    continuity = str(_read_json(book / "book.yaml").get("continuity", "CNT-0001"))
+
+    removed = []
+    for path in _reset_paths(root, book_id, scope):
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+        removed.append(str(path.relative_to(root)))
+
+    plan = _load_plan(root)
+    dropped = _reset_task_ids(plan, book_id, scope)
+    plan["tasks"] = [task for task in plan["tasks"] if str(task["id"]) not in set(dropped)]
+    plan["attempts"] = [row for row in plan.get("attempts", []) if str(row.get("task")) not in set(dropped)]
+    _save_plan(root, plan)
+
+    _write_json(book / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
+    locales = []
+    for state_path in sorted(book.glob("translations/*/state.yaml")):
+        locale = state_path.parent.name
+        _write_json(state_path, {"schema": 1, "locale": locale, "completed_chapters": [], "current": True, "boundary_hashes": {}})
+        locales.append(locale)
+
+    if scope == "design":
+        _write_json(book / "outline.yaml", {"schema": SCHEMA_VERSION, "chapters": []})
+        (book / "design.md").write_text(
+            f"---\nid: {book_id}\ncontinuity: {continuity}\n---\n\n# {title}\n\n<!-- bf:block premise -->\n",
+            encoding="utf-8",
+        )
+        (book / "reader-state.md").write_text("# Reader State\n", encoding="utf-8")
+
+    registry = _artifact_registry(root)
+    artifacts = registry.get("artifacts", {})
+    surviving = {}
+    dropped_artifacts = []
+    for artifact_id, artifact in artifacts.items():
+        path = str(artifact.get("path", ""))
+        owned = path.startswith(f"books/{book_id}/") or path.startswith(f"dist/{book_id}/")
+        if owned and not (root / path).exists():
+            dropped_artifacts.append(str(artifact_id))
+            continue
+        surviving[str(artifact_id)] = artifact
+    registry["artifacts"] = surviving
+    registry["edges"] = [edge for edge in registry.get("edges", []) if str(edge.get("to")) in surviving]
+    _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+    currentness = _read_json(root / ".book-forge" / "currentness.json")
+    currentness["artifacts"] = {key: value for key, value in currentness.get("artifacts", {}).items() if key in surviving}
+    _write_json(root / ".book-forge" / "currentness.json", currentness)
+    _write_derived_dependency_views(root)
+    render_plan(root)
+
+    return {
+        "book": book_id,
+        "scope": scope,
+        "removed_paths": removed,
+        "dropped_tasks": dropped,
+        "dropped_artifacts": sorted(dropped_artifacts),
+        "reset_locales": locales,
+        "kept": list(RESET_KEPT),
+    }
+
+
 def render_plan(project: Path | str) -> str:
     root = _project_root(project)
     plan = _load_plan(root)
@@ -6725,6 +6846,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--source-language", default="en")
     init.add_argument("--chorus-models", help="Comma-separated openrouter/... models; when omitted and TTY, prompts interactively")
     init.add_argument("--style", help="Prose style preset; when omitted and TTY, prompts interactively")
+    reset = commands.add_parser("reset")
+    reset.add_argument("--book", required=True)
+    reset.add_argument("--scope", choices=("prose", "design"), default="prose")
+    reset.add_argument("--yes", action="store_true", help="Required: reset removes written work")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
     continuity_add = continuity_commands.add_parser("add")
@@ -6832,6 +6957,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm, style_preset=getattr(args, "style", None)), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
+        elif args.command == "reset":
+            print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes), sort_keys=True))
         elif args.command == "add-book":
             print(json.dumps(add_book(args.project, args.title, continuity=args.continuity), sort_keys=True))
         elif args.command == "relate":

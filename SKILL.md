@@ -22,7 +22,7 @@ reference before acting:
 | `design` | `references/design.md` |
 | `brief` | `references/brief.md` |
 | `run` | `references/run.md` |
-| `pause`, `resume`, `status` | `references/lifecycle.md` |
+| `pause`, `resume`, `status`, `reset` | `references/lifecycle.md` |
 | `audit` | `references/audit.md` |
 | `translate` | `references/translate.md` |
 | `chorus` | `references/chorus.md` |
@@ -71,6 +71,7 @@ book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
 book-forge status [--book <id>|--run <id>|--locale <tag>] [--repair-view]
 book-forge artifacts backfill [--book <id>] [--locale <tag>]
+book-forge reset --book <id> [--scope <prose|design>] --yes
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
 book-forge translate <add|next|run|status> <book> <locale>
 book-forge export <book> --lang <tag> --format <epub|pdf|all>

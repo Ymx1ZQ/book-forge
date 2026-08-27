@@ -325,7 +325,7 @@ intact.
 - [x] Aggiungere `chorus run` subcommand e wiring a `run_chorus` standalone
 - [x] Conferma interattiva lista modelli (print + optional prompt quando in orchestrator)
 - [x] Test: `chorus run` produce report advisory senza designer, `--chorus-models` filtra
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** `chorus run` standalone produce `.book-forge/chorus/<scope>/<ts>/` senza designer; lista modelli confermata stampata; suite green.
 
@@ -346,7 +346,7 @@ intact.
 - [x] Aggiungere `--with-chorus-context` a `design` e iniezione nel task capsule
 - [x] Aggiornare `references/design.md` + `SKILL.md`
 - [x] Creare `tests/test_chorus.py` (mock, no LLM)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** `design --with-chorus-context` inietta il report del chorus nel designer; docs aggiornati; `test_chorus.py` green; suite 85+ passed.
 
@@ -371,7 +371,7 @@ intact.
 - [x] Ridefinire cold-reader envelope sintetico (reader_state + previous boundaries)
 - [x] Aggiornare prompt e references/run.md
 - [x] Test: cold-reader riceve solo sintesi, non full canon (verificato manuale, suite 89 passed)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** Nessun file in book-forge menziona Graphify; cold-reader gira con sola sintesi pregressa e suite green.
 
@@ -393,7 +393,7 @@ intact.
 - [x] Generare e registrare `previous-synthetic.md` dopo ogni reviser
 - [x] Far leggere al cold-reader l'artifact persistito invece di ricostruirlo
 - [x] Test: dopo chiusura capitolo, artifact esiste e cold-reader lo usa (manuale, 89 passed)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** Dopo ogni capitolo chiuso esiste un artifact sintesi persistito, versionato e usato dal cold-reader successivo; suite green.
 
@@ -416,7 +416,7 @@ intact.
 - [x] Aggiungere Luna a `CHORUS_DEFAULT_MODELS` e `CHORUS_MODEL_CONFIGS`
 - [x] Aggiungere a global opencode whitelist/models
 - [x] Test: 8 modelli default, 8 advisor (89 passed)
-- [ ] Commit & push
+- [x] Commit & push
 
 **Done when:** Default 8, global config con Luna, suite green.
 
@@ -1793,3 +1793,27 @@ Two design choices worth recording. The block lands **inside the role prompt and
 - [x] Commit & push
 
 **Done when:** Two projects on the same machine write in two registers, and neither can reach the other's prompt file.
+
+## Restarting a book from scratch has no engine path, so it can only be done by hand ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** two projects need to be rewritten under the new register, and there is no command for it. Measured on a scratch copy of a real project: deleting the manuscript, translations, reviews and editions by hand leaves `status` reporting `tasks: {succeeded: 22}` and an artifact DAG listing `missing path: SOURCE-BOOK-0001-CH-0001`. The plan still claims `DRAFT-BOOK-0001-CH-0001` succeeded, so the writer is never re-run — the restart silently does nothing. `state.yaml` still lists three closed chapters and every consequence they accumulated, and each translation workspace still holds the input hashes of prose that no longer exists.
+
+A correct restart has to move six coupled registries at once: the files, the plan, the book state, each translation workspace, the artifact registry and its derived views. Doing that by hand in each project is the failure mode the tool exists to prevent, and getting one of the six wrong leaves a project that looks reset and is not.
+
+**Fix:** `book-forge reset --book BOOK-0001 [--scope prose|design] --yes`. Scope `prose` removes the manuscript chapters, the translated chapters, the reviews, the pivotal-variant work, the cold-read state and the editions, drops every chapter-scoped task, reseeds the book state and each translation workspace, drops the artifact rows for the removed paths and rebuilds the derived views. Scope `design` does all of that and additionally reseeds the outline, the chapter contracts, `design.md`, `reader-state.md` and the design audit, and drops the book's `DESIGN-` and `AUDIT-` tasks — used when the beats themselves are what needs rewriting. Neither scope touches the universe canon, `book.yaml`, `book-brief.json`, `continuity.yaml` or the locale aids: those are input, not output. The command refuses to run without `--yes` and returns a receipt naming everything it removed and everything it kept.
+
+**Tasks:**
+- [x] `reset_book` + CLI `reset`, refusing without `--yes`
+- [x] Prose scope: files, plan tasks, book state, translation workspaces, artifact rows, derived views
+- [x] Design scope: outline, contracts, design.md, reader-state.md, design audit, DESIGN-/AUDIT- tasks
+- [x] Test: after a prose reset, `status` reports no chapter tasks and an empty artifact DAG
+- [x] Test: canon, brief and continuity survive both scopes
+- [x] Test: a reset without `--yes` changes nothing
+- [x] Suite green: 218 passed, 23 subtests (era 206)
+- [x] `reset` documented in SKILL.md and references/lifecycle.md
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A book restarts from an empty manuscript with a plan that agrees it is empty.
