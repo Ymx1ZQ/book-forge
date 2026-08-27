@@ -3392,7 +3392,11 @@ def _run_book_design_chunked(
         raise BookForgeError("Book design spine returned no chapter_outline")
 
     merged = {key: value for key, value in spine.items() if key != "chapter_outline"}
-    slice_capsule = {**base_capsule, "spine": merged, "chapter_outline": outline}
+    # A snapshot, not the accumulator: `_merge_design_chunks` mutates `merged` in
+    # place, so sharing it would append each slice's chapters to the spine the next
+    # slice receives — and a designer handed thirty-two chapters inside the field
+    # meant to hold the book's spine stops writing and tries to re-read its envelope.
+    slice_capsule = {**base_capsule, "spine": json.loads(json.dumps(merged)), "chapter_outline": outline}
     for chunk in _book_design_chunks(len(outline)):
         parsed, telemetry, slice_results = _run_design_chunk(
             root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens

@@ -148,6 +148,27 @@ class BookDesignSliceTests(BookDesignSliceFixture):
             self.assertEqual(capsule["spine"]["premise"], "A diver must decide whether memory can be owned.")
             self.assertEqual(len(capsule["chapter_outline"]), CHAPTER_COUNT)
 
+    def test_every_slice_gets_the_same_spine_and_never_another_slice_s_chapters(self):
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        spines = [capsule["spine"] for capsule in provider.capsules[1:]]
+        self.assertEqual(len(spines), 5)
+        for spine in spines:
+            self.assertNotIn("chapters", spine)
+            self.assertEqual(spine, spines[0])
+
+    def test_the_slice_envelopes_do_not_grow_as_the_design_proceeds(self):
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        sizes = [len(json.dumps(capsule, sort_keys=True)) for capsule in provider.capsules[1:]]
+        self.assertEqual(len(set(size - len(json.dumps(capsule["chunk"], sort_keys=True)) for size, capsule in zip(sizes, provider.capsules[1:]))), 1)
+
+    def test_the_merged_proposal_still_gathers_every_slice_in_order(self):
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
+        self.assertEqual([row["id"] for row in outline], [f"CH-{index:04d}" for index in range(1, CHAPTER_COUNT + 1)])
+
     def test_no_call_is_ever_asked_for_the_whole_book(self):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)

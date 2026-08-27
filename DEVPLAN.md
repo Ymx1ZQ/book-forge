@@ -1963,3 +1963,22 @@ Live on Margherita: `ATT-0078` is `running`, `provider_accepted: true`, lease ex
 - [x] Reinstall, commit & push
 
 **Done when:** The only failure a person must judge is the only one that stops the driver, and it says so by name.
+
+## The spine handed to each design slice accumulates the previous slices' chapters ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the third slice of a book design answered with a `read_file` tool-call written as text instead of chapters, and the run blocked on `Model output contains no JSON object`. The envelopes tell the story: the first chapter slice is 38840 bytes and the second is **52478** — they are built from the same capsule and must be identical. The difference is the size of the first slice's own answer.
+
+`_merge_design_chunks` mutates its accumulator in place and returns it, and `slice_capsule["spine"]` holds that same object, so every slice's chapters are appended to the spine that the next slice receives. Measured on the failing attempt: the spine sent to `chapters-1-8` carries `arc, entry_state, exit_boundary, premise`; the one sent to `chapters-9-16` carries those **plus eight chapters**. By the fifth slice the model would be handed thirty-two chapters it did not ask for, inside the field that is supposed to hold the book's spine — and it stopped writing and tried to re-read the envelope instead.
+
+**Fix:** the slice capsule takes a snapshot of the spine, not the accumulator. The spine is what the designer decided once; nothing written afterwards belongs in it.
+
+**Tasks:**
+- [x] `slice_capsule` carries a deep copy of the spine, taken before the loop
+- [x] Test: every slice receives the same spine, and no slice sees another slice's chapters
+- [x] Test: the merged proposal still gathers every slice's chapters in order
+- [x] Suite green: 260 passed, 23 subtests (era 257)
+- [x] Reinstall, commit & push
+
+**Done when:** The fifth slice's envelope is the same size as the first.
