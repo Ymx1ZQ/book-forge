@@ -203,3 +203,23 @@ class ReviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StyleLensTests(unittest.TestCase):
+    """The style pass keeps each reviewer's model pin and drops its chorus lens."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_the_style_lens_replaces_the_advisor_lens(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as temp:
+            project = _Path(temp) / "world"
+            self.bf.init_project(project, "World")
+            role = "advisor-google-gemini-3-7-flash"
+            envelope = self.bf.build_envelope(project, role=role, task_capsule={"mode": "style"}, imports=[], state={}, tools=[], max_output_tokens=100, prompt_role="style-review")
+            prompt = envelope["payload"]["role_prompt"]
+        self.assertIn("You are the style reviewer", prompt)
+        self.assertIn("shorter than the original", prompt)
+        self.assertNotIn("science-coherence", prompt)

@@ -2653,6 +2653,7 @@ def build_envelope(
     tools: list[dict[str, object]],
     max_output_tokens: int,
     input_budget: int | None = None,
+    prompt_role: str | None = None,
 ) -> dict[str, object]:
     root = _project_root(project)
     if role not in ROLE_BUDGETS:
@@ -2663,7 +2664,9 @@ def build_envelope(
         budget = _envelope_input_budget(root, role)
     if max_output_tokens <= 0 or max_output_tokens > output_budget:
         raise BookForgeError(f"Output allowance {max_output_tokens} exceeds {role} budget {output_budget}")
-    prompt_path = Path(__file__).resolve().parents[1] / "assets" / "prompts" / f"{role}.md"
+    # The style review keeps each reviewer's model pin but not its chorus lens: the
+    # instruction is what decides whether a pass asks for less or for more.
+    prompt_path = Path(__file__).resolve().parents[1] / "assets" / "prompts" / f"{prompt_role or role}.md"
     if not prompt_path.is_file() and role.startswith("advisor-"):
         # An advisor's lens is pinned by filename, so a chorus model without its own
         # prompt would drop out of every run as a non-blocking failure. Let it advise
@@ -5089,7 +5092,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
                 add_task(root, task_id, role, deps=[], priority=65, outputs=[f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"])
         except Exception:
             pass
-        envelope = build_envelope(root, role=role, task_capsule={**capsule, "style_model": model}, imports=list(contract.get("imports", [])), state={}, tools=[], max_output_tokens=2000)
+        envelope = build_envelope(root, role=role, task_capsule={**capsule, "style_model": model}, imports=list(contract.get("imports", [])), state={}, tools=[], max_output_tokens=2000, prompt_role="style-review")
         try:
             claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
             attempt_dir = Path(claim["capsule"]).parent

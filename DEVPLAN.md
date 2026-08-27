@@ -1711,3 +1711,60 @@ across three unrelated devices, not a reproduction.
 
 **Done when:** The EPUB carries both navigations, and validation refuses one that
 does not.
+
+## The writing instructions are one sentence, and the beats are notes to the author ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the prose reads as heavy and cryptic, and the first chapter reads
+worst although it is the lightest by every sentence-level measure — 14.8 words
+per sentence against 22.3 in chapter seven. Measured on that chapter: 1345
+words, **zero named characters, zero lines of dialogue**, the protagonist called
+by a role, two paragraphs of exposition before anything happens, and a turn that
+consists of a word appearing and being copied onto a wall. Nothing a reader can
+hold. Guardrails on sentence length would not have touched it.
+
+Three causes, in order of depth:
+
+1. **The beats are notes to the author, not dramatic units.** The chapter's
+   second beat is a propagation rule — the word "travels by that hum and by
+   nothing else, to be registered by clear eyes early in act 1 and return at the
+   climax". That cannot be staged, so it comes back as exposition. The designer
+   is never told what a beat is.
+2. **`writer.md` carries one sentence of craft instruction** — "vivid, causally
+   complete" — plus the title rule and the return contract. Everything else the
+   writer does comes from its priors and from beats written in the register
+   above.
+3. **The style review has no style lens.** It runs each reviewer under its
+   chorus prompt: bestseller hooks, science coherence, world-exploitation. Two
+   of three seats ask for more canon per page, and the dispositions show it —
+   one removed two images in favour of "polarization anomalies", another
+   recorded "seeding singing-blood tracker, magnetic wake and telluric coupling
+   in one sentence" as an improvement. The pass meant to catch density was
+   producing it.
+
+**Fix:** rewrite the instructions rather than add constraints on top of them.
+`writer.md` states how to write a chapter, in priority order. `designer.md`
+states what a beat is and where mechanism belongs. A new `style-review.md` gives
+the pass its own lens, explicitly forbidden from asking for more world, and
+required to propose cuts shorter than what they replace. `build_envelope` gains
+`prompt_role` so the review keeps each model's pin while changing its
+instruction. All three stay genre-agnostic: the skill is installed by other
+projects.
+
+**Tasks:**
+- [x] `writer.md` rewritten with craft instruction in priority order
+- [x] `designer.md` states what a beat is
+- [x] `style-review.md` + `prompt_role` wiring
+- [x] Test: the style review resolves the style lens, not the advisor's
+- [x] Test: 191 passed, 23 subtests (era 190)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** A chapter is written under instructions that ask for a person, a
+want and an obstacle, and the style pass is the one voice in the ensemble asking
+for less.
+
+**Applies to what is written from here on.** The seven chapters already promoted
+carry the register the old instructions produced; nothing in this change
+rewrites them.
