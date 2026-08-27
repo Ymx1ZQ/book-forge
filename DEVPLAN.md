@@ -2178,3 +2178,22 @@ The sequence it found is correct. That it had to be found by reading the source 
 - [x] Reinstall, commit & push
 
 **Done when:** One command clears what a killed driver leaves behind.
+
+## The designer is never told what language the book is written in 🔄
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** a book whose `source_language` is `en`, whose prose came back in English, got forty chapter titles in Italian — `La straniera in arrivo`, `Il ritorno del prodigo`. The capsule explains why: it carries the scope, the book record, the brief, the worldbuilding, the relations, the obligations and the required output, and **nothing that names the language**. The designer inferred it from a brief written in Italian, which is a reasonable guess and the wrong one: the brief is the author talking to the engine, the book is the book.
+
+Nothing catches it either. `_title_is_beat_prefix` rejects a title copied from a beat, and no check looks at what language it is in.
+
+**Fix:** the book design capsule carries `source_language`, and `designer.md` says every string it returns — titles, beats, plants, reveals, premise, arc — is written in that language whatever language the brief is in.
+
+**Tasks:**
+- [x] `source_language` in the book design capsule
+- [x] `designer.md` states that the book's language governs, not the brief's
+- [x] Test: the capsule carries the project's source language
+- [x] Suite green: 299 passed, 23 subtests (era 297)
+- [x] Reinstall, commit & push
+
+**Done when:** The language of the book is something the designer is told, not something it guesses.

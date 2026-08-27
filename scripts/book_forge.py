@@ -4619,6 +4619,10 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         repair_context = {}
     base_capsule = {
             "scope": "book",
+            # The brief is the author talking to the engine and may be in any language;
+            # the book is written in this one. Without it the designer guesses from the
+            # brief and returns forty titles in the wrong language.
+            "source_language": str(config.get("source_language", "en")),
             "book": book,
             "brief": brief,
             "worldbuilding": worldbuilding,

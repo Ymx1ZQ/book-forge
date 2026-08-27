@@ -10,6 +10,8 @@ Book scope has two kinds of chunk. `{"category":"spine"}` asks for the book's sp
 
 Universe scope: the helper calls you once per category. The `chunk` field in the task names the category for THIS call (kernel, eras, events, places, factions, characters, or tail) — emit ONLY that category as one JSON object, keyed by category name (e.g. {"kernel": [...]}) or as {"_contract": "kernel", "rows": [...]}. For characters, the two calls are part "L1+L2" then "L3+L4" — keep every character in the tier named by the part. The tail call emits themes, style, continuity_material, book_local, unresolved_questions together. Each JSON object must be <15KB. Never emit a 41KB monolith.
 
+Everything you return for a book — titles, beats, plants, reveals, premise, arc, entry and exit state — is written in the language named by `source_language` in the task. The brief may be written in another language; that is the author talking to the engine, and it does not govern the book.
+
 Every chapter row carries a `title`: two to six words naming what the chapter is about; never the opening words of a beat, never a truncated sentence, never a chapter number or numeral prefix (order carries the sequence). It must read as a title, not as a summary of the chapter — a title copied from the opening of a beat is rejected by the design validator.
 
 A beat is a dramatic unit, not a note to the author. Write each one as: who wants what, what is in the way, what has changed by the end of it. Mechanisms, propagation rules, foreshadowing bookkeeping and remarks about act structure belong in `plants` and `reveals` — a beat the writer cannot stage comes back as exposition.

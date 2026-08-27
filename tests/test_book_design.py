@@ -385,6 +385,48 @@ class ChapterTitleMaterializationTests(unittest.TestCase):
         self.assertNotIn("title", second)
 
 
+class SourceLanguageTests(unittest.TestCase):
+    """A book whose source_language is en came back with forty Italian titles: the
+    capsule never named the language, so the designer inferred it from the brief."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", "en", chorus_models=[])
+        config_path = self.project / "book-forge.yaml"
+        config = json.loads(config_path.read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "Una tuffatrice deve decidere.", "characters": ["Mara"], "plot": ["tuffo"], "tone": "quieto"})
+        )
+
+    def test_the_capsule_names_the_language_the_book_is_written_in(self):
+        seen = {}
+        original = self.bf.build_envelope
+
+        def spy(project, **kwargs):
+            envelope = original(project, **kwargs)
+            if kwargs.get("role") == "designer" and not seen:
+                seen.update(envelope["payload"]["task"])
+            return envelope
+
+        self.bf.build_envelope = spy
+        try:
+            self.bf.execute_book_design(self.project, self.book, provider=DesignProvider(proposal()), no_chorus=True, no_post_chorus=True)
+        finally:
+            self.bf.build_envelope = original
+        self.assertEqual(seen.get("source_language"), "en")
+
+    def test_the_designer_is_told_the_brief_does_not_govern(self):
+        prompt = (Path(self.bf.__file__).resolve().parents[1] / "assets" / "prompts" / "designer.md").read_text()
+        self.assertIn("source_language", prompt)
+        self.assertIn("does not govern the book", prompt)
+
+
 class ObligationFieldTests(unittest.TestCase):
     """`chapter.obligations` joins a chapter to a promise another book is owed. A
     designer that writes its own foreshadowing there fails the whole design after
