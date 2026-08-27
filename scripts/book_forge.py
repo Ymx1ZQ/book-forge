@@ -6050,12 +6050,17 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
     capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft, "mode": "style"}
     findings = []
 
-    def _normalize(f):
+    def _normalize(f, slug):
         f = dict(f)
         f["dimension"] = "style"
         if f.get("severity") == "blocking":
             f["severity"] = "warning"
-        f["id"] = f"S-{f.get('id','000')}"
+        # Every reviewer numbers its own findings from 01, so without the reviewer's
+        # name four of them share one identifier: the reviser is asked to disposition
+        # four different requests that answer to `S-01`, and three vanish whatever it
+        # does. The name of who raised it makes each finding its own.
+        f["id"] = f"S-{slug}-{f.get('id', '000')}"
+        f["reviewer"] = slug
         return f
 
     for model in style_models:
@@ -6068,7 +6073,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
             if out_path.is_file() and task and task["state"] == "succeeded":
                 value = _read_json(out_path)
-                findings.extend(_normalize(f) for f in value.get("findings", []))
+                findings.extend(_normalize(f, slug) for f in value.get("findings", []))
                 continue
             if not task:
                 add_task(root, task_id, role, deps=[], priority=65, outputs=[f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json"])
@@ -6082,7 +6087,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             result = runner(role, envelope, attempt_dir)
             mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
             value = _parse_contract_json(str(result["text"]))
-            findings.extend(_normalize(f) for f in value.get("findings", []))
+            findings.extend(_normalize(f, slug) for f in value.get("findings", []))
             try:
                 _materialize_review_result(root, task_id, claim, envelope, result, value)
             except Exception:

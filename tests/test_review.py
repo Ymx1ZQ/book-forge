@@ -269,5 +269,53 @@ class DispositionScopeTests(unittest.TestCase):
             self.bf._validate_revision(self.contract, self.revision([self.disposition("F-1"), bad]), self.findings, [])
 
 
+
+class StyleFindingIdentityTests(unittest.TestCase):
+    """Every reviewer numbers its findings from 01. Without the reviewer's name,
+    four of them answer to S-01 and three are lost whatever the reviser does."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        config_path = self.project / "book-forge.yaml"
+        config = json.loads(config_path.read_text())
+        config["chorus"] = {"enabled": True, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER,
+                            "style_review": {"enabled": True, "default_models": [
+                                "openrouter/z-ai/glm-5.3-flash", "openrouter/google/gemini-3.7-flash",
+                                "openrouter/openai/gpt-5.6-luna", "openrouter/qwen/qwen3.8-flash"]}}
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.contract = {"id": "CH-0001", "book": self.book, "pov": "CHR-0001", "target_words": 900,
+                         "beats": ["Mara opens the log"], "imports": []}
+
+    def provider(self, role, envelope, attempt_dir):
+        findings = [{"id": f"{n:02d}", "dimension": "style", "severity": "warning",
+                     "evidence": f"span {n}", "issue": f"issue {n}", "fix_required": True} for n in (1, 2, 3)]
+        return {"text": json.dumps({"findings": findings}), "provider": "openrouter",
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "high",
+                "session_id": "ses-1", "tokens": {"input": 10, "output": 10}, "cost": 0.0,
+                "latency_ms": 1, "finish": "stop"}
+
+    def test_four_reviewers_numbering_from_one_produce_no_collision(self):
+        findings = self.bf._call_style_review(
+            self.bf._project_root(self.project), self.book, "CH-0001", self.contract, "# T\n\nProse.", self.provider
+        )
+        ids = [row["id"] for row in findings]
+        self.assertEqual(len(ids), 12)
+        self.assertEqual(len(set(ids)), 12, "each finding must keep its own name")
+
+    def test_the_identifier_still_marks_it_as_style_and_names_the_reviewer(self):
+        findings = self.bf._call_style_review(
+            self.bf._project_root(self.project), self.book, "CH-0001", self.contract, "# T\n\nProse.", self.provider
+        )
+        for row in findings:
+            self.assertTrue(row["id"].startswith("S-"), row["id"])
+            self.assertEqual(row["dimension"], "style")
+            self.assertIn(row["reviewer"], row["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

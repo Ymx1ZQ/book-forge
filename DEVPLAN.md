@@ -2220,3 +2220,23 @@ Of those 35, **none was blocking, 21 were warnings, and 14 were notes** — incl
 - [x] Reinstall, commit & push
 
 **Done when:** The reviser owes an answer for what it was asked to change, not for what it was told it did well.
+
+## Four style reviewers produce findings that all have the same identifiers ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** every style reviewer numbers its own findings from `01`, and the engine prefixes them all with `S-`. With four reviewers on one chapter, `S-01` is four different findings. Measured on chapter two: twenty-five style findings collapse onto nine identifiers — `S-01` four times, `S-02` four times, `S-03` four times, `S-04` four times, `S-05` three times.
+
+The reviser is then asked to disposition each finding exactly once, holding four different requests that share a name. It answered 5221 tokens and covered almost none of them. Worse than the failure: had it succeeded, one disposition would have silently stood for four unrelated findings and three would have been lost without trace.
+
+**Fix:** a finding's identifier carries the reviewer that raised it — `S-glm-5-3-flash-01` — so twenty-five findings keep twenty-five names. The reviser can answer each, and a disposition can no longer stand in for a finding nobody read.
+
+**Tasks:**
+- [x] Style finding ids namespaced by the reviewer's model slug
+- [x] Test: four reviewers each numbering from 01 produce no collision
+- [x] Test: the id still starts with S- so severity handling is unchanged
+- [x] Suite green: 306 passed, 23 subtests (era 304)
+- [x] Measured on the live book: chapter one's 24 style findings reached the reviser as 8 names, and its dispositions record 28 answers under 14 identifiers
+- [x] Reinstall, commit & push
+
+**Done when:** Twenty-five findings have twenty-five names.
