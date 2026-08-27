@@ -115,6 +115,8 @@ class RepairEnvelopeTests(TranslationFixture):
         path = self.project / "book-forge.yaml"
         config = json.loads(path.read_text())
         config.setdefault("context", {})["translator_max_input_tokens"] = budget
+        # Budgets are advisory by default; this suite is about what happens at the wall.
+        config["context"]["enforce_budgets"] = True
         path.write_text(json.dumps(config))
 
     def bad_translation(self, filler):

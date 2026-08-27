@@ -22,6 +22,12 @@ class AuditBudgetTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "world"
         self.bf.init_project(self.project, "World")
+        # Budgets are advisory by default; this suite is about the ceiling itself,
+        # so it opts into enforcement the way a project that wants a wall would.
+        config_path = self.project / "book-forge.yaml"
+        config = json.loads(config_path.read_text())
+        config.setdefault("context", {})["enforce_budgets"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         # Ensure indexes built for envelope
         self.bf.rebuild_indexes(self.project)
 
@@ -135,6 +141,29 @@ class AuditBudgetTests(unittest.TestCase):
 
         # max_output_tokens unchanged after knob changes
         self.assertEqual(self.bf.ROLE_BUDGETS["canon-auditor"][1], 3500)
+
+
+class AdvisoryBudgetTests(unittest.TestCase):
+    """Without `enforce_budgets`, the advisory ceiling is a warning and the book
+    keeps moving; the wall is what the model can physically accept."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        self.bf.rebuild_indexes(self.project)
+
+    def test_an_envelope_past_the_audit_ceiling_still_builds(self):
+        envelope = self.bf.build_envelope(
+            self.project, role="canon-auditor",
+            task_capsule={"scope": "book", "proposal": "x" * 200000},
+            imports=[], state={}, tools=[], max_output_tokens=3500,
+        )
+        self.assertGreater(envelope["estimated_input_tokens"], self.bf.ROLE_BUDGETS["canon-auditor"][0])
+        self.assertGreater(envelope["input_budget"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

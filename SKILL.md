@@ -21,7 +21,7 @@ reference before acting:
 | `migrate`, `continuity`, `add-book`, `relate`, `collection` | `references/catalog.md` |
 | `design` | `references/design.md` |
 | `brief` | `references/brief.md` |
-| `run` | `references/run.md` |
+| `run`, `advance` | `references/run.md` |
 | `pause`, `resume`, `status`, `reset` | `references/lifecycle.md` |
 | `audit` | `references/audit.md` |
 | `translate` | `references/translate.md` |
@@ -67,6 +67,7 @@ book-forge collection <add|remove|order> ...
 book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--skip-brief] [--no-chorus] [--no-post-chorus] [--chorus-models <csv> [--with-chorus-context]]  # runs pre-chorus + post-chorus (default-on) with per-chapter verification
 book-forge brief <universe|book> [--book <id>] [--skip-brief]
 book-forge run [--book <id>] [--task <id>] [--next]
+book-forge advance --book <id> [--locale <tag>]... [--until <design|chapters|translate|export>]  # drives the book to completion, recovering between steps
 book-forge pause [--run <id>] [--emergency]
 book-forge resume [--run <id>] [--resolve-unknown <task>:<retry|abandon>] [--resolve-blocked <task>:<retry>]
 book-forge status [--book <id>|--run <id>|--locale <tag>] [--repair-view]

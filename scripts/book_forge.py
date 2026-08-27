@@ -1303,6 +1303,72 @@ def ready_frontier(project: Path | str) -> list[dict[str, object]]:
     )
 
 
+# A deterministic failure is one a retry can answer: the answer was truncated, or
+# unparseable, or failed validation. `outcome_unknown` is not one of them — the
+# provider accepted the call and a retry may pay for it twice, which is a judgement
+# about money and belongs to a person.
+AUTO_RECOVERABLE_ATTEMPT_STATES = frozenset({"failed_length", "validation_failed", "orphaned"})
+MAX_AUTO_RETRIES = 3
+
+
+def _task_needs_a_person(plan: dict[str, object]) -> list[str]:
+    """Tasks whose state only a person can resolve."""
+    unknown = {str(row["task"]) for row in plan.get("attempts", []) if row.get("state") == "outcome_unknown"}
+    return sorted(unknown | {str(row["id"]) for row in plan["tasks"] if row.get("state") == "outcome_unknown"})
+
+
+def _last_failure(plan: dict[str, object], task_id: str) -> dict[str, object] | None:
+    rows = [row for row in plan.get("attempts", []) if str(row.get("task")) == task_id and row.get("failure")]
+    return rows[-1] if rows else None
+
+
+def recover_before_dispatch(project: Path | str, *, task_id: str | None = None, now: float | None = None) -> dict[str, object]:
+    """Undo the parking a deterministic failure left behind, so the next call proceeds.
+
+    Three things used to stop a book and wait for a person to type what the engine
+    already knew: an attempt whose lease expired and which the provider never
+    accepted, a task blocked by a truncated or unparseable answer, and a run blocked
+    by nothing but those. All three are cleared here, up to MAX_AUTO_RETRIES per task.
+    An `outcome_unknown` anywhere is left exactly as it is.
+    """
+    root = _project_root(project)
+    plan = _load_plan(root)
+    changed = _orphan_stale_attempts(plan)
+    recovered: list[str] = []
+    exhausted: list[dict[str, object]] = []
+    blocked = [row for row in plan["tasks"] if row.get("state") == "blocked"]
+    for task in blocked:
+        if task_id is not None and str(task["id"]) != task_id:
+            continue
+        failure = _last_failure(plan, str(task["id"]))
+        if failure is not None and str(failure.get("state")) not in AUTO_RECOVERABLE_ATTEMPT_STATES:
+            continue
+        used = int(task.get("auto_retries", 0))
+        if used >= MAX_AUTO_RETRIES:
+            exhausted.append({"task": str(task["id"]), "retries": used, "failure": str((failure or {}).get("failure", ""))})
+            continue
+        task["auto_retries"] = used + 1
+        task["state"] = "pending"
+        task.pop("attempt", None)
+        recovered.append(str(task["id"]))
+        changed = True
+    if changed:
+        _save_plan(root, plan)
+        render_plan(root)
+    if recovered:
+        print(f"[recover] returned to pending after a recoverable failure: {', '.join(recovered)}", file=sys.stderr)
+    control = _control(root)
+    if control.get("active_run"):
+        run_path = _run_path(root, str(control["active_run"]))
+        run = _read_json(run_path)
+        still_blocked = [row for row in plan["tasks"] if row.get("state") == "blocked"]
+        if run.get("state") == "blocked" and not still_blocked and not _task_needs_a_person(plan):
+            run["state"] = "running"
+            run["desired_state"] = "running"
+            _write_json(run_path, run)
+    return {"recovered": recovered, "exhausted": exhausted, "needs_a_person": _task_needs_a_person(plan)}
+
+
 def claim_task(
     project: Path | str,
     task_id: str,
@@ -1315,6 +1381,7 @@ def claim_task(
     current_time = time.time() if now is None else now
     if not provider_ready(root, now=current_time):
         raise BookForgeError("Provider is rate-limited; dispatch is not yet eligible")
+    recover_before_dispatch(root, task_id=task_id, now=current_time)
     run = start_run(root, now=current_time)
     if run["state"] != "running":
         raise BookForgeError(f"Run does not accept dispatch while {run['state']}")
@@ -2668,8 +2735,36 @@ for _adv in list(CHORUS_ADVISOR_SPECS):
 ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
 
 
+def _enforce_budgets(root: Path) -> bool:
+    """Whether the advisory ceilings are walls for this project.
+
+    They were, and a book stopped every time its canon outgrew a number chosen
+    months earlier. Off by default: the only wall that cannot be argued with is
+    what the model can physically accept.
+    """
+    config_path = root / "book-forge.yaml"
+    if not config_path.is_file():
+        return False
+    ctx = _read_json(config_path).get("context")
+    return bool(ctx.get("enforce_budgets", False)) if isinstance(ctx, dict) else False
+
+
+def _model_input_window(role: str, max_output_tokens: int) -> int:
+    """What the pinned model can actually accept, less its own answer.
+
+    A quarter of the window is the hard wall: far above any real envelope, so it
+    never stops a book, and low enough that a runaway accumulation still trips it
+    instead of buying a million-token call.
+    """
+    limits = CHORUS_MODEL_CONFIGS.get(MODEL, {}).get("limit") or {}
+    context_window = int(limits.get("context") or 0)
+    if context_window <= 0:
+        return ROLE_BUDGETS[role][0] * 8
+    return max(ROLE_BUDGETS[role][0], context_window // 4 - max_output_tokens - 768)
+
+
 def _envelope_input_budget(root: Path, role: str) -> int:
-    """Per-role envelope input budget; project override wins over ROLE_BUDGETS.
+    """Per-role advisory envelope size; project override wins over ROLE_BUDGETS.
 
     `book-forge.yaml` may raise any role's envelope ceiling under
     `context.<role>_max_input_tokens` (role dashes become underscores, e.g.
@@ -2822,8 +2917,17 @@ def build_envelope(
         ],
         key=lambda row: (-int(row["estimated_tokens"]), str(row["name"])),
     )
+    hard_ceiling = budget if (input_budget is not None or _enforce_budgets(root)) else _model_input_window(role, max_output_tokens)
+    if estimate > hard_ceiling:
+        raise ContextOverflowError(estimate, hard_ceiling, contributors)
     if estimate > budget:
-        raise ContextOverflowError(estimate, budget, contributors)
+        # Above the advisory ceiling but inside what the model accepts. Say so and
+        # keep going: a number chosen before the book was written must not end it.
+        print(
+            f"[{role}] envelope {estimate} tokens is over the advisory budget {budget} "
+            f"(model accepts {hard_ceiling}); largest contributor {contributors[0]['name']}",
+            file=sys.stderr,
+        )
     return {
         "payload": payload,
         "bytes": envelope_bytes,
@@ -4952,6 +5056,106 @@ def draft_chapter(
         promote_task(root, claim["attempt"], claim["fence"])
         return {"state": "drafted", "book": book_id, "chapter": chapter_id, "calls": call_number, "receipt": receipt}
     raise BookForgeError("Unreachable draft workflow state")
+
+
+ADVANCE_STAGES = ("design", "chapters", "translate", "export")
+
+
+class AdvanceHalted(BookForgeError):
+    """The driver stopped on something only a person can decide."""
+
+
+def _advance_needs_design(root: Path, book_id: str) -> bool:
+    outline = root / "books" / book_id / "outline.yaml"
+    if not outline.is_file():
+        return True
+    if not _read_json(outline).get("chapters"):
+        return True
+    return not any((root / "books" / book_id / "chapters").glob("CH-*.json"))
+
+
+def advance_book(
+    project: Path | str,
+    book_id: str,
+    *,
+    locales: list[str] | None = None,
+    until: str = "export",
+    provider=None,
+    max_steps: int = 4000,
+) -> dict[str, object]:
+    """Carry a book from where it stands to where it is asked to stop.
+
+    Every stage recovers before it dispatches, so a truncated answer, an
+    unparseable one or a claim whose lease expired costs a retry instead of a
+    person at the keyboard. The driver halts on exactly two things: a task whose
+    outcome only a person can resolve, and a task that has spent its retries.
+    """
+    if until not in ADVANCE_STAGES:
+        raise BookForgeError(f"Unknown stage: {until} ({', '.join(ADVANCE_STAGES)})")
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    if book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    wanted = ADVANCE_STAGES[: ADVANCE_STAGES.index(until) + 1]
+    done: dict[str, object] = {"book": book_id, "stages": [], "chapters": 0, "halted": None}
+
+    def guard() -> None:
+        state = recover_before_dispatch(root)
+        if state["needs_a_person"]:
+            raise AdvanceHalted(
+                "outcome unknown for "
+                + ", ".join(state["needs_a_person"])
+                + " — the provider accepted the call and a retry may pay twice; resolve with "
+                "`resume --resolve-unknown TASK:retry|abandon`"
+            )
+        if state["exhausted"]:
+            row = state["exhausted"][0]
+            raise AdvanceHalted(
+                f"{row['task']} failed {row['retries']} times in a row and will not be retried again: {row['failure']}"
+            )
+
+    if "design" in wanted and _advance_needs_design(root, book_id):
+        guard()
+        _log_step(1, len(wanted), "design", "→")
+        execute_book_design(root, book_id, provider=runner)
+        done["stages"].append("design")
+
+    if "chapters" in wanted:
+        for step in range(max_steps):
+            guard()
+            try:
+                run_next(root, book_id=book_id, provider=runner)
+            except BookForgeError as exc:
+                if "No ordinary chapter draft is ready" in str(exc):
+                    break
+                raise
+            done["chapters"] = int(done["chapters"]) + 1
+            _log_step(2, len(wanted), f"chapters ({done['chapters']} steps)", "→")
+        else:
+            raise AdvanceHalted(f"chapter loop did not settle within {max_steps} steps")
+        done["stages"].append("chapters")
+
+    targets = list(locales or [])
+    if "translate" in wanted and targets:
+        for locale in targets:
+            guard()
+            _log_step(3, len(wanted), f"translate {locale}", "→")
+            translate_next(root, book_id, locale, provider=runner, run_all=True)
+        done["stages"].append("translate")
+
+    if "export" in wanted:
+        editions = {}
+        source_language = str(_read_json(root / "book-forge.yaml").get("source_language", "en"))
+        for language in [source_language, *targets]:
+            _log_step(4, len(wanted), f"export {language}", "→")
+            editions[language] = {
+                "epub": export_epub(root, book_id, language),
+                "pdf": export_pdf(root, book_id, language),
+            }
+        done["editions"] = editions
+        done["stages"].append("export")
+
+    return done
 
 
 def run_next(
@@ -7106,6 +7310,10 @@ def build_parser() -> argparse.ArgumentParser:
     chorus_apply.add_argument("--pick", help="Comma-separated finding IDs to apply")
     chorus_apply.add_argument("--book")
 
+    advance = commands.add_parser("advance")
+    advance.add_argument("--book", required=True)
+    advance.add_argument("--locale", action="append", default=[], help="Translate into this locale; repeatable")
+    advance.add_argument("--until", choices=ADVANCE_STAGES, default="export")
     export = commands.add_parser("export")
     export.add_argument("book")
     export.add_argument("--lang", required=True)
@@ -7232,6 +7440,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
         elif args.command == "audit":
             print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
+        elif args.command == "advance":
+            print(json.dumps(advance_book(args.project, args.book, locales=args.locale, until=args.until), sort_keys=True))
         elif args.command == "export":
             results = {}
             if args.format in {"epub", "all"}:

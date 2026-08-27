@@ -1906,3 +1906,40 @@ Indenting is not the fix. The real envelope re-serialised with `indent=1` is the
 - [x] Reinstall, commit & push
 
 **Done when:** An envelope of any size and any block length reaches the role intact.
+
+## A book cannot run end to end: the engine stops and waits for a human to type what it already knows ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** in one evening a single book stopped eight times, and every stop needed a person at the keyboard. The failures were different; the reason the work halted was the same four things.
+
+1. **Envelope ceilings are arbitrary constants, and they hard-fail.** The designer's input budget is 20000 tokens; the pinned model's context window is 1310720. The ceiling is 1.5% of what the model can physically accept, and crossing it raises `ContextOverflowError` and stops the book. A project knob can raise it, so every time a book's canon grows somebody edits `book-forge.yaml` and reruns. Measured on Margherita: the spine call estimates 10639 tokens and a chapter slice 15027, against a knob of 16000 — 973 tokens of headroom, on a canon that grows with every chapter written.
+2. **Deterministic failures park the task and the whole run.** A length truncation, an unparseable answer or a failed validation sets the task to `blocked` and the run to `blocked`, and the next command refuses with `Run does not accept dispatch while blocked`. The cure is a human typing `resume --resolve-blocked TASK:retry` — which is exactly what the engine would do on its own. The human contributes latency, not judgement.
+3. **A stale claim is only healed on pause or promote.** `_settle_run` orphans an attempt whose lease expired and which the provider never accepted, but nothing calls it at dispatch, so the task sits `running` and the next command answers `Task is not ready`. The cure is `pause` followed by `resume`, typed by hand, changing nothing the engine could not decide alone.
+4. **There is no driver.** `run_next` executes exactly one step and raises when there is nothing to do; design, chapters, translation and export are stitched together by whoever is at the terminal. Every stop is therefore a human stop, and a book is a few hundred steps.
+
+**What must still stop, and stays stopped:** `outcome_unknown` — the provider accepted the call and the outcome is unknown, so a retry may pay twice. That is a judgement about money and it belongs to a person. It is the only one.
+
+**Fix:**
+
+- The wall becomes what the model can actually accept, not a number chosen months ago. Role constants and project knobs become **advisory**: crossing one prints a warning and records a telemetry note; crossing the model's usable window still fails, because nothing else can happen. `context.enforce_budgets: true` restores the old walls for a project that wants them.
+- `_recover_before_dispatch` runs at claim time: it orphans stale never-accepted attempts, returns deterministically-failed tasks to `pending` within a bounded retry count, and clears a run blocked by nothing but those. `outcome_unknown` is never touched.
+- `book-forge advance --book <id>` drives a book from where it stands to where it is asked to stop: design if it is missing, then every chapter, then the translations, then the editions — recovering between steps, printing what it is doing, and halting only on an unknown outcome or an exhausted retry budget.
+
+**Tasks:**
+- [x] Advisory budgets: model-derived wall, warning on the advisory threshold, `enforce_budgets` opt-in
+- [x] `_recover_before_dispatch` wired into `claim_task`
+- [x] Bounded auto-retry for deterministic failures, recorded per task
+- [x] `outcome_unknown` still halts and still needs an explicit resolution
+- [x] `book-forge advance --book <id> [--locale <tag>] [--until design|chapters|translate|export]`
+- [x] Test: a run blocked by a length failure recovers itself on the next dispatch
+- [x] Test: a stale never-accepted claim is orphaned at dispatch, without pause/resume
+- [x] Test: an envelope over the advisory threshold warns and proceeds; over the model window it fails
+- [x] Test: `outcome_unknown` is not auto-recovered
+- [x] Test: `advance` carries a book from an empty design to exported editions with a stub provider
+- [x] Test: `advance` stops on an exhausted retry budget and names the task
+- [x] Suite green: 254 passed, 23 subtests (era 242)
+- [x] `advance` documented in SKILL.md and references/run.md
+- [x] Reinstall, commit & push
+
+**Done when:** `advance` takes a book from a brief to its editions without a human typing a recovery command, and the only thing that stops it is a question only a person can answer.
