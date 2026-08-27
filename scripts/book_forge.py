@@ -5813,7 +5813,7 @@ def recheck_style_closed_chapter(
     mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
     try:
         value = _parse_contract_json(str(result["text"]))
-        validated = _validate_revision(contract, value, style_findings, [])
+        validated = _validate_revision(contract, value, style_findings, [], baseline_prose=prose)
     except BookForgeError as exc:
         _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
         raise
@@ -6113,8 +6113,19 @@ def _validate_revision(
     value: dict[str, object],
     findings: list[dict[str, object]],
     technical_consequences: list[dict[str, object]],
+    *,
+    baseline_prose: str | None = None,
 ) -> dict[str, object]:
-    validated = validate_writer_output(contract, json.dumps(value))
+    # A style pass is required to propose only replacements shorter than what they
+    # replace, so measuring it against the contract's target forbids it from removing
+    # anything once a chapter is already under target — which is when it has most to
+    # remove. It is measured against the prose it was handed instead; a reviser that
+    # throws half the chapter away is still caught.
+    measured = contract
+    if baseline_prose is not None:
+        baseline_words = len(re.findall(r"\b[\w’'-]+\b", baseline_prose, re.UNICODE))
+        measured = {**contract, "target_words": max(1, int(baseline_words / 1.05))}
+    validated = validate_writer_output(measured, json.dumps(value))
     dispositions = value.get("dispositions")
     if not isinstance(dispositions, list):
         raise BookForgeError("Revision has no finding dispositions")

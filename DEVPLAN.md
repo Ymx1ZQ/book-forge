@@ -2240,3 +2240,24 @@ The reviser is then asked to disposition each finding exactly once, holding four
 - [x] Reinstall, commit & push
 
 **Done when:** Twenty-five findings have twenty-five names.
+
+## The word-count floor forbids the style pass from doing its job ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the style re-revision of a closed chapter failed with `Writer output word count 1335 is outside 1400..2800`. The chapter's contract asks for 2000 words, so the floor is 1400; the chapter already stood at 1438 after its first revision, and the style pass — which is now required to propose only replacements shorter than what they replace — cut it to 1335.
+
+The two rules contradict each other sixty-five words apart. The floor exists to stop a writer delivering half a chapter, and it is measured against the contract because a draft has nothing else to be measured against. A style pass does: the prose it was handed. Measuring its output against the original target forbids it from removing anything once a chapter is already under target, which is exactly when it has most to remove.
+
+**Fix:** a style-only revision is measured against the prose it received — it may not drop below 70% of that — instead of against the contract's target. A reviser that throws half the chapter away is still caught; one that cuts a fifth of the padding is not.
+
+**Tasks:**
+- [x] `_validate_revision` takes the baseline prose for a style-only pass
+- [x] The draft path is unchanged and still measured against the contract
+- [x] Test: a style pass cutting a fifth of a chapter already under target lands
+- [x] Test: a style pass that halves the chapter is still refused
+- [x] Test: a draft below the contract floor still fails
+- [x] Suite green: 310 passed, 23 subtests (era 306)
+- [x] Reinstall, commit & push
+
+**Done when:** The pass that is told to cut is measured against what it cut from.

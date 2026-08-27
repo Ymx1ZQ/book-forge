@@ -317,5 +317,52 @@ class StyleFindingIdentityTests(unittest.TestCase):
             self.assertIn(row["reviewer"], row["id"])
 
 
+
+class StylePassLengthTests(unittest.TestCase):
+    """A style pass is told to propose only shorter replacements. Measuring it
+    against the contract's target forbids cutting once a chapter is under target."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.contract = {"id": "CH-0001", "book": "BOOK-0001", "target_words": 2000,
+                         "beats": ["Mara opens the log"], "pov": "CHR-0001"}
+        self.findings = [{"id": "S-glm-01", "severity": "warning", "dimension": "style",
+                          "evidence": "e", "issue": "cut the appositive", "fix_required": True}]
+
+    def prose(self, words):
+        sentence = "Mara opened the log and the warden said nothing at all again. "
+        text = (sentence * (words // 11 + 2))
+        return "# The Ninth Tide\n\n" + " ".join(text.split()[:words])
+
+    def revision(self, words):
+        return {"prose_markdown": self.prose(words),
+                "beat_map": [{"beat": "Mara opens the log", "evidence": "Mara opened the log"}],
+                "consequences": [],
+                "dispositions": [{"finding": "S-glm-01", "action": "repaired", "evidence": "cut", "loss": "none"}],
+                "reader_state": "Mara opened it."}
+
+    def test_a_style_pass_may_cut_a_chapter_already_under_target(self):
+        baseline = self.prose(1438)
+        value = self.bf._validate_revision(self.contract, self.revision(1335), self.findings, [], baseline_prose=baseline)
+        floor = int(int(self.contract["target_words"]) * 0.70)
+        self.assertLess(value["word_count"], floor, "the point is that the contract floor would have refused it")
+
+    def test_a_style_pass_that_halves_the_chapter_is_still_refused(self):
+        baseline = self.prose(1438)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._validate_revision(self.contract, self.revision(700), self.findings, [], baseline_prose=baseline)
+        self.assertIn("word count", str(caught.exception))
+
+    def test_a_style_pass_that_pads_the_chapter_is_refused(self):
+        baseline = self.prose(1438)
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._validate_revision(self.contract, self.revision(2200), self.findings, [], baseline_prose=baseline)
+
+    def test_without_a_baseline_the_contract_still_governs(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._validate_revision(self.contract, self.revision(1335), self.findings, [])
+        self.assertIn("1400", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
