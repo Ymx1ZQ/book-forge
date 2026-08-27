@@ -32,3 +32,24 @@ It halts on exactly two things, and both are reported by name:
 
 Report the receipt it returns — stages completed, chapter steps taken, editions written — rather than summarizing it.
 
+## Running the driver
+
+`advance` is long: a design makes one call for the spine, one per slice of eight chapters, and an advisory chorus round. Twenty to thirty minutes with nothing on screen is ordinary, and the chorus writes under `.book-forge/chorus/`, not under `.book-forge/runs/`, so quiet there does not mean stopped.
+
+Launch it detached, because a backgrounded process started inside a tool call does not outlive the call:
+
+```
+setsid nohup python3 <skill>/scripts/book_forge.py --project . advance --book <id> --until <stage> < /dev/null > /tmp/advance.log 2>&1 &
+echo $! > /tmp/advance.pid
+disown
+sleep 10; kill -0 $(cat /tmp/advance.pid) 2>/dev/null && echo alive || echo died
+```
+
+Poll the saved pid, never `pgrep -f`: every project invokes the engine as `--project .`, so a pattern match finds the drivers of other books too and reports a run as alive when it has already finished.
+
+`advance` refuses to start while another driver holds the same book and names the pid that holds it. Do not work around that: two drivers contend for the same claims, one orphans the other's attempt, and both pay for work that is discarded. A lock left by a dead process is stale and taken over automatically.
+
+It ends by printing what it produced — stages completed, outline chapters, chapter contracts, manuscript chapters, cost, and whether the book is ready to write — so there is nothing to go and check afterwards. Report that line.
+
+A `note, not an error` line about the advisory budget is exactly that. Budgets are advisory and the wall is what the model accepts; never raise one in `book-forge.yaml` to silence it.
+

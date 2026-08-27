@@ -2057,3 +2057,31 @@ The instruction that produced it is one I wrote this morning: *"Mechanisms, prop
 - [x] Reinstall, commit & push
 
 **Done when:** The field that joins to the registry holds only what the registry knows.
+
+## The operator prompt is long because the engine makes the caller carry what it should do itself ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** driving a book to the point of writing needed a forty-line prompt, and only its last paragraph was about the book. Everything else was engine knowledge the caller had to be told, or work the engine should do instead of asking:
+
+- *"never launch a second advance while one is alive"* — two drivers on one book contend for claims. The engine knows this and lets it happen anyway.
+- *"don't kill it because it looks slow; the chorus writes outside `.book-forge/runs`"* — the driver goes silent for twenty minutes and the caller cannot tell a working run from a hung one.
+- *"when it finishes, run these three commands to check the book is ready"* — the driver knows what it produced and says nothing.
+- *"an over the advisory budget warning is normal, not an error"* — the warning does not say so itself.
+- *"launch it with setsid and disown, poll the saved pid, never `pgrep -f` because `--project .` is identical in every project"* — real operational knowledge, learned the hard way twice today, written nowhere.
+
+**Fix:** each of these moves into the engine or into the route reference, so the prompt keeps only the book.
+
+**Tasks:**
+- [x] `advance` takes a per-book lock and refuses a second driver, naming the running pid
+- [x] Stage and slice progress printed as it happens, including the chorus, so silence means stopped
+- [x] `advance` ends with a readiness receipt: chapters, slices, artifacts written, cost
+- [x] The advisory-budget line says it is a warning and not an error
+- [x] `references/run.md` carries the launch and polling recipe
+- [x] Test: a second `advance` on the same book refuses while the first holds the lock
+- [x] Test: a stale lock from a dead pid does not block a new run
+- [x] Test: the receipt reports what was produced
+- [x] Suite green: 280 passed, 23 subtests (era 273)
+- [x] Reinstall, commit & push
+
+**Done when:** The prompt that drives a book to writing is about the book.

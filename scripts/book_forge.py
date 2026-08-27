@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import html
 import hashlib
 import io
+import contextlib
 import json
 import os
 import re
@@ -2940,8 +2941,10 @@ def build_envelope(
         # Above the advisory ceiling but inside what the model accepts. Say so and
         # keep going: a number chosen before the book was written must not end it.
         print(
-            f"[{role}] envelope {estimate} tokens is over the advisory budget {budget} "
-            f"(model accepts {hard_ceiling}); largest contributor {contributors[0]['name']}",
+            f"[{role}] note, not an error: envelope {estimate} tokens is over the advisory "
+            f"budget {budget}; the model accepts {hard_ceiling} and the call proceeds. "
+            f"Largest contributor {contributors[0]['name']}. Do not raise the budget in "
+            "book-forge.yaml — it is advisory by design",
             file=sys.stderr,
         )
     return {
@@ -5225,6 +5228,56 @@ ADVANCE_STAGES = ("design", "chapters", "translate", "export")
 MAX_STAGE_ATTEMPTS = 3
 
 
+class AdvanceBusy(BookForgeError):
+    """Another driver already holds this book."""
+
+
+def _advance_lock_path(root: Path, book_id: str) -> Path:
+    return root / ".book-forge" / f"advance-{book_id}.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@contextlib.contextmanager
+def _advance_lock(root: Path, book_id: str):
+    """Refuse a second driver on the same book.
+
+    Two `advance` processes contend for the same claims: one orphans the other's
+    attempt and both pay for work that is thrown away. A lock naming the live pid
+    turns that into a sentence instead of a corrupted run. A lock left by a dead
+    process is stale and taken over.
+    """
+    path = _advance_lock_path(root, book_id)
+    if path.is_file():
+        try:
+            holder = int(path.read_text(encoding="utf-8").split()[0])
+        except (ValueError, IndexError, OSError):
+            holder = 0
+        if holder and holder != os.getpid() and _pid_alive(holder):
+            raise AdvanceBusy(
+                f"another advance is already driving {book_id} (pid {holder}); "
+                "wait for it rather than starting a second one — two drivers on one book "
+                "contend for the same claims"
+            )
+    _write_bytes_atomic(path, f"{os.getpid()}\n".encode())
+    try:
+        yield
+    finally:
+        try:
+            if path.is_file() and path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                path.unlink()
+        except OSError:
+            pass
+
+
 class AdvanceHalted(BookForgeError):
     """The driver stopped on something only a person can decide."""
 
@@ -5279,6 +5332,8 @@ def advance_book(
         raise BookForgeError(f"Unknown book: {book_id}")
     wanted = ADVANCE_STAGES[: ADVANCE_STAGES.index(until) + 1]
     done: dict[str, object] = {"book": book_id, "stages": [], "chapters": 0, "halted": None}
+    lock = _advance_lock(root, book_id)
+    lock.__enter__()
 
     def guard() -> None:
         state = recover_before_dispatch(root)
@@ -5348,7 +5403,45 @@ def advance_book(
         done["editions"] = editions
         done["stages"].append("export")
 
+    lock.__exit__(None, None, None)
+    done["ready"] = _advance_receipt(root, book_id)
+    _log_receipt(done)
     return done
+
+
+def _advance_receipt(root: Path, book_id: str) -> dict[str, object]:
+    """What the driver produced, so the caller does not have to go and look."""
+    book = root / "books" / book_id
+    outline = book / "outline.yaml"
+    chapters = sorted(outline.parent.glob("chapters/CH-*.json"))
+    plan = _load_plan(root)
+    states = {str(task["id"]): str(task["state"]) for task in plan["tasks"] if book_id in str(task["id"])}
+    receipt = {
+        "outline_chapters": len(_read_json(outline).get("chapters", [])) if outline.is_file() else 0,
+        "chapter_contracts": len(chapters),
+        "manuscript_chapters": len(list((book / "manuscript" / "chapters").glob("CH-*.md"))),
+        "tasks": states,
+        "cost": round(float(telemetry_report(root).get("by_book", {}).get(book_id, {}).get("cost", 0.0)), 4),
+    }
+    receipt["ready_to_write"] = bool(
+        receipt["outline_chapters"]
+        and receipt["chapter_contracts"] == receipt["outline_chapters"]
+        and states.get(f"DESIGN-{book_id}") == "succeeded"
+    )
+    return receipt
+
+
+def _log_receipt(done: dict[str, object]) -> None:
+    ready = done.get("ready") or {}
+    print(
+        f"[advance] stages {', '.join(done['stages']) or 'none'} · "
+        f"outline {ready.get('outline_chapters', 0)} chapters · "
+        f"contracts {ready.get('chapter_contracts', 0)} · "
+        f"manuscript {ready.get('manuscript_chapters', 0)} · "
+        f"cost ${ready.get('cost', 0)} · "
+        f"{'ready to write' if ready.get('ready_to_write') else 'not ready to write'}",
+        file=sys.stderr,
+    )
 
 
 def run_next(
