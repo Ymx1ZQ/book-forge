@@ -1795,6 +1795,10 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
         receipts.append(value)
     # Chorus rounds are billed but bypass the attempt machinery, so their telemetry
     # is collected from the round file instead of an execution receipt.
+    for path in sorted((root / ".book-forge" / "repairs").glob("*/*/repair-telemetry.json")):
+        round_value = _read_json(path)
+        for entry in round_value.get("advisors", []):
+            receipts.append({**entry, "task": f"REPAIR-{round_value.get('book', '')}", "_run": "repair", "_path": str(path.relative_to(root)), "_role": "designer", "book": round_value.get("book")})
     for path in sorted((root / ".book-forge" / "chorus").glob("*/*/chorus-telemetry.json")):
         round_value = _read_json(path)
         for entry in round_value.get("advisors", []):
@@ -3401,8 +3405,14 @@ def _run_book_design_chunked(
     # place, so sharing it would append each slice's chapters to the spine the next
     # slice receives — and a designer handed thirty-two chapters inside the field
     # meant to hold the book's spine stops writing and tries to re-read its envelope.
-    slice_capsule = {**base_capsule, "spine": json.loads(json.dumps(merged)), "chapter_outline": outline}
+    spine_snapshot = json.loads(json.dumps(merged))
     for chunk in _book_design_chunks(len(outline)):
+        slice_capsule = {
+            **base_capsule,
+            "spine": spine_snapshot,
+            "chapter_outline": outline,
+            "written_so_far": _design_digest(merged.get("chapters", [])),
+        }
         parsed, telemetry, slice_results = _run_design_chunk(
             root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens
         )
@@ -3410,6 +3420,32 @@ def _run_book_design_chunked(
         chunk_telemetry.append(telemetry)
         merged = _merge_design_chunks(merged, parsed)
     return claim, merged, results, chunk_telemetry
+
+
+def _design_digest(chapters: list[object]) -> list[dict[str, object]]:
+    """What the slices before this one committed the book to.
+
+    A slice used to see the spine and a one-line summary per chapter and nothing
+    else, so a detail invented inside one slice's beats was invisible to the next:
+    a grave held a man in one slice and a young woman in another. The digest carries
+    identity and the promises — plants and reveals — and never the beats, so it stays
+    small as the book grows.
+    """
+    digest = []
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        digest.append(
+            {
+                "id": chapter.get("id"),
+                "order": chapter.get("order"),
+                "title": chapter.get("title"),
+                "pov": chapter.get("pov"),
+                "plants": chapter.get("plants", []),
+                "reveals": chapter.get("reveals", []),
+            }
+        )
+    return digest
 
 
 def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, object]) -> dict[str, object]:
@@ -3903,6 +3939,8 @@ def _design_audit_record(
     imports: list[str],
     runner,
     output_path: str,
+    *,
+    raise_on_blocked: bool = True,
 ) -> dict[str, object]:
     envelope = build_envelope(
         root,
@@ -3926,7 +3964,7 @@ def _design_audit_record(
         "findings": findings,
     }
     _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
-    if record["state"] == "blocked":
+    if record["state"] == "blocked" and raise_on_blocked:
         raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(findings, sort_keys=True)}")
     return record
 
@@ -4608,7 +4646,16 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         imports,
         runner,
         f"books/{book_id}/design-audit.json",
+        raise_on_blocked=False,
     )
+    proposal, audit = _repair_blocked_design(
+        root, book_id, proposal, audit, base_capsule, imports, runner, claim
+    )
+    if _blocking(audit):
+        _log_step(7, 7, "audit", "✗")
+        raise BookForgeError(
+            f"Independent design audit found blocking issues: {json.dumps(audit['findings'], sort_keys=True)}"
+        )
     _log_step(7, 7, "audit", "✓")
     # M2: post-design ensemble — re-read book product (arc + chapters per-chapter beats/POV)
     if (not no_chorus) and (not no_post_chorus) and _chorus_post_enabled(config):
@@ -4627,6 +4674,107 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     arts = list(_book_design_outputs(root, book_id, proposal).keys()) + [f"books/{book_id}/design-audit.json"]
     _log_summary(arts)
     return {**audit, "calls": 2}
+
+
+MAX_DESIGN_REPAIR_ROUNDS = 2
+
+
+def _blocking(audit: dict[str, object]) -> list[dict[str, object]]:
+    return [row for row in audit.get("findings", []) if row.get("severity") == "blocking"]
+
+
+def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports, runner, claim):
+    """Rewrite the chapters a blocking finding names, then audit again.
+
+    Every finding already says which chapters it touches, so stopping to ask a
+    person which four chapters to fix asks them to read what the engine was told.
+    Bounded: if the audit still blocks after the rounds are spent, the caller halts
+    with the findings, as before.
+    """
+    for round_number in range(1, MAX_DESIGN_REPAIR_ROUNDS + 1):
+        findings = _blocking(audit)
+        if not findings:
+            return proposal, audit
+        scope = sorted({str(row) for finding in findings for row in finding.get("repair_scope", []) if str(row).startswith("CH-")})
+        if not scope:
+            return proposal, audit
+        chapters = {str(row["id"]): row for row in proposal.get("chapters", [])}
+        targets = [chapters[value] for value in scope if value in chapters]
+        if not targets:
+            return proposal, audit
+        _log_step(7, 7, f"audit repair {round_number}/{MAX_DESIGN_REPAIR_ROUNDS} on {', '.join(scope)}", "→")
+        capsule = {
+            **base_capsule,
+            "chunk": {"category": "repair"},
+            "spine": {key: value for key, value in proposal.items() if key != "chapters"},
+            "written_so_far": _design_digest([row for row in proposal.get("chapters", []) if str(row.get("id")) not in set(scope)]),
+            "repair": {
+                "reason": "the independent canon audit found blocking contradictions",
+                "findings": findings,
+                "rewrite_only": scope,
+            },
+            "chapters_to_rewrite": targets,
+        }
+        repair_envelope = build_envelope(
+            root, role="designer", task_capsule=capsule, imports=imports, state={}, tools=[], max_output_tokens=12288
+        )
+        attempt_dir = Path(claim["capsule"]).parent
+        _write_bytes_atomic(attempt_dir / f"envelope-repair-{round_number}.json", repair_envelope["bytes"])
+        repaired = runner("designer", repair_envelope, attempt_dir)
+        _write_bytes_atomic(attempt_dir / f"raw-repair-{round_number}.txt", str(repaired.get("text", "")).encode())
+        # The repair runs outside the DAG, like a chorus round: its own attempt is
+        # already promoted, so its cost is recorded beside it and folded into the
+        # report rather than being lost.
+        _write_json(
+            root / ".book-forge" / "repairs" / book_id / f"round-{round_number}" / "repair-telemetry.json",
+            {"schema": 1, "book": book_id, "round": round_number,
+             "advisors": [{"role": "designer", **_chorus_telemetry(repaired, repair_envelope)}]},
+        )
+        try:
+            value = _parse_chunked_contract(str(repaired.get("text", "")), max_bytes=12288 * 4)
+        except BookForgeError:
+            return proposal, audit
+        rewritten = {str(row["id"]): row for row in value.get("chapters", []) if isinstance(row, dict) and row.get("id")}
+        if not rewritten:
+            return proposal, audit
+        proposal = {**proposal, "chapters": [rewritten.get(str(row.get("id")), row) for row in proposal.get("chapters", [])]}
+        blocking_findings = [row for row in validate_book_design(root, book_id, proposal) if row["severity"] == "blocking"]
+        if blocking_findings:
+            raise BookForgeError(f"Repaired design has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
+        _write_book_design_outputs(root, book_id, proposal)
+        # The proposal changed, so the audit that judged the old one is stale and the
+        # task is genuinely due again.
+        _reopen_task(root, f"AUDIT-{book_id}")
+        audit = _design_audit_record(
+            root,
+            f"AUDIT-{book_id}",
+            {"scope": "book", "book": book_id, "proposal": proposal},
+            imports,
+            runner,
+            f"books/{book_id}/design-audit.json",
+            raise_on_blocked=False,
+        )
+    return proposal, audit
+
+
+def _reopen_task(root: Path, task_id: str) -> None:
+    """Return a completed task to the frontier because its input changed."""
+    plan = _load_plan(root)
+    task = next((row for row in plan["tasks"] if str(row["id"]) == task_id), None)
+    if task is None:
+        return
+    task["state"] = "pending"
+    task.pop("attempt", None)
+    task.pop("execution_receipt", None)
+    _save_plan(root, plan)
+    render_plan(root)
+
+
+def _write_book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) -> None:
+    """Rewrite the promoted design artifacts after a repair round."""
+    for path, value in _book_design_outputs(root, book_id, proposal).items():
+        _write_bytes_atomic(root / path, value.encode() if isinstance(value, str) else value)
+    rebuild_indexes(root)
 
 
 def _parse_contract_json(text_value: str) -> dict[str, object]:

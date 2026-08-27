@@ -2103,3 +2103,34 @@ The instruction that produced it is one I wrote this morning: *"Mechanisms, prop
 - [x] Reinstall, commit & push
 
 **Done when:** The receipt and the auditor cannot disagree.
+
+## Each design slice writes blind to what the slices before it committed ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the independent audit blocked a finished 36-chapter design on a real contradiction — the grave Mary visits holds *a man with a mid-century photograph* in CH-0006, *a drowned young woman* in CH-0011 and CH-0016, and *a boy drowned twenty years ago* in CH-0027, while the design's own plants say all four are the same grief.
+
+The cause is the slicing itself. Verified on the envelope that produced it: a chapter slice receives the spine and a one-line summary per chapter, and `chapters already written: 0`. Slice 1 invents the man and the mid-century photograph inside its beats; slice 2 cannot see those beats and invents the young woman. Before the design was sliced the designer wrote every chapter in one answer and could not contradict itself this way.
+
+A second cost sits behind it: every finding already names the chapters it touches — `repair_scope: ["CH-0006", "CH-0011", "CH-0016", "CH-0027"]` — and the engine still stops and waits for a person to decide what to do with four chapters it could name itself.
+
+**Fix:**
+
+- Each slice receives a digest of what the slices before it established: for every chapter already written, its id, order, title, POV, plants and reveals. Those are the facts the book has committed to. Not the beats — the digest must stay small enough that the envelope does not grow with the book.
+- When the audit blocks, the engine repairs instead of stopping: it sends the blocking findings back to the designer scoped to the chapters each one names, merges the rewritten chapters into the proposal, revalidates, re-promotes and re-audits. Bounded rounds; if the audit still blocks, it halts with the findings, as it does today.
+
+**Tasks:**
+- [x] Slice capsules carry a `written_so_far` digest of previous slices
+- [x] The digest holds identity, title, POV, plants and reveals — never the beats
+- [x] `designer.md` states that the digest is settled fact, not a suggestion
+- [x] Blocking audit findings drive a scoped repair round instead of a halt
+- [x] Bounded repair rounds, then halt with the findings
+- [x] Test: slice N sees every chapter from slices 1..N-1 and none of its own
+- [x] Test: the digest carries plants and reveals but not beats
+- [x] Test: a blocking audit finding triggers a repair of exactly the chapters it names
+- [x] Test: an audit that keeps blocking halts with the findings
+- [x] Suite green: 290 passed, 23 subtests (era 282)
+- [x] The repair call is billed outside the DAG, so its cost is recorded beside the attempt and folded into `telemetry_report` the way a chorus round is
+- [x] Reinstall, commit & push
+
+**Done when:** A slice cannot contradict a slice that came before it, and a contradiction the auditor still finds costs a call rather than a decision.

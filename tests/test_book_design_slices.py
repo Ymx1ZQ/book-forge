@@ -157,17 +157,43 @@ class BookDesignSliceTests(BookDesignSliceFixture):
             self.assertNotIn("chapters", spine)
             self.assertEqual(spine, spines[0])
 
-    def test_the_slice_envelopes_do_not_grow_as_the_design_proceeds(self):
+    def test_a_slice_envelope_grows_only_by_the_digest(self):
+        """The slices carry what came before them, and nothing else may accumulate:
+        the spine used to swallow each slice's chapters and the envelope doubled."""
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
-        sizes = [len(json.dumps(capsule, sort_keys=True)) for capsule in provider.capsules[1:]]
-        self.assertEqual(len(set(size - len(json.dumps(capsule["chunk"], sort_keys=True)) for size, capsule in zip(sizes, provider.capsules[1:]))), 1)
+        fixed = [
+            len(json.dumps({key: value for key, value in capsule.items() if key not in {"written_so_far", "chunk"}}, sort_keys=True))
+            for capsule in provider.capsules[1:]
+        ]
+        self.assertEqual(len(set(fixed)), 1, "everything but the digest must stay constant across slices")
+        digests = [len(json.dumps(capsule["written_so_far"], sort_keys=True)) for capsule in provider.capsules[1:]]
+        self.assertEqual(digests, sorted(digests))
+        self.assertLess(digests[-1], fixed[0], "the digest must stay smaller than the rest of the capsule")
 
     def test_the_merged_proposal_still_gathers_every_slice_in_order(self):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
         self.assertEqual([row["id"] for row in outline], [f"CH-{index:04d}" for index in range(1, CHAPTER_COUNT + 1)])
+
+    def test_a_slice_sees_every_chapter_written_before_it_and_none_of_its_own(self):
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        slices = provider.capsules[1:]
+        self.assertEqual([len(capsule["written_so_far"]) for capsule in slices], [0, 8, 16, 24, 32])
+        for capsule in slices:
+            seen = {row["id"] for row in capsule["written_so_far"]}
+            first = int(capsule["chunk"]["first_order"])
+            self.assertNotIn(f"CH-{first:04d}", seen)
+
+    def test_the_digest_carries_the_promises_and_never_the_beats(self):
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        digest = provider.capsules[-1]["written_so_far"]
+        self.assertTrue(digest)
+        for row in digest:
+            self.assertEqual(sorted(row), ["id", "order", "plants", "pov", "reveals", "title"])
 
     def test_no_call_is_ever_asked_for_the_whole_book(self):
         provider = SliceProvider(self.bf)
