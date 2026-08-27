@@ -114,3 +114,16 @@ class PdfChapterNumberTests(PdfTests):
         self.assertEqual(lines[lines.index("2") + 1], "Chapter 2")
         pages = int(subprocess.run(["pdfinfo", str(result["path"])], capture_output=True, text=True, check=False).stdout.split("Pages:")[1].split()[0])
         self.assertEqual(pages, 2)
+
+
+class EditionNamingTests(PdfTests):
+    def test_both_exporters_name_every_file_after_the_book_and_language(self):
+        pdf = self.bf.export_pdf(self.base, self.book, "en")
+        epub = self.bf.export_epub(self.base, self.book, "en")
+        for result, extension in ((pdf, "pdf"), (epub, "epub")):
+            with self.subTest(extension=extension):
+                self.assertEqual(Path(result["path"]).name, f"glass-tide-en.{extension}")
+                self.assertEqual(Path(result["manifest"]).name, f"glass-tide-en.{extension}.manifest.json")
+        # Nothing is left behind under the book id, temporaries included.
+        stray = [p.name for p in Path(pdf["path"]).parent.iterdir() if p.name.startswith((self.book, f".{self.book}"))]
+        self.assertEqual(stray, [])

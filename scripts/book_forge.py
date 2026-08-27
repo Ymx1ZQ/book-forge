@@ -6477,7 +6477,7 @@ def export_pdf(
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = ".draft" if draft else ""
     output_path = output_dir / f"{_edition_stem(assembly)}{suffix}.pdf"
-    temporary_path = output_dir / f".{book_id}{suffix}.pdf.rendering"
+    temporary_path = output_dir / f".{_edition_stem(assembly)}{suffix}.pdf.rendering"
     environment = dict(os.environ)
     environment.update({"TZ": "UTC", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0", "SOURCE_DATE_EPOCH": str(assembly["source_epoch"]), "UV_PYTHON": "3.13.12"})
     result = subprocess.run(
@@ -6527,7 +6527,7 @@ def export_pdf(
         "draft": draft,
         "partial": draft,
     }
-    manifest_path = output_dir / f"{book_id}{suffix}.pdf.manifest.json"
+    manifest_path = output_dir / f"{_edition_stem(assembly)}{suffix}.pdf.manifest.json"
     _write_json(manifest_path, manifest)
     if draft:
         return {"path": str(output_path), "manifest": str(manifest_path), "sha256": validation["sha256"], "chapters": len(assembly["chapters"]), "model_calls": 0, "draft": True}

@@ -1646,3 +1646,29 @@ with `_provider_telemetry`, which indexes the provider's answer. A stub omitting
 round returned zero findings — accounting killing an advisory call, which is the
 one thing that function is written not to do. `_chorus_telemetry` records what
 the provider reported and leaves the rest `None`.
+
+## Fix: the PDF manifest and render temp kept the book id ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `_edition_stem` was applied to the two output files and to the EPUB
+manifest, but the PDF manifest still built its name from `book_id`, so an export
+produced `landfall-the-lost-candle-it.draft.pdf` next to
+`BOOK-0001.draft.pdf.manifest.json`. The replacement matched `.epub.manifest`
+and never looked for the PDF one. The temporary render path
+`.{book_id}{suffix}.pdf.rendering` has the same shape and a worse consequence:
+it does not carry the language, so rendering two languages at once writes both
+through the same temporary file.
+
+**Fix:** both take `_edition_stem`. A test covers the manifest name for each
+exporter, which is what was missing the first time.
+
+**Tasks:**
+- [x] PDF manifest and render temp use the edition stem
+- [x] Test: both exporters name their manifest after title and language, and nothing is left under the book id
+- [x] Test: 186 passed, 23 subtests (era 183)
+- [x] Reinstall ./install.sh --force
+- [x] Commit & push
+
+**Done when:** Every file an export writes is named after the book and its
+language, temporaries included.
