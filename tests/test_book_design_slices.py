@@ -119,6 +119,56 @@ class SliceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.bf._book_design_chunks(10)[-1]["last_order"], 10)
 
 
+class TruncationSplitTests(BookDesignSliceFixture):
+    """A truncation says the answer asked for does not fit. Repeating the same
+    request has no reason to succeed, and each repeat is paid for."""
+
+    def test_a_provider_that_cannot_write_more_than_four_chapters_still_finishes(self):
+        provider = SliceProvider(self.bf)
+        provider.bf.BOOK_DESIGN_SLICE_SIZE = self.bf.BOOK_DESIGN_SLICE_SIZE
+        original = provider._ok
+
+        def limited(role, envelope, attempt_dir):
+            task = envelope["payload"]["task"]
+            chunk = task.get("chunk") or {}
+            if chunk.get("category") == "chapters":
+                width = int(chunk["last_order"]) - int(chunk["first_order"]) + 1
+                if width > 4:
+                    provider.calls += 1
+                    provider.chunks.append(chunk)
+                    return provider._truncated(envelope)
+            return SliceProvider.__call__(provider, role, envelope, attempt_dir)
+
+        self.bf.execute_book_design(self.project, self.book, provider=limited, no_chorus=True, no_post_chorus=True)
+        outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
+        self.assertEqual([row["order"] for row in outline], list(range(1, CHAPTER_COUNT + 1)))
+        widths = [int(c["last_order"]) - int(c["first_order"]) + 1 for c in provider.chunks if c.get("category") == "chapters"]
+        self.assertTrue(any(width <= 4 for width in widths), "the engine must have asked for less")
+
+    def test_halving_walks_down_to_a_single_chapter(self):
+        chunk = {"category": "chapters", "part": "1-8", "first_order": 1, "last_order": 8}
+        halves = self.bf._halve_chunk(chunk)
+        self.assertEqual([(h["first_order"], h["last_order"]) for h in halves], [(1, 4), (5, 8)])
+        self.assertEqual([(h["first_order"], h["last_order"]) for h in self.bf._halve_chunk(halves[0])], [(1, 2), (3, 4)])
+        self.assertEqual(self.bf._halve_chunk({"category": "chapters", "first_order": 3, "last_order": 3}), [])
+
+    def test_a_non_chapter_chunk_is_not_split(self):
+        self.assertEqual(self.bf._halve_chunk({"category": "spine"}), [])
+
+    def test_a_single_chapter_that_keeps_truncating_fails(self):
+        def always_truncate(role, envelope, attempt_dir):
+            task = envelope["payload"]["task"]
+            if (task.get("chunk") or {}).get("category") == "chapters":
+                provider.calls += 1
+                return provider._truncated(envelope)
+            return SliceProvider.__call__(provider, role, envelope, attempt_dir)
+
+        provider = SliceProvider(self.bf, chapter_count=2)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.execute_book_design(self.project, self.book, provider=always_truncate, no_chorus=True, no_post_chorus=True)
+        self.assertIn("failed_length", str(caught.exception))
+
+
 class BookDesignSliceTests(BookDesignSliceFixture):
     def test_a_forty_chapter_design_completes_against_a_one_slice_provider(self):
         provider = SliceProvider(self.bf)

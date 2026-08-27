@@ -3337,6 +3337,8 @@ def _run_design_chunk(
             break
         _write_bytes_atomic(attempt_dir / f"raw-{slug}-attempt{attempt + 1}.txt", str(result.get("text", "")).encode())
     if result is None or _is_length_finish(result):
+        if chunk.get("category") == "chapters":
+            raise DesignChunkTruncated(chunk, results)
         _block_task_failed_length(root, task_id, claim)
         raise BookForgeError(f"Design {task_id} failed_length on chunk {slug}")
     _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
@@ -3353,6 +3355,15 @@ def _run_design_chunk(
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
     return parsed, telemetry, results
+
+
+class DesignChunkTruncated(BookForgeError):
+    """A chapter slice did not fit in one answer; the caller may ask for less."""
+
+    def __init__(self, chunk: dict[str, object], results: list[dict[str, object]]):
+        super().__init__(f"Design chunk {_chunk_slug(chunk)} truncated")
+        self.chunk = chunk
+        self.results = results
 
 
 def _book_design_chunks(chapter_count: int) -> list[dict[str, object]]:
@@ -3406,20 +3417,52 @@ def _run_book_design_chunked(
     # slice receives — and a designer handed thirty-two chapters inside the field
     # meant to hold the book's spine stops writing and tries to re-read its envelope.
     spine_snapshot = json.loads(json.dumps(merged))
-    for chunk in _book_design_chunks(len(outline)):
+    pending = list(_book_design_chunks(len(outline)))
+    while pending:
+        chunk = pending.pop(0)
         slice_capsule = {
             **base_capsule,
             "spine": spine_snapshot,
             "chapter_outline": outline,
             "written_so_far": _design_digest(merged.get("chapters", [])),
         }
-        parsed, telemetry, slice_results = _run_design_chunk(
-            root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens
-        )
+        try:
+            parsed, telemetry, slice_results = _run_design_chunk(
+                root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens
+            )
+        except DesignChunkTruncated as exc:
+            halves = _halve_chunk(chunk)
+            if not halves:
+                _block_task_failed_length(root, task_id, claim)
+                raise BookForgeError(f"Design {task_id} failed_length on chunk {_chunk_slug(chunk)}") from exc
+            # A truncation says the answer asked for does not fit, so ask for less
+            # rather than for the same thing again.
+            print(
+                f"[designer] {_chunk_slug(chunk)} truncated; splitting into "
+                f"{', '.join(_chunk_slug(half) for half in halves)}",
+                file=sys.stderr,
+            )
+            results.extend(exc.results)
+            pending = halves + pending
+            continue
         results.extend(slice_results)
         chunk_telemetry.append(telemetry)
         merged = _merge_design_chunks(merged, parsed)
     return claim, merged, results, chunk_telemetry
+
+
+def _halve_chunk(chunk: dict[str, object]) -> list[dict[str, object]]:
+    """Split a chapter chunk in two. A single chapter cannot be split further."""
+    if chunk.get("category") != "chapters":
+        return []
+    first, last = int(chunk["first_order"]), int(chunk["last_order"])
+    if last <= first:
+        return []
+    middle = first + (last - first) // 2
+    return [
+        {"category": "chapters", "part": f"{first}-{middle}", "first_order": first, "last_order": middle},
+        {"category": "chapters", "part": f"{middle + 1}-{last}", "first_order": middle + 1, "last_order": last},
+    ]
 
 
 def _design_digest(chapters: list[object]) -> list[dict[str, object]]:

@@ -2134,3 +2134,27 @@ A second cost sits behind it: every finding already names the chapters it touche
 - [x] Reinstall, commit & push
 
 **Done when:** A slice cannot contradict a slice that came before it, and a contradiction the auditor still finds costs a call rather than a decision.
+
+## A truncated slice is retried unchanged, so it truncates again ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** watched live on Margherita: the chapters 9-16 slice came back truncated twice in a row, and the third try is the last before the slice fails. The provider's own numbers say why — **reasoning 27045 tokens against output 4955**, on a ceiling near 32000. The model spent its budget thinking and had nothing left to write eight chapters with.
+
+`_run_design_chunk` builds the envelope once and calls it up to three times with the same bytes. A truncation is not noise: it says the answer asked for does not fit. Repeating the request unchanged has no reason to succeed, and each repeat is paid for.
+
+It is the same shape as every other failure tonight — the engine repeating an action that failed for a structural reason instead of changing it. And the feed-forward digest, which is right, makes it likelier: the first slice that receives a digest has more to read and the same budget to write.
+
+**Fix:** on a length truncation the engine asks for less. A chapter slice splits in half and each half is run as its own chunk, recursively, down to a single chapter. `BOOK_DESIGN_SLICE_SIZE` stops being a number that has to be right and becomes a starting point.
+
+**Tasks:**
+- [x] A truncated chapter slice is halved and each half run separately
+- [x] The split recurses to a single chapter, then gives up as it does today
+- [x] Non-chapter chunks keep the plain retry
+- [x] Test: a provider that truncates any slice over four chapters still completes a 40-chapter design
+- [x] Test: a single chapter that keeps truncating fails as failed_length
+- [x] Test: the merged proposal is identical whether or not a split happened
+- [x] Suite green: 294 passed, 23 subtests (era 290)
+- [x] Reinstall, commit & push
+
+**Done when:** A truncation makes the next request smaller instead of identical.
