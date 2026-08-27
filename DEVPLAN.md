@@ -1874,3 +1874,35 @@ The engine's answer to size today is a `chunking` string in the task capsule ins
 - [x] Commit & push
 
 **Done when:** A 40-chapter book design completes, and no single call is asked to emit more than a slice.
+
+## A one-line envelope reaches the model as its first 2000 characters ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** the designer answered a book-design call with 316 tokens of prose and no JSON. `opencode run` truncates every **line** of an attached file at 2000 characters, and `build_envelope` serialises the envelope as compact JSON — one line. A 132630-character envelope reaches the model as its first 2000 characters, so the role never sees its own task.
+
+Measured with the same content in two shapes, under `--agent designer`:
+
+| file | lines | bytes | outcome | provider input tokens |
+|---|---|---|---|---|
+| multi-line | 506 | 33090 | whole content | 7672 |
+| single line | 1 | 31575 | cut at 2000 chars | 1424 |
+
+Reproduced at 30 KB, 60 KB and 130 KB: always `in≈1400`. The same file with no `--agent` arrives whole, which is why an earlier probe of the argv fix passed and proved nothing.
+
+Indenting is not the fix. The real envelope re-serialised with `indent=1` is the same size and still carries **four lines over 2000 characters, the longest 85119** — JSON escapes the newlines inside a canon block, so an 85 KB markdown value stays one line however the document is indented. Passing the envelope in the message instead works at 31 KB and did not return within 170 s at 132 KB.
+
+**Fix:** the attachment gets a wire rendering whose only job is that no line can exceed the cap, for any content. The canonical envelope keeps its bytes, its hash and its receipt — the audit surface does not move. The wire file is pretty-printed, and any string too long for one line is emitted as `{"__chunks__": [...]}`, whose parts concatenate back to the exact original. The wrapper object is what makes it unambiguous: a bare array of strings could not be told apart from a list the envelope already had. The engine decodes the wire file back and refuses to make the call unless it equals the canonical payload byte for byte, so losslessness is checked at run time and not only in tests. The message carries the one sentence a role needs to read it.
+
+**Tasks:**
+- [x] `_wire_encode` / `_wire_decode` / `_wire_bytes`, chunking below the line cap
+- [x] `run_opencode_role` writes and attaches the wire file, after a round-trip check
+- [x] The prompt states how a chunked value reassembles
+- [x] Test: round-trip on strings with newlines, unicode, escapes, and one 85 KB value
+- [x] Test: no line of the wire rendering exceeds the cap, on the real 132 KB envelope
+- [x] Test: a wire file that fails to decode blocks the call
+- [x] Suite green: 242 passed, 23 subtests (era 230)
+- [x] Live check: the real 132 KB envelope reaches the designer — provider input 91686 tokens against 1424 before
+- [x] Reinstall, commit & push
+
+**Done when:** An envelope of any size and any block length reaches the role intact.

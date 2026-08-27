@@ -4628,6 +4628,80 @@ def validate_writer_output(contract: dict[str, object], text_value: str) -> dict
     return value
 
 
+# `opencode run` truncates every line of an attached file at 2000 characters, and a
+# compact envelope is one line, so a role would receive its first 2000 characters and
+# never see its own task. Indenting does not save it: JSON escapes the newlines inside
+# a canon block, so an 85 KB markdown value stays on one line however the document is
+# formatted. The wire rendering below bounds every line for any content whatsoever.
+WIRE_MAX_LINE = 1200
+WIRE_CHUNK = 700
+WIRE_CHUNK_KEY = "__chunks__"
+WIRE_PROMPT = (
+    "Process the attached envelope and return the requested output contract. "
+    f'In the envelope, a value written as {{"{WIRE_CHUNK_KEY}": ["...", "..."]}} is one string '
+    "split for transport: concatenate its parts in order, adding nothing between them."
+)
+
+
+def _wire_split(value: str, chunk: int) -> list[str]:
+    """Cut a string into pieces of at most `chunk` characters, preferring a cut just
+    after a newline so the pieces read as the lines they already are. Concatenating
+    the pieces returns the original exactly — no separator is introduced."""
+    pieces: list[str] = []
+    start = 0
+    while start < len(value):
+        end = min(start + chunk, len(value))
+        if end < len(value):
+            newline = value.rfind("\n", start + 1, end + 1)
+            if newline > start:
+                end = newline + 1
+        pieces.append(value[start:end])
+        start = end
+    return pieces
+
+
+def _wire_encode(value: object, chunk: int) -> object:
+    if isinstance(value, str):
+        if len(value) <= chunk:
+            return value
+        return {WIRE_CHUNK_KEY: _wire_split(value, chunk)}
+    if isinstance(value, list):
+        return [_wire_encode(row, chunk) for row in value]
+    if isinstance(value, dict):
+        return {key: _wire_encode(row, chunk) for key, row in value.items()}
+    return value
+
+
+def _wire_decode(value: object) -> object:
+    if isinstance(value, dict):
+        if set(value) == {WIRE_CHUNK_KEY} and isinstance(value[WIRE_CHUNK_KEY], list):
+            return "".join(str(part) for part in value[WIRE_CHUNK_KEY])
+        return {key: _wire_decode(row) for key, row in value.items()}
+    if isinstance(value, list):
+        return [_wire_decode(row) for row in value]
+    return value
+
+
+def _wire_bytes(payload: object) -> bytes:
+    """Render an envelope so that no line can exceed WIRE_MAX_LINE.
+
+    A chunk is measured in source characters, but a line is measured after JSON
+    escaping, and an escape can double a character. So the rendering is checked and
+    the chunk halved until it holds — the loop terminates because a one-character
+    chunk serialises to a bounded line.
+    """
+    chunk = WIRE_CHUNK
+    while True:
+        rendered = json.dumps(_wire_encode(payload, chunk), ensure_ascii=False, sort_keys=True, indent=1) + "\n"
+        if max((len(line) for line in rendered.split("\n")), default=0) <= WIRE_MAX_LINE or chunk <= 1:
+            break
+        chunk = max(1, chunk // 2)
+    decoded = _wire_decode(json.loads(rendered))
+    if decoded != payload:
+        raise BookForgeError("Wire envelope does not decode back to the canonical envelope")
+    return rendered.encode()
+
+
 def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
     # Chorus advisors are allowed despite not being in ROLE_SPECS.
     if role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role != CHORUS_SYNTHESIZER_AGENT:
@@ -4658,6 +4732,11 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     started = time.monotonic()
     envelope_path = attempt_dir / "envelope.json"
     _write_bytes_atomic(envelope_path, envelope["bytes"])
+    # The canonical bytes stay the audit surface and keep the hash on the receipt; the
+    # wire rendering is what the provider is handed, and it is refused unless it decodes
+    # back to those same bytes.
+    wire_path = attempt_dir / "envelope.wire.json"
+    _write_bytes_atomic(wire_path, _wire_bytes(json.loads(envelope["bytes"])))
     result = subprocess.run(
         [
             binary,
@@ -4675,9 +4754,9 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             # every following non-flag token. A prompt placed after it is parsed as
             # a second file path and the call dies with "File not found: Process the
             # attached envelope...". The message positional goes first.
-            "Process the attached envelope and return the requested output contract.",
+            WIRE_PROMPT,
             "--file",
-            str(envelope_path),
+            str(wire_path),
         ],
         capture_output=True,
         text=True,

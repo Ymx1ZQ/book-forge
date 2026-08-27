@@ -16,7 +16,6 @@ def load_module():
     return module
 
 
-PROMPT = "Process the attached envelope and return the requested output contract."
 
 
 class RunnerArgvTests(unittest.TestCase):
@@ -26,6 +25,7 @@ class RunnerArgvTests(unittest.TestCase):
 
     def setUp(self):
         self.bf = load_module()
+        self.prompt = self.bf.WIRE_PROMPT
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "world"
@@ -54,19 +54,19 @@ class RunnerArgvTests(unittest.TestCase):
 
     def test_the_prompt_comes_before_the_file_flag(self):
         argv = self._argv()
-        self.assertIn(PROMPT, argv)
+        self.assertIn(self.prompt, argv)
         self.assertIn("--file", argv)
-        self.assertLess(argv.index(PROMPT), argv.index("--file"), "the prompt must not sit inside the --file array")
+        self.assertLess(argv.index(self.prompt), argv.index("--file"), "the prompt must not sit inside the --file array")
 
     def test_the_file_flag_is_followed_only_by_the_envelope_path(self):
         argv = self._argv()
         after_file = argv[argv.index("--file") + 1:]
         self.assertEqual(len(after_file), 1)
-        self.assertTrue(after_file[0].endswith("envelope.json"))
+        self.assertTrue(after_file[0].endswith("envelope.wire.json"))
 
     def test_every_option_still_precedes_the_prompt(self):
         argv = self._argv()
-        prompt_at = argv.index(PROMPT)
+        prompt_at = argv.index(self.prompt)
         for flag in ("--dir", "--agent", "--format", "--title"):
             self.assertLess(argv.index(flag), prompt_at, flag)
 
