@@ -1943,3 +1943,23 @@ Indenting is not the fix. The real envelope re-serialised with `indent=1` is the
 - [x] Reinstall, commit & push
 
 **Done when:** `advance` takes a book from a brief to its editions without a human typing a recovery command, and the only thing that stops it is a question only a person can answer.
+
+## A claim the provider accepted and never finished is invisible: nothing calls `recover_run` ✅
+
+**Status: ✅ Done — 2026-08-27**
+
+**Problem:** `recover_before_dispatch` orphans a stale attempt only when the provider never accepted it, which is right — an accepted call may have completed and charged, so it cannot be silently retried. But the accepted case then has no handler at all: `recover_run`, which converts an accepted attempt whose lease expired into `outcome_unknown` and blocks the run, is **defined and called from nowhere in the codebase**. So such an attempt stays `running` for ever, its task never enters the ready frontier, and the next command answers `Task is not ready` — the one failure that must reach a person is the one that reaches nobody.
+
+Live on Margherita: `ATT-0078` is `running`, `provider_accepted: true`, lease expired **169 minutes** ago, and the driver would report an unhelpful readiness error instead of naming the decision.
+
+**Fix:** `recover_before_dispatch` calls `recover_run` first. A never-accepted stale attempt goes back to `pending` as it does today; an accepted one becomes `outcome_unknown`, the run blocks, and `advance` halts naming the task and the command that resolves it.
+
+**Tasks:**
+- [x] `recover_before_dispatch` delegates stale-claim handling to `recover_run`
+- [x] Test: an accepted stale claim becomes `outcome_unknown` and the run blocks
+- [x] Test: a never-accepted stale claim still returns to `pending`
+- [x] Test: `advance` halts on it naming the task and `resume --resolve-unknown`
+- [x] Suite green: 257 passed, 23 subtests (era 254)
+- [x] Reinstall, commit & push
+
+**Done when:** The only failure a person must judge is the only one that stops the driver, and it says so by name.

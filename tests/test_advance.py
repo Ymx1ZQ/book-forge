@@ -182,6 +182,53 @@ class RecoveryTests(AdvanceFixture):
         self.assertIn("DRAFT-Z", state["needs_a_person"])
         self.assertEqual(self.task("DRAFT-Z")["state"], "blocked")
 
+    def test_a_claim_the_provider_accepted_and_never_finished_becomes_a_decision(self):
+        self.bf.add_task(self.project, "DRAFT-A", "writer", deps=[], priority=50, outputs=[])
+        plan = self.plan()
+        next(row for row in plan["tasks"] if row["id"] == "DRAFT-A")["state"] = "running"
+        plan["attempts"].append({
+            "id": "ATT-9101", "task": "DRAFT-A", "role": "writer", "state": "running",
+            "provider_accepted": True, "lease_expires_at": 1.0, "run": "RUN-0001",
+        })
+        self.bf._save_plan(self.project, plan)
+
+        state = self.bf.recover_before_dispatch(self.project)
+
+        self.assertIn("DRAFT-A", state["needs_a_person"])
+        self.assertEqual(self.task("DRAFT-A")["state"], "outcome_unknown")
+
+    def test_a_claim_the_provider_never_accepted_just_goes_back_to_pending(self):
+        self.bf.add_task(self.project, "DRAFT-B", "writer", deps=[], priority=50, outputs=[])
+        plan = self.plan()
+        next(row for row in plan["tasks"] if row["id"] == "DRAFT-B")["state"] = "running"
+        plan["attempts"].append({
+            "id": "ATT-9102", "task": "DRAFT-B", "role": "writer", "state": "running",
+            "provider_accepted": False, "lease_expires_at": 1.0, "run": "RUN-0001",
+        })
+        self.bf._save_plan(self.project, plan)
+
+        state = self.bf.recover_before_dispatch(self.project)
+
+        self.assertIn("DRAFT-B", state["recovered"])
+        self.assertEqual(state["needs_a_person"], [])
+        self.assertEqual(self.task("DRAFT-B")["state"], "pending")
+
+    def test_the_driver_halts_on_a_stale_accepted_claim_and_names_the_resolution(self):
+        self.bf.add_task(self.project, "DRAFT-C", "writer", deps=[], priority=50, outputs=[])
+        plan = self.plan()
+        next(row for row in plan["tasks"] if row["id"] == "DRAFT-C")["state"] = "running"
+        plan["attempts"].append({
+            "id": "ATT-9103", "task": "DRAFT-C", "role": "writer", "state": "running",
+            "provider_accepted": True, "lease_expires_at": 1.0, "run": "RUN-0001",
+        })
+        self.bf._save_plan(self.project, plan)
+
+        with self.assertRaises(self.bf.AdvanceHalted) as caught:
+            self.bf.advance_book(self.project, self.book, until="chapters", provider=ScriptedProvider(self.bf))
+
+        self.assertIn("DRAFT-C", str(caught.exception))
+        self.assertIn("resolve-unknown", str(caught.exception))
+
     def test_the_driver_halts_and_says_who_must_decide(self):
         self.bf.add_task(self.project, "DRAFT-W", "writer", deps=[], priority=50, outputs=[])
         plan = self.plan()

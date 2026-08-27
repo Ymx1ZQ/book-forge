@@ -1332,8 +1332,15 @@ def recover_before_dispatch(project: Path | str, *, task_id: str | None = None, 
     An `outcome_unknown` anywhere is left exactly as it is.
     """
     root = _project_root(project)
+    # A stale claim splits in two, and only `recover_run` knows the difference: an
+    # attempt the provider never accepted goes back to pending, while one it did
+    # accept becomes outcome_unknown and blocks the run, because a retry may pay for
+    # a call that already completed. Without this the accepted case sat `running` for
+    # ever and the next command answered `Task is not ready` — the one failure a
+    # person must judge was the one nobody was told about.
+    stale = recover_run(root, now=now)
     plan = _load_plan(root)
-    changed = _orphan_stale_attempts(plan)
+    changed = False
     recovered: list[str] = []
     exhausted: list[dict[str, object]] = []
     blocked = [row for row in plan["tasks"] if row.get("state") == "blocked"]
@@ -1366,7 +1373,16 @@ def recover_before_dispatch(project: Path | str, *, task_id: str | None = None, 
             run["state"] = "running"
             run["desired_state"] = "running"
             _write_json(run_path, run)
-    return {"recovered": recovered, "exhausted": exhausted, "needs_a_person": _task_needs_a_person(plan)}
+    return {
+        "recovered": sorted(set(recovered) | set(_task_of(plan, stale["orphaned"]))),
+        "exhausted": exhausted,
+        "needs_a_person": _task_needs_a_person(plan),
+    }
+
+
+def _task_of(plan: dict[str, object], attempt_ids: list[str]) -> list[str]:
+    index = {str(row["id"]): str(row.get("task", "")) for row in plan.get("attempts", [])}
+    return [index[value] for value in attempt_ids if index.get(value)]
 
 
 def claim_task(
