@@ -212,5 +212,49 @@ class EraAsCanonTests(unittest.TestCase):
         self.assertIn("everyone has a phone", blob)
 
 
+
+class AuditPayloadTests(unittest.TestCase):
+    """A forty-chapter proposal made the auditor spend its whole ceiling thinking:
+    input 41478 tokens, reasoning 32000, output 0."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.proposal = {
+            "premise": "p", "arc": ["a", "b", "c"], "entry_state": {}, "exit_boundary": {},
+            "chapters": [{
+                "id": "CH-0001", "order": 1, "title": "T", "pov": "CHR-0001",
+                "summary": "She visits the grave.", "beats": ["a long staged beat " * 20],
+                "plants": ["the grave holds a man"], "reveals": ["the man is his father"],
+                "imports": ["UNI-0001#kernel", "CHR-0001#voice", "PLC-0001#summary"],
+                "obligations": [], "pivotal": None, "target_words": 2000,
+            }],
+        }
+
+    def test_the_audit_reads_what_a_continuity_audit_needs(self):
+        chapter = self.bf._audit_proposal(self.proposal)["chapters"][0]
+        for kept in ("id", "order", "title", "pov", "summary", "plants", "reveals", "obligations"):
+            self.assertIn(kept, chapter, kept)
+
+    def test_the_audit_is_not_handed_the_staging_or_the_wiring(self):
+        chapter = self.bf._audit_proposal(self.proposal)["chapters"][0]
+        self.assertNotIn("beats", chapter)
+        self.assertNotIn("imports", chapter)
+
+    def test_the_spine_of_the_book_is_untouched(self):
+        trimmed = self.bf._audit_proposal(self.proposal)
+        self.assertEqual(trimmed["premise"], "p")
+        self.assertEqual(trimmed["arc"], ["a", "b", "c"])
+
+    def test_it_shrinks_the_payload(self):
+        import json
+        before = len(json.dumps(self.proposal))
+        after = len(json.dumps(self.bf._audit_proposal(self.proposal)))
+        self.assertLess(after, before // 2)
+
+    def test_the_auditor_is_told_what_it_is_reading(self):
+        prompt = (PROMPTS / "canon-auditor.md").read_text()
+        self.assertIn("deliberately not its beats or its imports", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4824,7 +4824,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     audit = _design_audit_record(
         root,
         f"AUDIT-{book_id}",
-        {"scope": "book", "book": book_id, "proposal": proposal},
+        {"scope": "book", "book": book_id, "proposal": _audit_proposal(proposal)},
         imports,
         runner,
         f"books/{book_id}/design-audit.json",
@@ -4856,6 +4856,28 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     arts = list(_book_design_outputs(root, book_id, proposal).keys()) + [f"books/{book_id}/design-audit.json"]
     _log_summary(arts)
     return {**audit, "calls": 2}
+
+
+AUDIT_CHAPTER_DROP = ("imports", "beats")
+
+
+def _audit_proposal(proposal: dict[str, object]) -> dict[str, object]:
+    """What a continuity audit reads, and nothing else.
+
+    A forty-chapter proposal made the auditor spend its whole ceiling thinking:
+    input 41478 tokens, reasoning 32000, output 0. Measured field by field, the
+    chapters were beats 34694 bytes, plants 17232, imports 12034, reveals 10924.
+    Imports go because `validate_book_design` already owns them; beats go because
+    they are the staging, and a contradiction between chapters lives in what each
+    one plants, reveals and promises. An auditor that answers catches more than one
+    that runs out of room.
+    """
+    chapters = [
+        {key: value for key, value in chapter.items() if key not in AUDIT_CHAPTER_DROP}
+        for chapter in proposal.get("chapters", [])
+        if isinstance(chapter, dict)
+    ]
+    return {**proposal, "chapters": chapters}
 
 
 MAX_DESIGN_REPAIR_ROUNDS = 2
@@ -4930,7 +4952,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         audit = _design_audit_record(
             root,
             f"AUDIT-{book_id}",
-            {"scope": "book", "book": book_id, "proposal": proposal},
+            {"scope": "book", "book": book_id, "proposal": _audit_proposal(proposal)},
             imports,
             runner,
             f"books/{book_id}/design-audit.json",

@@ -2485,3 +2485,22 @@ Validation demanded a name the designer had no way to learn. And the repair hint
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** Every block the validator can demand is a block the designer was shown.
+
+## The canon audit thinks for thirty-two thousand tokens and says nothing ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the independent audit of a finished forty-chapter design returned an empty answer. Its receipt: input 41478 tokens, **reasoning 32000, output 0**, finish `length`. It spent the whole ceiling thinking and never wrote a word, so a design that was otherwise ready could not be cleared.
+
+The envelope is 113262 bytes and 91639 of it is the proposal. Inside the chapters, measured field by field: `beats` 34694, `plants` 17232, **`imports` 12034**, `reveals` 10924, `summary` 6072. The auditor is handed every block id every chapter imports — fourteen percent of the payload — and has no use for them: `validate_book_design` already checks imports mechanically and refuses the ones that resolve to nothing.
+
+**Fix:** the audit receives what a continuity audit reads. `imports` goes, because another check owns it. `beats` go, because they are the staging and a contradiction between chapters lives in what each one plants, reveals and promises — the grave that changes occupant is visible in the plants, not in the blocking. That is a 56% cut, from 83010 bytes of chapters to about 36000, and an auditor that answers catches more than one that thinks until it runs out.
+
+**Tasks:**
+- [x] The book audit payload drops `imports` and `beats`
+- [x] `canon-auditor.md` says what it is reading and what it is not
+- [x] Test: the audit capsule keeps plants, reveals and summaries and drops the rest
+- [x] Test: the universe audit is unchanged
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** The audit has room to answer.

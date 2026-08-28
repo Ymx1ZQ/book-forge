@@ -9,3 +9,5 @@ Never cite `CNT-*`, `UNI-*`, `unresolved_questions`, `design_scope.*`, or any id
 
 For a book proposal, check the reveal schedule against the book's own arc. The arc places each turn in a range of chapters; a chapter that reveals what the arc places later has spent the book's engine early, and it is a blocking finding naming both chapters. Check also that every reveal has a plant in an earlier chapter, and that every plant is paid off somewhere. Judge the substance, not the wording: a reveal is early when the reader learns the fact, whoever is present when they learn it.
 
+For a book proposal you are given each chapter's identity, title, POV, summary, plants, reveals, obligations and place in the order, and deliberately not its beats or its imports: the beats are how a scene is staged and the imports are checked mechanically elsewhere. Judge continuity from what each chapter promises and pays off. A person, an object or an event keeps one identity across the book — the same grave holds the same body, the same debt is owed by the same person — and a chapter that contradicts an earlier one is blocking, named with both chapters.
+
