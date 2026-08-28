@@ -2504,3 +2504,22 @@ The envelope is 113262 bytes and 91639 of it is the proposal. Inside the chapter
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** The audit has room to answer.
+
+## The design counts as done before it has been audited ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** `advance --until design` ran on a book whose outline and forty contracts existed and whose `AUDIT-BOOK-0001` was still `pending`, and reported `stages none` — it did nothing at all, because `_advance_needs_design` reads the outline and the contracts on disk and asks nothing about the audit. The audit had never produced a record, so the book could never be cleared by running the stage that owns it.
+
+The receipt beside it was worse: `design_audit: {"state": null, "blocking": 0}` and **`ready_to_write: true`**. Readiness was taught to respect a blocking audit and still treats an audit that never ran as an audit with nothing to say. A book was declared ready to write on the strength of a check that had not happened.
+
+**Fix:** the design stage is unfinished while its audit task has not succeeded, and a book with no audit record is not ready to write. An absent verdict is not a clean one.
+
+**Tasks:**
+- [x] `_advance_needs_design` requires the audit task to have succeeded
+- [x] `_advance_receipt` refuses readiness without an audit record
+- [x] Test: contracts present and audit pending still runs the design stage
+- [x] Test: a book with no audit record is not ready to write
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** A check that never ran cannot pass.

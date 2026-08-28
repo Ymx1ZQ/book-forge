@@ -93,7 +93,7 @@ class AdvanceReceiptTests(unittest.TestCase):
         )
         receipt = self.bf._advance_receipt(self.root, self.book)
         self.assertFalse(receipt["ready_to_write"])
-        self.assertEqual(receipt["design_audit"], {"state": "blocked", "blocking": 1})
+        self.assertEqual(receipt["design_audit"], {"state": "blocked", "blocking": 1, "ran": True})
         self.assertEqual([row["id"] for row in receipt["blocked_by"]], ["F-0001"])
 
     def test_warnings_alone_do_not_hold_the_book_back(self):
@@ -125,6 +125,9 @@ class AdvanceReceiptTests(unittest.TestCase):
         plan = self.bf._load_plan(self.root)
         next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{self.book}")["state"] = "succeeded"
         self.bf._save_plan(self.root, plan)
+        # An absent verdict is not a clean one, so readiness needs the record.
+        self.bf._write_json(self.root / "books" / self.book / "design-audit.json",
+                            {"schema": 1, "state": "design_clean", "findings": []})
 
         receipt = self.bf._advance_receipt(self.root, self.book)
 
@@ -227,6 +230,56 @@ class LeaseRenewalTests(unittest.TestCase):
     def test_the_renewal_never_shortens_a_lease(self):
         self.bf.mark_provider_accepted(self.project, str(self.claim["attempt"]), "ses-1", now=1.0)
         self.assertGreater(float(self.attempt()["lease_expires_at"]), 1000.0)
+
+
+
+class UnauditedDesignTests(unittest.TestCase):
+    """A book with forty contracts and a pending audit reported "stages none" and was
+    called ready to write on the strength of a check that had never run."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        self.root = self.bf._project_root(self.project)
+        chapters = [{"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["b"], "target_words": 900}]
+        self.bf._write_json(self.root / "books" / self.book / "outline.yaml", {"schema": 1, "chapters": chapters})
+        self.bf._write_json(self.root / "books" / self.book / "chapters" / "CH-0001.json", chapters[0])
+        for task_id, role in ((f"DESIGN-{self.book}", "designer"), (f"AUDIT-{self.book}", "canon-auditor")):
+            self.bf.add_task(self.project, task_id, role, deps=[], priority=50, outputs=[])
+        self.set_state(f"DESIGN-{self.book}", "succeeded")
+
+    def set_state(self, task_id, state):
+        plan = self.bf._load_plan(self.root)
+        next(row for row in plan["tasks"] if row["id"] == task_id)["state"] = state
+        self.bf._save_plan(self.root, plan)
+
+    def audit_record(self, findings):
+        self.bf._write_json(self.root / "books" / self.book / "design-audit.json",
+                            {"schema": 1, "state": "design_clean" if not findings else "blocked", "findings": findings})
+
+    def test_contracts_on_disk_with_a_pending_audit_still_need_the_design_stage(self):
+        self.assertTrue(self.bf._advance_needs_design(self.root, self.book))
+
+    def test_a_succeeded_audit_finishes_the_stage(self):
+        self.set_state(f"AUDIT-{self.book}", "succeeded")
+        self.assertFalse(self.bf._advance_needs_design(self.root, self.book))
+
+    def test_a_book_with_no_audit_record_is_not_ready_to_write(self):
+        self.set_state(f"AUDIT-{self.book}", "succeeded")
+        receipt = self.bf._advance_receipt(self.root, self.book)
+        self.assertFalse(receipt["ready_to_write"])
+        self.assertFalse(receipt["design_audit"]["ran"])
+
+    def test_a_clean_audit_record_makes_it_ready(self):
+        self.set_state(f"AUDIT-{self.book}", "succeeded")
+        self.audit_record([])
+        receipt = self.bf._advance_receipt(self.root, self.book)
+        self.assertTrue(receipt["ready_to_write"])
+        self.assertTrue(receipt["design_audit"]["ran"])
 
 
 if __name__ == "__main__":

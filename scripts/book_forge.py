@@ -5658,7 +5658,13 @@ def _advance_needs_design(root: Path, book_id: str) -> bool:
         return True
     if not _read_json(outline).get("chapters"):
         return True
-    return not any((root / "books" / book_id / "chapters").glob("CH-*.json"))
+    if not any((root / "books" / book_id / "chapters").glob("CH-*.json")):
+        return True
+    # Contracts on disk are not a finished design. A book whose audit has never
+    # succeeded reported "stages none" and did nothing, so the check that clears it
+    # could never be reached by the stage that owns it.
+    states = {str(task["id"]): str(task["state"]) for task in _load_plan(root)["tasks"]}
+    return states.get(f"AUDIT-{book_id}") != "succeeded"
 
 
 def advance_book(
@@ -5779,7 +5785,7 @@ def _advance_receipt(root: Path, book_id: str) -> dict[str, object]:
     audit_path = book / "design-audit.json"
     audit = _read_json(audit_path) if audit_path.is_file() else {}
     blocking = [row for row in audit.get("findings", []) if row.get("severity") == "blocking"]
-    receipt["design_audit"] = {"state": audit.get("state"), "blocking": len(blocking)}
+    receipt["design_audit"] = {"state": audit.get("state"), "blocking": len(blocking), "ran": audit_path.is_file()}
     # Contracts on disk are not readiness. The independent audit reads the design
     # against canon, and a blocking finding there means the book would be written
     # around a contradiction.
@@ -5787,6 +5793,9 @@ def _advance_receipt(root: Path, book_id: str) -> dict[str, object]:
         receipt["outline_chapters"]
         and receipt["chapter_contracts"] == receipt["outline_chapters"]
         and states.get(f"DESIGN-{book_id}") == "succeeded"
+        # An absent verdict is not a clean one: a book was reported ready to write on
+        # the strength of an audit that had never run.
+        and audit_path.is_file()
         and not blocking
     )
     if blocking:
