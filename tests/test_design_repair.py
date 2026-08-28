@@ -196,8 +196,9 @@ class PromotedDesignRepairTests(unittest.TestCase):
     def test_the_repair_writes_beside_its_telemetry_not_in_a_design_attempt(self):
         self.resume(RepairProvider(self.bf))
         round_dir = self.project / ".book-forge" / "repairs" / self.book / "round-1"
-        self.assertTrue((round_dir / "envelope-repair.json").is_file())
-        self.assertTrue((round_dir / "raw-repair.txt").is_file())
+        self.assertTrue(list(round_dir.glob("envelope-repair-*.json")))
+        self.assertTrue(list(round_dir.glob("raw-repair-*.txt")))
+        self.assertTrue((round_dir / "repair-telemetry.json").is_file())
 
 
 class BlockedRecordTests(unittest.TestCase):
@@ -235,3 +236,89 @@ class BlockedRecordTests(unittest.TestCase):
         result = self.run_design(again)
         self.assertEqual(result["calls"], 0)
         self.assertEqual(again.calls, [])
+
+
+class SlicedRepairTests(unittest.TestCase):
+    """One call asking for ten rewritten contracts against a 34473-token envelope
+    came back empty, and the engine read the empty answer as "nothing to repair"."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+
+    def wide_finding(self, ids):
+        return {**FINDING, "repair_scope": list(ids)}
+
+    def test_ten_named_chapters_are_not_asked_for_in_one_call(self):
+        self.assertEqual(
+            [chunk["ids"] for chunk in self.bf._repair_slices([f"CH-{i:04d}" for i in range(1, 11)])],
+            [["CH-0001", "CH-0002", "CH-0003", "CH-0004"], ["CH-0005", "CH-0006", "CH-0007", "CH-0008"], ["CH-0009", "CH-0010"]],
+        )
+
+    def test_a_slice_halves_down_to_one_chapter_and_no_further(self):
+        halves = self.bf._halve_repair_slice(self.bf._repair_chunk(["CH-0001", "CH-0002", "CH-0003", "CH-0004"]))
+        self.assertEqual([h["ids"] for h in halves], [["CH-0001", "CH-0002"], ["CH-0003", "CH-0004"]])
+        self.assertEqual(self.bf._halve_repair_slice(self.bf._repair_chunk(["CH-0001"])), [])
+
+    def test_a_slice_carries_only_the_findings_that_name_it(self):
+        provider = RepairProvider(self.bf, audits=[[
+            {**FINDING, "id": "F-A", "repair_scope": ["CH-0002"]},
+            {**FINDING, "id": "F-B", "repair_scope": ["CH-0005"]},
+        ]])
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        # The audit namespaces a finding by the pass that raised it, so match the tail.
+        seen = {tuple(c["repair"]["rewrite_only"]): sorted(str(f["id"]).rsplit("-", 1)[-1] for f in c["repair"]["findings"]) for c in provider.repair_capsules}
+        self.assertEqual(seen, {("CH-0002", "CH-0005"): ["A", "B"]})
+
+    def test_a_wide_scope_splits_and_each_call_sees_only_its_own_findings(self):
+        scope = [f"CH-{i:04d}" for i in (1, 2, 3, 4, 5, 6)]
+        provider = RepairProvider(self.bf, audits=[[
+            {**FINDING, "id": "F-EARLY", "repair_scope": scope[:4]},
+            {**FINDING, "id": "F-LATE", "repair_scope": scope[4:]},
+        ]])
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        calls = [(tuple(c["repair"]["rewrite_only"]), sorted(str(f["id"]).rsplit("-", 1)[-1] for f in c["repair"]["findings"])) for c in provider.repair_capsules]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], (("CH-0001", "CH-0002", "CH-0003", "CH-0004"), ["EARLY"]))
+        self.assertEqual(calls[1], (("CH-0005", "CH-0006"), ["LATE"]))
+
+    def test_a_truncated_slice_is_asked_again_smaller(self):
+        provider = RepairProvider(self.bf, audits=[[self.wide_finding(["CH-0002", "CH-0003", "CH-0004", "CH-0005"])]])
+        original = provider.__call__
+        state = {"refused": 0}
+
+        def limited(role, envelope, attempt_dir):
+            chunk = envelope["payload"]["task"].get("chunk") or {}
+            if chunk.get("category") == "repair" and len(envelope["payload"]["task"]["repair"]["rewrite_only"]) > 2:
+                state["refused"] += 1
+                provider.repair_capsules.append(envelope["payload"]["task"])
+                return {**provider._ok(envelope, {}, "designer"), "text": '{"chapters":[{"id":"CH-0002"', "finish": "length"}
+            return original(role, envelope, attempt_dir)
+
+        self.bf.execute_book_design(self.project, self.book, provider=limited, no_chorus=True, no_post_chorus=True)
+        self.assertEqual(state["refused"], 1)
+        widths = [len(c["repair"]["rewrite_only"]) for c in provider.repair_capsules]
+        self.assertEqual(widths, [4, 2, 2])
+        repaired = json.loads((self.project / f"books/{self.book}/chapters/CH-0005.json").read_text())
+        self.assertIn("the drowned girl", repaired["beats"][0])
+
+    def test_a_repair_that_cannot_be_delivered_is_an_error_not_a_clean_return(self):
+        provider = RepairProvider(self.bf)
+        original = provider.__call__
+
+        def always_truncate(role, envelope, attempt_dir):
+            chunk = envelope["payload"]["task"].get("chunk") or {}
+            if chunk.get("category") == "repair":
+                return {**provider._ok(envelope, {}, "designer"), "text": "", "finish": "length"}
+            return original(role, envelope, attempt_dir)
+
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.execute_book_design(self.project, self.book, provider=always_truncate, no_chorus=True, no_post_chorus=True)
+        self.assertIn("produced no usable answer", str(caught.exception))

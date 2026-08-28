@@ -2665,3 +2665,35 @@ It stopped because of which path it was on. `execute_book_design` audits with `r
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** Reaching the audit late does not cost the book its repair.
+
+## The repair asks for ten chapters in one answer, gets none, and says nothing 🔄
+
+**Status: 🔄 In corso — 2026-08-28**
+
+**Problem:** the repair round finally ran on a real blocked design and produced an empty file. `raw-repair.txt` is 0 bytes. The call carried an envelope of 34473 tokens — the whole designer capsule, the spine, a digest of the thirty chapters not being touched, ten full chapter contracts and the findings — and asked for ten rewritten contracts back. It is the shape that has failed at every other size in this engine, and it failed here.
+
+What the engine did with that is worse than the failure. A truncated answer is caught and discarded:
+
+```
+except BookForgeError:
+    return proposal, audit
+```
+
+No log line, no retry, no second round. From the outside it is indistinguishable from a repair that looked at the findings and decided nothing needed changing, and the caller then raises the audit's blocking findings as if the repair had been given its two rounds. It was given none.
+
+There is a second cost above it. On the resume path the engine re-audits the whole book before repairing, although a blocking verdict is already on disk. That is eleven calls to rediscover what we know — and because the auditor is not deterministic, it rediscovers a *different* list each time: one run named CH-0019, CH-0024, CH-0025, CH-0026, CH-0028; the next named CH-0009, CH-0011, CH-0016, CH-0018, CH-0028, CH-0030, CH-0031, CH-0032, CH-0035, CH-0040. A repair aimed at a target that moves between rounds cannot converge.
+
+**Fix:** the repair is sliced like everything else in this engine. Chapters are rewritten a few at a time, each call carrying only the findings that name them, and a slice that comes back truncated is halved and asked again — the machinery `_halve_chunk` already provides. A slice that cannot be halved further fails loudly with what it was asked for, instead of returning as though it had nothing to do. And a run that already holds a blocking verdict repairs from it first and audits afterwards, so the round works against a fixed list and the eleven-call rediscovery is paid once, at the end, to check the work.
+
+**Tasks:**
+- [x] `_repair_blocked_design` rewrites in slices of `REPAIR_SLICE_SIZE` chapters
+- [x] Each slice carries only the findings naming its chapters
+- [x] A truncated slice is halved; one that cannot be halved raises with the slice named
+- [x] The resume path repairs from the stored verdict before re-auditing
+- [x] Test: ten named chapters become several calls, not one
+- [x] Test: a truncated slice is retried smaller, not silently dropped
+- [x] Test: a repair that produces nothing at all is an error, not a clean return
+- [x] Suite green: 418 passed, 23 subtests (era 412). Reinstall, commit & push
+- [ ] Margherita's design clears and the first three chapters are written
+
+**Done when:** A repair that could not be delivered says so.
