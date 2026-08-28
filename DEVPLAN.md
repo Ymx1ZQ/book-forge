@@ -2566,7 +2566,7 @@ The role's pin is: `canon-auditor` at variant **max**, with an output allowance 
 
 ## The audit is one question over forty chapters, and only a tenth of it fits 🔄
 
-**Status: 🔄 In corso — 2026-08-28**
+**Status: 🔄 In corso — 2026-08-28** (codice fatto; resta la corsa su margherita)
 
 **Problem:** the book audit has now returned an empty answer five times. Three measurements on the same design settle what is actually binding. Forty chapters with the whole proposal: input 34822, reasoning 32000, output 0. Forty chapters with `beats` and `imports` removed: input 18079, reasoning 32000, output 0. Ten chapters: input 10763, reasoning 27237, **output 917 and findings that name real defects** — it caught CH-0009 spending the book's engine ahead of the arc. The task is too large to answer in one call, and the threshold sits between eleven and eighteen thousand tokens of input.
 
@@ -2592,3 +2592,47 @@ Two entries above this one recorded conclusions this contradicts, and both need 
 - [ ] Margherita's audit clears, and the first three chapters are written
 
 **Done when:** The auditor is asked a question it can finish answering.
+
+## Every model call boots ten MCP servers, and one of them stopped the run for two hours ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** an audit pass launched at 18:42 was still running at 20:41 and had produced no provider event at all — not even `step_start`. The process tree says why. Each `opencode run` spawns the ten MCP servers declared in the operator's `~/.config/opencode/opencode.json` — airtable, gmail twice, drive, linkedin, notebooklm, trello and three local ones — and waits for them before it opens a session. One of them is installed as `uvx <package>@latest`, which resolves the package over the network on every launch. The run was blocked in that wait.
+
+`--pure` does not cover this: it disables external plugins and leaves MCP servers alone. Every book-forge role builds its envelope with `tools=[]` and never calls a tool, so all ten are cost with no use — and, given they are started once per call, the likeliest explanation for the session failures and the `systemd-oomd` kills already seen on this machine.
+
+The second half is that nothing bounded the wait. `run_opencode_role` calls `subprocess.run` three times — `debug agent`, `run`, `export` — and none of them passes a timeout, so a provider call that never answers holds the driver until a person notices. It held this one for two hours, and the monitor's report of "stalled 15 minutes" was the only sign.
+
+**Fix:** book-forge runs opencode against a config derived from the operator's with the `mcp` block removed, so the roles get the model pin, the provider and the permissions and none of the servers. And every opencode subprocess gets a wall-clock timeout. On expiry the child's process group is killed rather than the child alone, and what was captured before the timeout decides how it is reported: a session id already on the wire means the provider accepted the call and the outcome is genuinely unknown, no session id means nothing was accepted and the attempt is retryable.
+
+Measured while diagnosing: the same pass that hung for two hours answered in 250 seconds with the MCP servers gone.
+
+**Tasks:**
+- [x] `_opencode_environment` derives a config without `mcp`, from `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR` / the default path
+- [x] All three opencode subprocesses use it
+- [x] A wall-clock timeout on each, killing the process group
+- [x] A timeout with a session id is `ProviderOutcomeUnknown`, without one is retryable
+- [x] Test: the derived config keeps the provider pin and drops the servers
+- [x] Test: a call that never answers fails instead of hanging, and its whole process group goes
+- [x] Test: a timeout after acceptance does not silently retry
+- [x] The argv and wire tests intercept `_run_opencode_process`, not `subprocess.run` — patched at the old target they were invoking the real CLI, which is why the suite took ten minutes
+- [x] Suite green: 401 passed, 23 subtests (era 385). Reinstall, commit & push
+
+**Done when:** A model call that never answers costs minutes, not an evening.
+
+## Ten chapters is still too much for one audit pass ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the sliced audit shipped with `BOOK_AUDIT_SLICE_SIZE = 10`, chosen from a probe where ten chapters answered at 10763 tokens of input. In production both ten-chapter windows failed the same way the whole book did — `window-1-10` returned zero bytes, `window-11-20` came back `length` with reasoning 31999 and output 0 at 9508 tokens of input — and only the five-chapter halves answered, at 7638 tokens with 16816 of reasoning. The halving recovers it, but it pays a failed call for every window before it does.
+
+The probe that set the number was run on an envelope that still carried the beats, which made it larger, not smaller, than what production sends. So the number was not conservative; it was drawn from a different distribution.
+
+**Fix:** the first request is the size that answers. Five chapters per window.
+
+**Tasks:**
+- [x] `BOOK_AUDIT_SLICE_SIZE` 10 → 5
+- [x] Tests follow the new width
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** The common case does not begin with a call that cannot succeed.

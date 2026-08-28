@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1158,6 +1159,117 @@ def migrate_project(project: Path | str, mode: str, *, fault_hook=None) -> dict[
         _write_json(migration / "journal.json", journal)
         raise
     return {**report, "migration": migration_id}
+
+
+# A model call that never answers used to hold the driver until a person noticed;
+# one held it for two hours. Every opencode subprocess now runs under a clock.
+OPENCODE_CALL_TIMEOUT = 900.0
+OPENCODE_PROBE_TIMEOUT = 120.0
+_OPENCODE_CONFIG_CACHE: dict[str, str] = {}
+
+
+class OpencodeTimeout(BookForgeError):
+    """An opencode subprocess passed its wall clock and was killed."""
+
+    def __init__(self, what: str, timeout: float, stdout: str, stderr: str):
+        super().__init__(f"OpenCode {what} produced no result in {int(timeout)}s")
+        self.what = what
+        self.timeout = timeout
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _opencode_config_source() -> Path | None:
+    """The config file opencode would read on its own."""
+    explicit = os.environ.get("OPENCODE_CONFIG")
+    if explicit:
+        candidate = Path(explicit)
+        return candidate if candidate.is_file() else None
+    directory = os.environ.get("OPENCODE_CONFIG_DIR")
+    base = Path(directory) if directory else Path.home() / ".config" / "opencode"
+    for name in ("opencode.json", "opencode.jsonc", "config.json"):
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _opencode_environment() -> dict[str, str]:
+    """The environment every opencode subprocess runs in.
+
+    Two things are taken out. The provider key, so a role cannot reach OpenRouter
+    outside its pin. And the operator's MCP servers: opencode starts every server
+    the config declares and waits for all of them before it opens a session, which
+    `--pure` does not change — that flag disables plugins, not servers. A run stalled
+    for two hours in that wait, on a server installed as `uvx <package>@latest` which
+    resolves the package over the network at every launch. Ten of them started per
+    call, and every book-forge role builds its envelope with no tools and calls none,
+    so they were cost and risk with no use. Everything else the operator wrote — the
+    provider, the model pin, the permissions — is passed through untouched.
+    """
+    environment = dict(os.environ)
+    environment.pop("OPENROUTER_API_KEY", None)
+    source = _opencode_config_source()
+    if source is None:
+        return environment
+    cached = _OPENCODE_CONFIG_CACHE.get(str(source))
+    if cached is None or not Path(cached).is_file():
+        try:
+            config = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return environment
+        if not isinstance(config, dict):
+            return environment
+        config.pop("mcp", None)
+        target = Path(tempfile.gettempdir()) / f"book-forge-opencode-{_sha256_bytes(_json_bytes(config))[:16]}.json"
+        _write_bytes_atomic(target, _json_bytes(config))
+        cached = str(target)
+        _OPENCODE_CONFIG_CACHE[str(source)] = cached
+    environment["OPENCODE_CONFIG"] = cached
+    return environment
+
+
+def _run_opencode_process(argv: list[str], *, cwd: Path | str, env: dict[str, str], timeout: float, what: str) -> subprocess.CompletedProcess:
+    """Run one opencode subprocess, killing its whole group if the clock runs out.
+
+    The group and not the child: opencode is a supervisor, and killing it alone
+    leaves whatever it started running.
+    """
+    process = subprocess.Popen(
+        argv,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            process.kill()
+        stdout, stderr = process.communicate()
+        raise OpencodeTimeout(what, timeout, stdout or "", stderr or "")
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
+def _session_id_in(stream: str) -> str | None:
+    """The first session id opencode put on the wire, if it got that far."""
+    for line in (stream or "").splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("sessionID"):
+            return str(event["sessionID"])
+    return None
 
 
 def _opencode_binary() -> str:
@@ -3268,9 +3380,10 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
 # Chapters per book-design call. Small enough that a heavy reasoning burn still
 # leaves room for the slice's own output.
 BOOK_DESIGN_SLICE_SIZE = 8
-# Measured on a forty-chapter audit: 34822 tokens of input returned nothing, 18079
-# returned nothing, 10763 returned findings. Ten chapters is what fits.
-BOOK_AUDIT_SLICE_SIZE = 10
+# Measured in production, not on a probe: ten chapters failed at 9508 tokens of
+# input with reasoning 31999 and no output, and five answered at 7638 with 16816 of
+# reasoning. The first request has to be the size that answers.
+BOOK_AUDIT_SLICE_SIZE = 5
 
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
@@ -5499,13 +5612,16 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     root = _project_root_from(attempt_dir)
     binary = _opencode_binary()
     _verify_opencode_cli(binary)
-    resolved_result = subprocess.run(
+    environment = _opencode_environment()
+    resolved_result = _run_opencode_process(
         [binary, "--pure", "debug", "agent", role],
         cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
+        env=environment,
+        timeout=OPENCODE_PROBE_TIMEOUT,
+        what=f"agent probe for {role}",
     )
+    if resolved_result.returncode != 0:
+        raise BookForgeError(f"OpenCode could not resolve agent {role}: {resolved_result.stderr.strip()}")
     resolved = json.loads(resolved_result.stdout)
     resolved_model = resolved.get("model", {})
     expected_model_id, expected_variant = _expected_pin(role)
@@ -5522,8 +5638,6 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             f"{expected_variant}. The project's .opencode/agents are stale — run "
             "`book-forge runtime sync` to regenerate them"
         )
-    environment = dict(os.environ)
-    environment.pop("OPENROUTER_API_KEY", None)
     started = time.monotonic()
     envelope_path = attempt_dir / "envelope.json"
     _write_bytes_atomic(envelope_path, envelope["bytes"])
@@ -5533,8 +5647,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     for stale in attempt_dir.glob("envelope.wire.part*.json"):
         stale.unlink()
     wire_paths = _wire_attachments(json.loads(envelope["bytes"]), attempt_dir)
-    result = subprocess.run(
-        [
+    argv = [
             binary,
             "run",
             "--pure",
@@ -5553,14 +5666,21 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             WIRE_PROMPT,
             "--file",
             *[str(path) for path in wire_paths],
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=environment,
-        check=False,
-    )
+    ]
+    try:
+        result = _run_opencode_process(
+            argv, cwd=root, env=environment, timeout=OPENCODE_CALL_TIMEOUT, what=f"call for {role}"
+        )
+    except OpencodeTimeout as exc:
+        _write_bytes_atomic(attempt_dir / "provider-events.jsonl", exc.stdout.encode())
+        # Whether this costs money decides how it is reported. A session id on the
+        # wire means the provider accepted the call and a retry may pay for it twice,
+        # which is a judgement for a person. Nothing on the wire means nothing was
+        # accepted and the attempt can simply be tried again.
+        session_id = _session_id_in(exc.stdout)
+        if session_id:
+            raise ProviderOutcomeUnknown(session_id, str(exc)) from exc
+        raise BookForgeError(str(exc)) from exc
     _write_bytes_atomic(attempt_dir / "provider-events.jsonl", result.stdout.encode())
     events = []
     for line in result.stdout.splitlines():
@@ -5584,7 +5704,14 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     if raw_finish.get("reason") == "length":
         # still extract text/tokens but mark as length for caller retry
         pass
-    export = subprocess.run([binary, "export", session_id], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    try:
+        export = _run_opencode_process(
+            [binary, "export", session_id], cwd=root, env=environment, timeout=OPENCODE_PROBE_TIMEOUT, what="transcript export"
+        )
+    except OpencodeTimeout:
+        # The answer is already in hand; a transcript that will not come back is not
+        # worth losing it over.
+        export = subprocess.CompletedProcess([binary, "export", session_id], 1, "", "")
     receipt = None
     try:
         if export.returncode == 0:

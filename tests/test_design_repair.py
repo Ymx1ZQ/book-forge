@@ -54,6 +54,14 @@ class RepairProvider:
         self.calls.append(role)
         task = envelope["payload"]["task"]
         if role == "canon-auditor":
+            # A book longer than one window is audited in several passes, and the
+            # fixture's list is one verdict per round, not per call: the opening pass
+            # carries it and the rest of the round is clean.
+            scope = task["design_scope"]
+            rows = scope.get("proposal", {}).get("chapters", [])
+            opening = "pass" not in scope or ("book_digest" in scope and rows and int(rows[0].get("order") or 0) == 1)
+            if not opening:
+                return self._ok(envelope, {"findings": []}, role)
             findings = self.audits.pop(0) if self.audits else []
             return self._ok(envelope, {"findings": findings}, role)
         chunk = task.get("chunk") or {}

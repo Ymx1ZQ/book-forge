@@ -91,11 +91,17 @@ class PassBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
 
-    def test_forty_chapters_become_four_windows_and_one_schedule_pass(self):
+    def test_forty_chapters_become_eight_windows_and_one_schedule_pass(self):
         chunks = self.bf._book_audit_chunks(40)
         self.assertEqual([(c["category"], c["first_order"], c["last_order"]) for c in chunks], [
-            ("window", 1, 10), ("window", 11, 20), ("window", 21, 30), ("window", 31, 40), ("schedule", 1, 40),
+            ("window", 1, 5), ("window", 6, 10), ("window", 11, 15), ("window", 16, 20),
+            ("window", 21, 25), ("window", 26, 30), ("window", 31, 35), ("window", 36, 40),
+            ("schedule", 1, 40),
         ])
+
+    def test_the_window_is_the_width_production_answers_at(self):
+        """Ten chapters failed at 9508 tokens of input; five answered at 7638."""
+        self.assertEqual(self.bf.BOOK_AUDIT_SLICE_SIZE, 5)
 
     def test_a_book_with_no_chapters_asks_nothing(self):
         self.assertEqual(self.bf._book_audit_chunks(0), [])
@@ -119,15 +125,15 @@ class PassScopeTests(unittest.TestCase):
         }
 
     def test_a_window_reads_its_own_chapters_in_full(self):
-        sliced = self.bf._audit_chunk_scope(self.scope, {"category": "window", "part": "11-20", "first_order": 11, "last_order": 20})
+        sliced = self.bf._audit_chunk_scope(self.scope, {"category": "window", "part": "11-15", "first_order": 11, "last_order": 15})
         rows = sliced["proposal"]["chapters"]
-        self.assertEqual([row["order"] for row in rows], list(range(11, 21)))
+        self.assertEqual([row["order"] for row in rows], list(range(11, 16)))
         self.assertIn("summary", rows[0].keys() | {"summary"})
         self.assertIn("plants", rows[0])
         self.assertIn("reveals", rows[0])
 
     def test_a_window_sees_the_rest_of_the_book_one_line_at_a_time(self):
-        sliced = self.bf._audit_chunk_scope(self.scope, {"category": "window", "part": "1-10", "first_order": 1, "last_order": 10})
+        sliced = self.bf._audit_chunk_scope(self.scope, {"category": "window", "part": "1-5", "first_order": 1, "last_order": 5})
         digest = sliced["book_digest"]
         self.assertEqual(len(digest), 40)
         self.assertEqual(sorted(digest[0]), ["id", "order", "pov", "title"])
@@ -179,9 +185,9 @@ class SlicedAuditTests(AuditFixture):
         provider = AuditProvider(self.bf)
         result = self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(provider.calls.count("canon-auditor"), 5)
+        self.assertEqual(provider.calls.count("canon-auditor"), 9)
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
-        self.assertEqual(len(record["findings"]), 5)
+        self.assertEqual(len(record["findings"]), 9)
 
     def test_no_pass_is_handed_the_staging_or_the_wiring(self):
         provider = AuditProvider(self.bf)
@@ -198,10 +204,11 @@ class SlicedAuditTests(AuditFixture):
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
         ids = [row["id"] for row in record["findings"]]
         self.assertEqual(len(set(ids)), len(ids))
-        self.assertIn("A-window-1-10-F-001", ids)
+        self.assertIn("A-window-1-5-F-001", ids)
         self.assertIn("A-schedule-1-40-F-001", ids)
         self.assertEqual({row["pass"] for row in record["findings"]}, {
-            "window-1-10", "window-11-20", "window-21-30", "window-31-40", "schedule-1-40",
+            "window-1-5", "window-6-10", "window-11-15", "window-16-20",
+            "window-21-25", "window-26-30", "window-31-35", "window-36-40", "schedule-1-40",
         })
 
     def test_a_pass_that_returns_no_answer_is_asked_for_half_as_much(self):
@@ -214,7 +221,7 @@ class SlicedAuditTests(AuditFixture):
 
 class ShortBookTests(AuditFixture):
     def test_a_book_that_fits_is_still_one_call(self):
-        provider = AuditProvider(self.bf, chapter_count=6)
+        provider = AuditProvider(self.bf, chapter_count=4)
         self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(provider.calls.count("canon-auditor"), 1)
         self.assertNotIn("pass", provider.audit_scopes[0])
