@@ -183,3 +183,44 @@ class DeadDriverResumeTests(unittest.TestCase):
         with self.assertRaises(self.bf.BookForgeError) as caught:
             self.bf.resume_run(self.project, resolutions={})
         self.assertIn("pause", str(caught.exception))
+class LeaseRenewalTests(unittest.TestCase):
+    """One claim covers many calls: a design is a spine and five slices, twenty
+    minutes against a five-minute lease, and a working attempt looked abandoned."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.root = self.bf._project_root(self.project)
+        self.bf.add_task(self.project, "DESIGN-BOOK-0001", "designer", deps=[], priority=50, outputs=[])
+        self.claim = self.bf.claim_task(self.project, "DESIGN-BOOK-0001", request_hash="a" * 64)
+
+    def attempt(self):
+        plan = self.bf._load_plan(self.root)
+        return self.bf._attempt(plan, str(self.claim["attempt"]))
+
+    def test_an_answer_pushes_the_lease_past_its_original_end(self):
+        before = float(self.attempt()["lease_expires_at"])
+        self.bf.mark_provider_accepted(self.project, str(self.claim["attempt"]), "ses-1", now=before - 10)
+        self.assertGreater(float(self.attempt()["lease_expires_at"]), before)
+
+    def test_a_working_attempt_survives_recovery_past_the_first_lease(self):
+        original = float(self.attempt()["lease_expires_at"])
+        self.bf.mark_provider_accepted(self.project, str(self.claim["attempt"]), "ses-1", now=original - 5)
+        self.bf.recover_run(self.root, now=original + 60)
+        self.assertEqual(self.attempt()["state"], "running")
+
+    def test_an_attempt_that_goes_silent_is_still_recovered(self):
+        original = float(self.attempt()["lease_expires_at"])
+        self.bf.recover_run(self.root, now=original + 60)
+        self.assertEqual(self.attempt()["state"], "orphaned")
+
+    def test_the_renewal_never_shortens_a_lease(self):
+        self.bf.mark_provider_accepted(self.project, str(self.claim["attempt"]), "ses-1", now=1.0)
+        self.assertGreater(float(self.attempt()["lease_expires_at"]), 1000.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

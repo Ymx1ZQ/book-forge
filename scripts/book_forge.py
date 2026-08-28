@@ -1386,13 +1386,16 @@ def _task_of(plan: dict[str, object], attempt_ids: list[str]) -> list[str]:
     return [index[value] for value in attempt_ids if index.get(value)]
 
 
+LEASE_SECONDS = 300.0
+
+
 def claim_task(
     project: Path | str,
     task_id: str,
     *,
     request_hash: str,
     now: float | None = None,
-    lease_seconds: float = 300,
+    lease_seconds: float = LEASE_SECONDS,
 ) -> dict[str, object]:
     root = _project_root(project)
     current_time = time.time() if now is None else now
@@ -2165,7 +2168,15 @@ def mark_provider_accepted(
         raise BookForgeError("Only a running attempt can be marked accepted")
     attempt["provider_accepted"] = True
     attempt["session_id"] = session_id
-    attempt["accepted_at"] = time.time() if now is None else now
+    current = time.time() if now is None else now
+    attempt["accepted_at"] = current
+    # One claim can cover many calls — a design is a spine and five chapter slices,
+    # twenty minutes against a five-minute lease — and nothing else renews it. Past
+    # the fifth minute a working attempt looked abandoned, and any recovery running
+    # in that window converted live work into an unknown outcome and threw it away.
+    # A provider answering is the one moment the work is demonstrably alive.
+    attempt["heartbeat_at"] = current
+    attempt["lease_expires_at"] = max(float(attempt.get("lease_expires_at", 0.0)), current + LEASE_SECONDS)
     _save_plan(root, plan)
     intent = _attempt_dir(root, attempt) / "intent.json"
     value = _read_json(intent)

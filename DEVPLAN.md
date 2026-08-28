@@ -2425,3 +2425,21 @@ The seven fixes below are ordered: the first opens the pipe, and the rest are wo
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** A right answer is not refused for how it was addressed.
+
+## A twenty-minute job holds a five-minute lease ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** `_run_book_design_chunked` takes one claim and then makes six or more provider calls under it — a spine and five chapter slices. Measured on the live book, one spine call alone runs 150 to 220 seconds, and a whole design is around twenty minutes. The lease is **300 seconds** and nothing renews it.
+
+So from the fifth minute onward a healthy, working attempt is indistinguishable from an abandoned one. Any recovery that runs in that window — `advance`'s own guard before its next stage, a `status`, an operator looking in — converts a live call into `outcome_unknown` and blocks the run, and the work it was doing is thrown away and has to be paid for again. Several of tonight's unexplained unknown outcomes were this, including one I caused myself by checking on a run while it worked.
+
+**Fix:** the lease is renewed every time the provider answers. `mark_provider_accepted` already runs on each response and is the one moment the work is demonstrably alive, so renewal belongs there and covers every multi-call path at once — the design's slices, the pivotal variants, the translation repairs.
+
+**Tasks:**
+- [x] `mark_provider_accepted` extends the lease and the heartbeat
+- [x] Test: an attempt that answers stays out of reach of recovery past its original lease
+- [x] Test: an attempt that goes silent is still recovered
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** Work that is answering is not mistaken for work that has died.
