@@ -2466,3 +2466,22 @@ The cost was measured tonight: a CLI whose `--file` is a yargs array swallowed t
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** A CLI that cannot do what the engine needs says so, instead of failing as a missing file.
+
+## The designer is asked to import blocks it is never shown ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the new import rule blocked a design for a missing `CHR-0001#voice`, and the designer had done exactly what it could: it imported the POV character, the other characters in the scene, five places and two laws. Every one of them a `#summary`, because **all 62 rows of context it receives are `#summary` blocks**. The voice blocks, the era blocks, every other detail block — it has never seen that they exist.
+
+Validation demanded a name the designer had no way to learn. And the repair hint it would have been handed on retry talks about tier word counts, which has nothing to do with imports, so the second attempt would have failed the same way with worse advice.
+
+**Fix:** the capsule carries the catalogue of block ids the project actually has — a few kilobytes of names, not content — so choosing imports becomes possible instead of guesswork. The repair hint learns the import case and says what is missing.
+
+**Tasks:**
+- [x] `available_blocks` in the book design capsule
+- [x] `designer.md` says to choose from the catalogue
+- [x] The repair hint covers import failures
+- [x] Test: the capsule lists voice and era blocks, not just summaries
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** Every block the validator can demand is a block the designer was shown.

@@ -93,5 +93,75 @@ class ChapterImportTests(unittest.TestCase):
         self.assertIn("#voice", prompt)
 
 
+
+class BlockCatalogueTests(unittest.TestCase):
+    """Validation demanded CHR-0001#voice from a designer whose 62 context rows were
+    all summaries: it had no way to learn the block existed."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        config_path = self.project / "book-forge.yaml"
+        config = json.loads(config_path.read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+        canon = self.project / "universe" / "canon"
+        (canon / "characters" / "CHR-0001.md").write_text(
+            "---\nid: CHR-0001\ncontinuity: CNT-0001\n---\n\n# Mara\n\n"
+            "<!-- bf:block summary -->\nA diver.\n\n<!-- bf:block voice -->\nShe deflects.\n", encoding="utf-8")
+        (canon / "eras").mkdir(parents=True, exist_ok=True)
+        (canon / "eras" / "ERA-0001.md").write_text(
+            "---\nid: ERA-0001\ncontinuity: CNT-0001\n---\n\n# Now\n\n"
+            "<!-- bf:block summary -->\nThe present.\n\n<!-- bf:block when -->\n2026\n", encoding="utf-8")
+        self.bf.rebuild_indexes(self.project)
+
+    def test_the_capsule_lists_the_blocks_the_validator_can_demand(self):
+        seen = {}
+        original = self.bf.build_envelope
+
+        def spy(project, **kwargs):
+            envelope = original(project, **kwargs)
+            if kwargs.get("role") == "designer" and not seen:
+                seen.update(envelope["payload"]["task"])
+            return envelope
+
+        self.bf.build_envelope = spy
+        try:
+            self.bf.execute_book_design(self.project, self.book, provider=self.provider, no_chorus=True, no_post_chorus=True)
+        except Exception:
+            pass
+        finally:
+            self.bf.build_envelope = original
+        catalogue = seen.get("available_blocks") or []
+        self.assertIn("CHR-0001#voice", catalogue)
+        self.assertIn("ERA-0001#when", catalogue)
+        self.assertIn("UNI-0001#kernel", catalogue)
+
+    def provider(self, role, envelope, attempt_dir):
+        chunk = (envelope["payload"]["task"].get("chunk") or {})
+        if chunk.get("category") == "spine":
+            payload = {"premise": "p", "entry_state": {}, "arc": ["a", "b", "c"], "exit_boundary": {},
+                       "chapter_outline": [{"id": "CH-0001", "order": 1, "title": "T", "pov": "CHR-0001", "summary": "s"}]}
+        else:
+            payload = {"chapters": [{"id": "CH-0001", "order": 1, "title": "T", "pov": "CHR-0001",
+                                     "beats": ["b"], "plants": [], "reveals": [], "target_words": 900,
+                                     "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None}]}
+        return {"text": json.dumps(payload), "provider": "openrouter",
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "medium",
+                "session_id": "s", "tokens": {"input": 1, "output": 1}, "cost": 0.0, "latency_ms": 1, "finish": "stop"}
+
+    def test_the_repair_hint_names_the_catalogue_when_imports_fail(self):
+        source = Path(self.bf.__file__).read_text()
+        self.assertIn('is_import_error = any("chapter.import"', source)
+        self.assertIn("the ids from available_blocks rather than assuming which blocks exist", source)
+
+
 if __name__ == "__main__":
     unittest.main()

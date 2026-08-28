@@ -4721,8 +4721,14 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     _failures = _collect_validation_failures(plan, f"DESIGN-{book_id}", limit=5)
     if _failures:
         # Scope-aware hint: book design fails on chunk size / JSON, not tier words
+        is_import_error = any("chapter.import" in str(f) for f in _failures)
         is_chunk_error = any("chunk exceeds" in str(f) or "chapters.empty" in str(f) or "not contract JSON" in str(f) for f in _failures)
-        if is_chunk_error:
+        if is_import_error:
+            hint = ("every chapter's imports must name ids from available_blocks in this task, and must include "
+                    "UNI-0001#kernel, the POV character's #summary AND #voice, at least one PLC-* block, and the "
+                    "era block for when the chapter happens; the context rows you see are summaries only, so read "
+                    "the ids from available_blocks rather than assuming which blocks exist")
+        elif is_chunk_error:
             hint = "emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB); list keys (chapters) concatenate across objects in order; keep each object valid JSON; for 40 chapters emit e.g. one object with premise/arc/entry_state/exit_boundary and 2-3 objects with slices of chapters"
         else:
             hint = "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"
@@ -4735,6 +4741,10 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             # the book is written in this one. Without it the designer guesses from the
             # brief and returns forty titles in the wrong language.
             "source_language": str(config.get("source_language", "en")),
+            # The context rows are summaries only, so without this the designer cannot
+            # know that a voice block or an era block exists, and validation demands a
+            # name it was never shown. Names cost bytes; content costs the envelope.
+            "available_blocks": sorted(index["blocks"]),
             "book": book,
             "brief": brief,
             "worldbuilding": worldbuilding,
