@@ -140,3 +140,61 @@ class DesignRepairTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromotedDesignRepairTests(unittest.TestCase):
+    """A design whose audit blocks after the design task is already promoted used to
+    be refused outright: the resume path audited, raised, and never offered the
+    repair the first pass would have run."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+        # Design the book cleanly, then put only its audit back in play — the state a
+        # long run reaches when the design promoted hours before the audit ran.
+        self.bf.execute_book_design(self.project, self.book, provider=RepairProvider(self.bf, audits=[[]]), no_chorus=True, no_post_chorus=True)
+        self.bf._reopen_task(self.project, f"AUDIT-{self.book}")
+
+    def resume(self, provider):
+        return self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+
+    def test_a_promoted_design_is_repaired_rather_than_refused(self):
+        provider = RepairProvider(self.bf)
+        result = self.resume(provider)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(len(provider.repair_capsules), 1)
+        self.assertEqual(provider.repair_capsules[0]["repair"]["rewrite_only"], ["CH-0002", "CH-0004"])
+
+    def test_the_repair_sees_the_same_world_the_first_pass_did(self):
+        provider = RepairProvider(self.bf)
+        self.resume(provider)
+        capsule = provider.repair_capsules[0]
+        for key in ("scope", "book", "brief", "source_language", "available_blocks", "obligations", "required_output"):
+            self.assertIn(key, capsule, key)
+        self.assertEqual(capsule["scope"], "book")
+        self.assertTrue(capsule["available_blocks"])
+
+    def test_the_repaired_chapters_reach_disk_on_this_path_too(self):
+        self.resume(RepairProvider(self.bf))
+        repaired = json.loads((self.project / f"books/{self.book}/chapters/CH-0002.json").read_text())
+        self.assertIn("the drowned girl", repaired["beats"][0])
+
+    def test_an_audit_that_keeps_blocking_still_halts(self):
+        provider = RepairProvider(self.bf, audits=[[FINDING]] * 6)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.resume(provider)
+        self.assertEqual(len(provider.repair_capsules), self.bf.MAX_DESIGN_REPAIR_ROUNDS)
+        self.assertIn("F-0001", str(caught.exception))
+
+    def test_the_repair_writes_beside_its_telemetry_not_in_a_design_attempt(self):
+        self.resume(RepairProvider(self.bf))
+        round_dir = self.project / ".book-forge" / "repairs" / self.book / "round-1"
+        self.assertTrue((round_dir / "envelope-repair.json").is_file())
+        self.assertTrue((round_dir / "raw-repair.txt").is_file())

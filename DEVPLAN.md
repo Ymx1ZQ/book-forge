@@ -2636,3 +2636,28 @@ The probe that set the number was run on an envelope that still carried the beat
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** The common case does not begin with a call that cannot succeed.
+
+## A design that is already promoted cannot be repaired, only refused 🔄
+
+**Status: 🔄 In corso — 2026-08-28**
+
+**Problem:** the audit finally ran end to end on a forty-chapter design and returned ten findings, four of them blocking — CH-0019, CH-0024 and CH-0025 each firing the arc's fifth turn between five and eleven chapters before the arc places it, and CH-0028 answering a pressure the arc has it precede. The engine then stopped: `design failed and nothing could be recovered`.
+
+It stopped because of which path it was on. `execute_book_design` audits with `raise_on_blocked=False` and hands the findings to `_repair_blocked_design`, which rewrites exactly the chapters each finding names and audits again, twice, before giving up. The branch taken when the design is already promoted and only the audit is outstanding does none of that: it audits, raises, and returns. That is the same branch that was sending the uncut payload — the resume path is the one every long run ends up on, and it has been the poorer of the two twice now.
+
+`_repair_blocked_design` also takes the design's `claim` for one reason: to find a directory to write its envelope and raw answer into. On the resume path there is no design claim, because that task succeeded hours ago. It already writes its telemetry under `.book-forge/repairs/<book>/round-N/`, which is where the rest of it belongs too.
+
+**Fix:** both paths audit the same way and repair the same way. The designer capsule is built once, from disk, by a helper both call, so the repair on the resume path sees the brief, the worldbuilding, the obligations and the available blocks exactly as the first pass did. `_repair_blocked_design` writes beside its telemetry and stops needing a claim.
+
+**Tasks:**
+- [x] `_book_design_base_capsule(root, book_id)` builds the designer capsule from disk
+- [x] `execute_book_design` uses it in place of the inline construction
+- [x] The resume path audits with `raise_on_blocked=False`, repairs, then raises if still blocked
+- [x] `_repair_blocked_design` writes under `.book-forge/repairs/` and drops the `claim` parameter
+- [x] Test: a promoted design with a blocking audit is repaired, not refused
+- [x] Test: the repair capsule carries the same world the first pass had
+- [x] Test: a repair that still blocks after the bounded rounds still halts
+- [x] Suite green: 406 passed, 23 subtests (era 401). Reinstall, commit & push
+- [ ] Margherita's design clears and the first three chapters are written
+
+**Done when:** Reaching the audit late does not cost the book its repair.

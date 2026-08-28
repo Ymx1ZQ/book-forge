@@ -4963,29 +4963,21 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     return {**audit, "calls": len(results) + 1}
 
 
-def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, no_post_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
-    root = _project_root(project)
-    runner = provider or run_opencode_role
-    tasks = schedule_book_design(root, book_id)
-    if all(task["state"] == "succeeded" for task in tasks):
-        return {**_read_json(root / "books" / book_id / "design-audit.json"), "calls": 0}
-    plan = _load_plan(root)
-    design_task = next(task for task in plan["tasks"] if task["id"] == f"DESIGN-{book_id}")
-    if design_task["state"] == "succeeded":
-        obligations, relation_imports = _book_obligations(root, book_id)
-        imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
-        proposal = _book_proposal_from_artifacts(root, book_id)
-        audit = _design_audit_record(
-            root,
-            f"AUDIT-{book_id}",
-            {"scope": "book", "book": book_id, "proposal": proposal},
-            imports,
-            runner,
-            f"books/{book_id}/design-audit.json",
-        )
-        return {**audit, "calls": 1}
-    if _should_brief_gate(root, "book", book_id=book_id, skip_flag=skip_brief):
-        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design book {book_id} — answer 7 questions in books/{book_id}/book-brief.json or pass --skip-brief / usa default")
+def _book_design_base_capsule(
+    root: Path,
+    book_id: str,
+    *,
+    repair_context: dict[str, object] | None = None,
+    chorus_report: dict[str, object] | None = None,
+) -> tuple[dict[str, object], list[str]]:
+    """The designer's view of a book, and the canon it is given, built from disk.
+
+    It used to be a local of `execute_book_design`, which meant the repair round
+    could only run on the path that had just designed the book. A design that is
+    already promoted and fails its audit later reaches the repair with no capsule to
+    rebuild from, and the engine refused the book instead of fixing the four chapters
+    the findings named. Both paths read the same world now.
+    """
     book = next(row for row in list_books(root) if row["id"] == book_id)
     brief = _book_brief(root, book_id)
     obligations, relation_imports = _book_obligations(root, book_id)
@@ -4995,27 +4987,8 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     imports = sorted({row["id"] for row in context if row["id"] != "worldbuilding.md"})
     chapter_imports = sorted(set(["UNI-0001#kernel", *relation_imports]))
     config = _read_json(root / "book-forge.yaml")
-    _chorus_default = _chorus_models_from_config(config)
-    _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
-    should_chorus = (not no_chorus) and _chorus_enabled(config)
-    _failures = _collect_validation_failures(plan, f"DESIGN-{book_id}", limit=5)
-    if _failures:
-        # Scope-aware hint: book design fails on chunk size / JSON, not tier words
-        is_import_error = any("chapter.import" in str(f) for f in _failures)
-        is_chunk_error = any("chunk exceeds" in str(f) or "chapters.empty" in str(f) or "not contract JSON" in str(f) for f in _failures)
-        if is_import_error:
-            hint = ("every chapter's imports must name ids from available_blocks in this task, and must include "
-                    "UNI-0001#kernel, the POV character's #summary AND #voice, at least one PLC-* block, and the "
-                    "era block for when the chapter happens; the context rows you see are summaries only, so read "
-                    "the ids from available_blocks rather than assuming which blocks exist")
-        elif is_chunk_error:
-            hint = "emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB); list keys (chapters) concatenate across objects in order; keep each object valid JSON; for 40 chapters emit e.g. one object with premise/arc/entry_state/exit_boundary and 2-3 objects with slices of chapters"
-        else:
-            hint = "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"
-        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": hint}}
-    else:
-        repair_context = {}
-    base_capsule = {
+    repair_context = repair_context or {}
+    capsule = {
             "scope": "book",
             # The brief is the author talking to the engine and may be in any language;
             # the book is written in this one. Without it the designer guesses from the
@@ -5029,7 +5002,6 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
             "brief": brief,
             "worldbuilding": worldbuilding,
             **repair_context,
-            **({"chorus_report": _latest_chorus_report(root, f"book-{book_id}")} if with_chorus_context and _latest_chorus_report(root, f"book-{book_id}") else {}),
             "relations": [row for row in _read_json(root / "universe" / "relations.yaml").get("relations", []) if book_id in row.get("endpoints", [])],
             "obligations": list(obligations.values()),
             "required_output": {
@@ -5059,6 +5031,69 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
                 ],
             },
     }
+    if chorus_report:
+        capsule["chorus_report"] = chorus_report
+    return capsule, imports
+
+
+def execute_book_design(project: Path | str, book_id: str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, no_post_chorus: bool = False, with_chorus_context: bool = False, skip_brief: bool = False) -> dict[str, object]:
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    tasks = schedule_book_design(root, book_id)
+    if all(task["state"] == "succeeded" for task in tasks):
+        return {**_read_json(root / "books" / book_id / "design-audit.json"), "calls": 0}
+    plan = _load_plan(root)
+    design_task = next(task for task in plan["tasks"] if task["id"] == f"DESIGN-{book_id}")
+    if design_task["state"] == "succeeded":
+        proposal = _book_proposal_from_artifacts(root, book_id)
+        base_capsule, imports = _book_design_base_capsule(root, book_id)
+        audit = _design_audit_record(
+            root,
+            f"AUDIT-{book_id}",
+            {"scope": "book", "book": book_id, "proposal": proposal},
+            imports,
+            runner,
+            f"books/{book_id}/design-audit.json",
+            raise_on_blocked=False,
+        )
+        # Reaching the audit on this path used to cost the book its repair: it raised
+        # on the first blocking finding, while the path that had just designed the
+        # book handed the same findings to the designer and asked for the named
+        # chapters again. A design does not deserve less help for being older.
+        proposal, audit = _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports, runner)
+        if _blocking(audit):
+            raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(_blocking(audit), sort_keys=True)}")
+        return {**audit, "calls": 1}
+    if _should_brief_gate(root, "book", book_id=book_id, skip_flag=skip_brief):
+        raise BookForgeError(f"brief.missing: 00-BRIEF gate blocks design book {book_id} — answer 7 questions in books/{book_id}/book-brief.json or pass --skip-brief / usa default")
+    brief = _book_brief(root, book_id)
+    config = _read_json(root / "book-forge.yaml")
+    _chorus_default = _chorus_models_from_config(config)
+    _chorus_effective = _parse_chorus_models_arg(chorus_models, _chorus_default) if chorus_models else _chorus_default
+    should_chorus = (not no_chorus) and _chorus_enabled(config)
+    _failures = _collect_validation_failures(plan, f"DESIGN-{book_id}", limit=5)
+    if _failures:
+        # Scope-aware hint: book design fails on chunk size / JSON, not tier words
+        is_import_error = any("chapter.import" in str(f) for f in _failures)
+        is_chunk_error = any("chunk exceeds" in str(f) or "chapters.empty" in str(f) or "not contract JSON" in str(f) for f in _failures)
+        if is_import_error:
+            hint = ("every chapter's imports must name ids from available_blocks in this task, and must include "
+                    "UNI-0001#kernel, the POV character's #summary AND #voice, at least one PLC-* block, and the "
+                    "era block for when the chapter happens; the context rows you see are summaries only, so read "
+                    "the ids from available_blocks rather than assuming which blocks exist")
+        elif is_chunk_error:
+            hint = "emit the proposal as multiple top-level JSON objects each <15360 bytes (15KB); list keys (chapters) concatenate across objects in order; keep each object valid JSON; for 40 chapters emit e.g. one object with premise/arc/entry_state/exit_boundary and 2-3 objects with slices of chapters"
+        else:
+            hint = "word count is combined across summary+voice+appearance+past+want+need+flaw+wound+arc+secret joined with space (validate.py word_count with word-boundary regex); tier.*.words and tier.*.count are enforced; include tier field"
+        repair_context = {"repair": {"validation_errors": _failures, "validation_error": str(_failures[0]), "hint": hint}}
+    else:
+        repair_context = {}
+    base_capsule, imports = _book_design_base_capsule(
+        root,
+        book_id,
+        repair_context=repair_context,
+        chorus_report=_latest_chorus_report(root, f"book-{book_id}") if with_chorus_context else None,
+    )
     envelope = build_envelope(
         root,
         role="designer",
@@ -5111,7 +5146,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         raise_on_blocked=False,
     )
     proposal, audit = _repair_blocked_design(
-        root, book_id, proposal, audit, base_capsule, imports, runner, claim
+        root, book_id, proposal, audit, base_capsule, imports, runner
     )
     if _blocking(audit):
         _log_step(7, 7, "audit", "✗")
@@ -5167,7 +5202,7 @@ def _blocking(audit: dict[str, object]) -> list[dict[str, object]]:
     return [row for row in audit.get("findings", []) if row.get("severity") == "blocking"]
 
 
-def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports, runner, claim):
+def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports, runner):
     """Rewrite the chapters a blocking finding names, then audit again.
 
     Every finding already says which chapters it touches, so stopping to ask a
@@ -5202,10 +5237,13 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         repair_envelope = build_envelope(
             root, role="designer", task_capsule=capsule, imports=imports, state={}, tools=[], max_output_tokens=12288
         )
-        attempt_dir = Path(claim["capsule"]).parent
-        _write_bytes_atomic(attempt_dir / f"envelope-repair-{round_number}.json", repair_envelope["bytes"])
-        repaired = runner("designer", repair_envelope, attempt_dir)
-        _write_bytes_atomic(attempt_dir / f"raw-repair-{round_number}.txt", str(repaired.get("text", "")).encode())
+        # Beside its telemetry, not inside the design's attempt: the repair also runs
+        # on books whose design attempt closed hours ago.
+        round_dir = root / ".book-forge" / "repairs" / book_id / f"round-{round_number}"
+        round_dir.mkdir(parents=True, exist_ok=True)
+        _write_bytes_atomic(round_dir / "envelope-repair.json", repair_envelope["bytes"])
+        repaired = runner("designer", repair_envelope, round_dir)
+        _write_bytes_atomic(round_dir / "raw-repair.txt", str(repaired.get("text", "")).encode())
         # The repair runs outside the DAG, like a chorus round: its own attempt is
         # already promoted, so its cost is recorded beside it and folded into the
         # report rather than being lost.
