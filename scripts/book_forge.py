@@ -5041,7 +5041,15 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     runner = provider or run_opencode_role
     tasks = schedule_book_design(root, book_id)
     if all(task["state"] == "succeeded" for task in tasks):
-        return {**_read_json(root / "books" / book_id / "design-audit.json"), "calls": 0}
+        record = _read_json(root / "books" / book_id / "design-audit.json")
+        # A blocking verdict is a job that ran, not a job that finished. Returning it
+        # here left the book with no way forward that did not involve reopening a task
+        # by hand: the repair rounds live further down this function and were never
+        # reached again. Reopening the audit costs a re-audit, which is what the
+        # caller asked for by invoking the design at all.
+        if record.get("state") != "blocked":
+            return {**record, "calls": 0}
+        _reopen_task(root, f"AUDIT-{book_id}")
     plan = _load_plan(root)
     design_task = next(task for task in plan["tasks"] if task["id"] == f"DESIGN-{book_id}")
     if design_task["state"] == "succeeded":

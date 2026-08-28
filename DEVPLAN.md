@@ -2657,7 +2657,9 @@ It stopped because of which path it was on. `execute_book_design` audits with `r
 - [x] Test: a promoted design with a blocking audit is repaired, not refused
 - [x] Test: the repair capsule carries the same world the first pass had
 - [x] Test: a repair that still blocks after the bounded rounds still halts
-- [x] Suite green: 406 passed, 23 subtests (era 401). Reinstall, commit & push
+- [x] A stored blocking verdict reopens the audit instead of short-circuiting every later run
+- [x] Test: a blocked verdict is tried again and repaired; a clean one still costs nothing
+- [x] Suite green: 408 passed, 23 subtests (era 401). Reinstall, commit & push
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** Reaching the audit late does not cost the book its repair.

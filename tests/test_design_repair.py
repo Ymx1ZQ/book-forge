@@ -198,3 +198,40 @@ class PromotedDesignRepairTests(unittest.TestCase):
         round_dir = self.project / ".book-forge" / "repairs" / self.book / "round-1"
         self.assertTrue((round_dir / "envelope-repair.json").is_file())
         self.assertTrue((round_dir / "raw-repair.txt").is_file())
+
+
+class BlockedRecordTests(unittest.TestCase):
+    """A blocked audit used to be terminal: every later run short-circuited on the
+    stored verdict and never reached the repair."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+
+    def run_design(self, provider):
+        return self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+
+    def test_a_blocked_verdict_is_tried_again_and_repaired(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.run_design(RepairProvider(self.bf, audits=[[FINDING]] * 6))
+        record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
+        self.assertEqual(record["state"], "blocked")
+
+        second = RepairProvider(self.bf)
+        result = self.run_design(second)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertGreater(second.calls.count("canon-auditor"), 0)
+
+    def test_a_clean_verdict_still_costs_nothing_to_re_run(self):
+        self.run_design(RepairProvider(self.bf, audits=[[]]))
+        again = RepairProvider(self.bf, audits=[[]])
+        result = self.run_design(again)
+        self.assertEqual(result["calls"], 0)
+        self.assertEqual(again.calls, [])
