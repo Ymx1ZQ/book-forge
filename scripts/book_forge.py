@@ -3421,6 +3421,7 @@ def _run_book_design_chunked(
     spine, telemetry, spine_results = _run_design_chunk(
         root, task_id, claim, attempt_dir, base_capsule, {"category": "spine"}, imports, runner, max_output_tokens
     )
+    spine = _unwrap_chunk(spine, "spine")
     results.extend(spine_results)
     chunk_telemetry.append(telemetry)
     outline = spine.get("chapter_outline")
@@ -3464,7 +3465,7 @@ def _run_book_design_chunked(
             continue
         results.extend(slice_results)
         chunk_telemetry.append(telemetry)
-        merged = _merge_design_chunks(merged, parsed)
+        merged = _merge_design_chunks(merged, _unwrap_chunk(parsed, "chapters"))
     return claim, merged, results, chunk_telemetry
 
 
@@ -3480,6 +3481,20 @@ def _halve_chunk(chunk: dict[str, object]) -> list[dict[str, object]]:
         {"category": "chapters", "part": f"{first}-{middle}", "first_order": first, "last_order": middle},
         {"category": "chapters", "part": f"{middle + 1}-{last}", "first_order": middle + 1, "last_order": last},
     ]
+
+
+def _unwrap_chunk(value: object, name: str) -> object:
+    """Take the answer however the model chose to label it.
+
+    Asked for the book's spine, a designer replied `{"spine": {...}}` — the whole
+    thing, correct, wrapped in the name of what it was asked for. The driver read the
+    top level, found no outline and blocked the task, twice, discarding forty rows
+    that had been paid for. `_merge_design_chunks` already unwraps this shape for the
+    universe design's `tail`; there is no reason for the spine to be treated worse.
+    """
+    if isinstance(value, dict) and len(value) == 1 and name in value and isinstance(value[name], dict):
+        return value[name]
+    return value
 
 
 def _design_digest(chapters: list[object]) -> list[dict[str, object]]:

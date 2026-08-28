@@ -271,5 +271,35 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         self.assertEqual([row["chunk"] for row in chunked[0]], ["spine", "chapters-1-8", "chapters-9-16", "chapters-17-24", "chapters-25-32", "chapters-33-40"])
 
 
+
+class WrappedAnswerTests(BookDesignSliceFixture):
+    """A designer asked for the book's spine replied {"spine": {...}} — the whole
+    thing, correct, wrapped in the name of what it was asked for. Forty outline rows
+    were produced, paid for and discarded, twice."""
+
+    def test_a_spine_wrapped_in_its_own_name_is_taken(self):
+        provider = SliceProvider(self.bf)
+
+        def wrapping(role, envelope, attempt_dir):
+            result = SliceProvider.__call__(provider, role, envelope, attempt_dir)
+            chunk = (envelope["payload"]["task"].get("chunk") or {})
+            if role == "designer" and chunk.get("category") == "spine":
+                result = {**result, "text": json.dumps({"spine": json.loads(result["text"])})}
+            return result
+
+        self.bf.execute_book_design(self.project, self.book, provider=wrapping, no_chorus=True, no_post_chorus=True)
+        outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
+        self.assertEqual(len(outline), CHAPTER_COUNT)
+
+    def test_wrapped_and_bare_answers_agree(self):
+        bare = {"premise": "p", "arc": ["a", "b", "c"], "chapter_outline": [{"id": "CH-0001"}]}
+        self.assertEqual(self.bf._unwrap_chunk({"spine": bare}, "spine"), bare)
+        self.assertEqual(self.bf._unwrap_chunk(bare, "spine"), bare)
+
+    def test_a_capsule_that_legitimately_carries_a_spine_field_is_untouched(self):
+        value = {"spine": {"premise": "p"}, "chapters": [{"id": "CH-0001"}]}
+        self.assertEqual(self.bf._unwrap_chunk(value, "spine"), value)
+
+
 if __name__ == "__main__":
     unittest.main()

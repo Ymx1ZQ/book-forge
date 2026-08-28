@@ -2406,3 +2406,22 @@ The seven fixes below are ordered: the first opens the pipe, and the rest are wo
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** The century is a block someone can read.
+
+## A correct spine was thrown away for its wrapper ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the book design failed twice with `spine returned no chapter_outline`, and the answer it rejected was complete. The designer had wrapped its reply in the name of the thing it was asked for — `{"spine": {"premise": …, "arc": […], "chapter_outline": [40 rows]}}` — and the driver read `chapter_outline` at the top level, found nothing, and blocked the task. Forty outline rows and an arc were produced and paid for twice, and discarded both times.
+
+`_merge_design_chunks` already unwraps exactly this shape for the universe design's `tail` chunk. The book's spine had no such courtesy.
+
+**Fix:** a chunk answer that consists of a single key naming the chunk itself is unwrapped before it is read, for the spine as for the tail. The engine gets what it asked for however the model chose to label it.
+
+**Tasks:**
+- [x] A single-key `spine` wrapper is unwrapped
+- [x] `chapters` wrapped the same way is unwrapped too
+- [x] Test: a wrapped spine and a bare spine give the same result
+- [x] Test: a genuine field called spine inside a slice capsule is untouched
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** A right answer is not refused for how it was addressed.
