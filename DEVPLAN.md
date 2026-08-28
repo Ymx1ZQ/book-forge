@@ -2179,7 +2179,7 @@ The sequence it found is correct. That it had to be found by reading the source 
 
 **Done when:** One command clears what a killed driver leaves behind.
 
-## The designer is never told what language the book is written in 🔄
+## The designer is never told what language the book is written in ✅
 
 **Status: ✅ Done — 2026-08-27**
 
@@ -2505,6 +2505,8 @@ The envelope is 113262 bytes and 91639 of it is the proposal. Inside the chapter
 
 **Done when:** The audit has room to answer.
 
+**Correction — 2026-08-28.** The cut shipped to two of the three places that build the audit capsule. The third, the resume path in `execute_book_design`, kept sending the whole proposal, and it is the path every failing attempt took: the envelope measured afterwards was 96660 bytes with all 34694 bytes of `beats` still in it. The cut now lives inside `_design_audit_record`, so no caller can forget it.
+
 ## The design counts as done before it has been audited ✅
 
 **Status: ✅ Done — 2026-08-28**
@@ -2542,6 +2544,8 @@ The role's pin is: `canon-auditor` at variant **max**, with an output allowance 
 
 **Done when:** The role that must answer has room left to answer in.
 
+**Correction — 2026-08-28.** This is wrong, and it is wrong because it reasoned from receipts of a payload that was never actually cut. Measured since on the same envelope: at `high`, reasoning 31999 and no output; at `medium`, reasoning 32000 and no output; and with the cut genuinely applied, input 18079 and still no output. The variant changes nothing. Ten chapters at 10763 tokens answer with reasoning to spare, so the binding constraint is how much book is in the question. `high` is kept because it is the right effort for the job, not because it fixed anything.
+
 ## A claim whose owner is gone waits five minutes to be noticed ✅
 
 **Status: ✅ Done — 2026-08-28**
@@ -2559,3 +2563,32 @@ The role's pin is: `canon-auditor` at variant **max**, with an output allowance 
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** Work whose owner is gone is free at once.
+
+## The audit is one question over forty chapters, and only a tenth of it fits 🔄
+
+**Status: 🔄 In corso — 2026-08-28**
+
+**Problem:** the book audit has now returned an empty answer five times. Three measurements on the same design settle what is actually binding. Forty chapters with the whole proposal: input 34822, reasoning 32000, output 0. Forty chapters with `beats` and `imports` removed: input 18079, reasoning 32000, output 0. Ten chapters: input 10763, reasoning 27237, **output 917 and findings that name real defects** — it caught CH-0009 spending the book's engine ahead of the arc. The task is too large to answer in one call, and the threshold sits between eleven and eighteen thousand tokens of input.
+
+Two entries above this one recorded conclusions this contradicts, and both need correcting rather than leaving to mislead the next reader.
+
+*The payload cut never ran.* `_audit_proposal` is applied at two of the three places that build the audit capsule. The third is the resume path in `execute_book_design` — design succeeded, audit still pending — which passes the raw proposal, and that is the path every one of the failures took. The envelope measured on the last attempt is 96660 bytes and still carries 34694 bytes of `beats` and 12034 of `imports`.
+
+*The variant was not the cause.* The auditor was moved from `max` to `high` on the strength of receipts that were never cut. Measured since: at `high`, reasoning 31999; at `medium`, reasoning 32000. Effort changes nothing here.
+
+**Fix:** the audit is sliced the way the design already is. Each pass reads ten chapters in full against the spine and a one-line digest of the whole book, so a chapter can still be judged out of place. A final pass reads only what carries cross-chapter contradiction — every chapter's `plants` and `reveals`, with the spine — because a grave that changes occupant is visible there and nowhere else. A pass that comes back without JSON is halved and retried, reusing the machinery the design slices already have. Findings are namespaced per pass, since four passes numbering from `F-001` is the identifier collision the style review already hit.
+
+**Tasks:**
+- [x] The cut moves inside `_design_audit_record`, so no call site can skip it
+- [x] `_run_book_audit_chunked`: windows of `BOOK_AUDIT_SLICE_SIZE = 10` over spine + digest + window
+- [x] A schedule pass over every chapter's plants and reveals
+- [x] Truncated pass halves and retries
+- [x] Findings namespaced per pass, merged into one verdict
+- [x] Test: no pass is handed `beats` or `imports`
+- [x] Test: forty chapters produce five passes and one merged verdict
+- [x] Test: a pass that returns no JSON is halved
+- [x] Correct the two entries above that record the wrong cause
+- [x] Suite green: 385 passed, 23 subtests (era 370). Reinstall, commit & push
+- [ ] Margherita's audit clears, and the first three chapters are written
+
+**Done when:** The auditor is asked a question it can finish answering.

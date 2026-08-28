@@ -3268,6 +3268,9 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
 # Chapters per book-design call. Small enough that a heavy reasoning burn still
 # leaves room for the slice's own output.
 BOOK_DESIGN_SLICE_SIZE = 8
+# Measured on a forty-chapter audit: 34822 tokens of input returned nothing, 18079
+# returned nothing, 10763 returned findings. Ten chapters is what fits.
+BOOK_AUDIT_SLICE_SIZE = 10
 
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
@@ -3538,16 +3541,23 @@ def _run_book_design_chunked(
 
 
 def _halve_chunk(chunk: dict[str, object]) -> list[dict[str, object]]:
-    """Split a chapter chunk in two. A single chapter cannot be split further."""
-    if chunk.get("category") != "chapters":
+    """Split a chunk that covers a range of chapters in two.
+
+    A chunk with no range — the design's spine — cannot be halved, and neither can
+    a range of one. The audit reuses this: its passes carry the same two fields, so
+    a pass that comes back empty is asked for half as much rather than for the same
+    thing again.
+    """
+    if "first_order" not in chunk or "last_order" not in chunk:
         return []
     first, last = int(chunk["first_order"]), int(chunk["last_order"])
     if last <= first:
         return []
     middle = first + (last - first) // 2
+    category = chunk.get("category", "chapters")
     return [
-        {"category": "chapters", "part": f"{first}-{middle}", "first_order": first, "last_order": middle},
-        {"category": "chapters", "part": f"{middle + 1}-{last}", "first_order": middle + 1, "last_order": last},
+        {"category": category, "part": f"{first}-{middle}", "first_order": first, "last_order": middle},
+        {"category": category, "part": f"{middle + 1}-{last}", "first_order": middle + 1, "last_order": last},
     ]
 
 
@@ -3591,8 +3601,12 @@ def _design_digest(chapters: list[object]) -> list[dict[str, object]]:
     return digest
 
 
-def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, object]) -> dict[str, object]:
-    """Aggregate per-chunk results into one result record for completion telemetry."""
+def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, object], *, role: str = "designer") -> dict[str, object]:
+    """Aggregate per-chunk results into one result record for completion telemetry.
+
+    The variant is the one the role is pinned to, not the designer's: completion
+    verifies the receipt against the pin, and an audit reported under the designer's
+    variant is rejected by the check that exists to catch a model swap."""
     tokens = {"input": 0, "output": 0}
     cost = 0.0
     latency = 0
@@ -3609,7 +3623,7 @@ def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, 
         "text": json.dumps(merged, ensure_ascii=False, sort_keys=True),
         "provider": "openrouter",
         "model": "deepseek/deepseek-v4-flash-0731",
-        "variant": ROLE_SPECS["designer"][1],
+        "variant": ROLE_SPECS[role][1],
         "session_id": session_id,
         "tokens": tokens,
         "cost": cost,
@@ -4106,6 +4120,136 @@ def _bind_audit_evidence(root: Path, scope: dict[str, object], value: dict[str, 
     return {"findings": bound}
 
 
+def _audit_digest(chapters: list[object]) -> list[dict[str, object]]:
+    """One line per chapter, so a pass can place its window inside the whole book."""
+    return [
+        {key: chapter.get(key) for key in ("id", "order", "title", "pov")}
+        for chapter in chapters
+        if isinstance(chapter, dict)
+    ]
+
+
+def _audit_ledger(chapters: list[object]) -> list[dict[str, object]]:
+    """What a contradiction between two distant chapters is made of.
+
+    A grave that holds a man in chapter four and a young woman in chapter thirty-one
+    is visible in what each chapter plants and reveals, and in nothing else the
+    contract carries. Reading only these two fields lets one pass cover the whole
+    book at a fifth of its weight.
+    """
+    return [
+        {key: chapter.get(key) for key in ("id", "order", "title", "plants", "reveals")}
+        for chapter in chapters
+        if isinstance(chapter, dict)
+    ]
+
+
+def _book_audit_chunks(chapter_count: int) -> list[dict[str, object]]:
+    """Windows of chapters read in full, then the promises of the whole book."""
+    chunks: list[dict[str, object]] = []
+    for start in range(1, chapter_count + 1, BOOK_AUDIT_SLICE_SIZE):
+        end = min(start + BOOK_AUDIT_SLICE_SIZE - 1, chapter_count)
+        chunks.append({"category": "window", "part": f"{start}-{end}", "first_order": start, "last_order": end})
+    if chapter_count:
+        chunks.append({"category": "schedule", "part": f"1-{chapter_count}", "first_order": 1, "last_order": chapter_count})
+    return chunks
+
+
+def _audit_chunk_scope(scope: dict[str, object], chunk: dict[str, object]) -> dict[str, object]:
+    """The scope one audit pass reads: its own chapters, and the book around them."""
+    proposal = scope.get("proposal") if isinstance(scope.get("proposal"), dict) else {}
+    chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
+    first, last = int(chunk["first_order"]), int(chunk["last_order"])
+    window = [row for row in chapters if first <= int(row.get("order") or 0) <= last]
+    sliced = dict(scope)
+    if chunk.get("category") == "schedule":
+        sliced["proposal"] = {**{k: v for k, v in proposal.items() if k != "chapters"}, "chapters": _audit_ledger(window)}
+        sliced["pass"] = {
+            "reading": "every chapter of the book, but only what each one plants and reveals",
+            "look_for": "a promise revealed before it is planted, planted twice, or answered by a fact that contradicts it",
+        }
+    else:
+        sliced["proposal"] = {**{k: v for k, v in proposal.items() if k != "chapters"}, "chapters": window}
+        sliced["book_digest"] = _audit_digest(chapters)
+        sliced["pass"] = {
+            "reading": f"chapters {first} to {last} in full, against the arc and the digest of the whole book",
+            "look_for": "a contradiction inside these chapters, or one of them standing where the arc does not place it",
+        }
+    return sliced
+
+
+def _run_book_audit_chunked(
+    root: Path,
+    task_id: str,
+    scope: dict[str, object],
+    imports: list[str],
+    runner,
+    *,
+    max_output_tokens: int = 3000,
+) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+    """Audit a book in engine-controlled passes under one claim.
+
+    A forty-chapter design asked as one question came back empty five times: input
+    34822 tokens, reasoning 32000, output 0, and the same at 18079 once the payload
+    was cut. The same design asked ten chapters at a time answered at 10763 tokens
+    with reasoning to spare. The question is not made easier by being asked again,
+    so the engine asks it in pieces.
+    """
+    proposal = scope.get("proposal") if isinstance(scope.get("proposal"), dict) else {}
+    chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
+    request_hash = _sha256_bytes(_json_bytes({"task": task_id, "audit_passes": len(chapters)}))
+    claim = claim_task(root, task_id, request_hash=request_hash)
+    attempt_dir = Path(claim["capsule"]).parent
+    results: list[dict[str, object]] = []
+    findings: list[dict[str, object]] = []
+    envelope: dict[str, object] = {}
+    pending = list(_book_audit_chunks(len(chapters)))
+    while pending:
+        chunk = pending.pop(0)
+        slug = _chunk_slug(chunk)
+        envelope = build_envelope(
+            root,
+            role="canon-auditor",
+            task_capsule={"design_scope": _audit_chunk_scope(scope, chunk), "required_output": {"findings": []}},
+            imports=imports,
+            state={},
+            tools=[],
+            max_output_tokens=max_output_tokens,
+        )
+        _write_bytes_atomic(attempt_dir / f"envelope-{slug}.json", envelope["bytes"])
+        result = runner("canon-auditor", envelope, attempt_dir)
+        results.append(result)
+        mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+        _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
+        try:
+            value = _parse_contract_json(str(result["text"]))
+        except BookForgeError as exc:
+            halves = _halve_chunk(chunk)
+            if not halves:
+                _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
+                raise
+            print(
+                f"[canon-auditor] {slug} returned no answer; splitting into "
+                f"{', '.join(_chunk_slug(half) for half in halves)}",
+                file=sys.stderr,
+            )
+            pending = halves + pending
+            continue
+        try:
+            rows = _validate_audit_output(_bind_audit_evidence(root, scope, value))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
+            raise
+        for row in rows:
+            # Five passes each numbering its findings from 001 would hand the repair
+            # five different requests answering to one identifier; four style
+            # reviewers already cost a chapter's worth of dispositions that way.
+            row["id"] = f"A-{slug}-{row.get('id', '000')}"
+            row["pass"] = slug
+        findings.extend(rows)
+    return claim, findings, results, envelope
+
+
 def _design_audit_record(
     root: Path,
     task_id: str,
@@ -4116,22 +4260,34 @@ def _design_audit_record(
     *,
     raise_on_blocked: bool = True,
 ) -> dict[str, object]:
-    envelope = build_envelope(
-        root,
-        role="canon-auditor",
-        task_capsule={"design_scope": scope, "required_output": {"findings": []}},
-        imports=imports,
-        state={},
-        tools=[],
-        max_output_tokens=3000,
-    )
-    claim, result = _run_design_role(root, task_id, "canon-auditor", envelope, runner)
-    try:
-        value = _parse_contract_json(str(result["text"]))
-        findings = _validate_audit_output(_bind_audit_evidence(root, scope, value))
-    except BookForgeError as exc:
-        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
-        raise
+    # The cut lives here and nowhere else. It used to be applied by the callers, two
+    # of the three remembered to, and the third — the path that runs when the design
+    # is already promoted and only the audit is left — sent the whole proposal:
+    # 34694 bytes of beats and 12034 of imports that no continuity check reads.
+    # Every audit that failed took that path.
+    if isinstance(scope.get("proposal"), dict):
+        scope = {**scope, "proposal": _audit_proposal(scope["proposal"])}
+    chapters = [row for row in (scope.get("proposal") or {}).get("chapters", []) if isinstance(row, dict)]
+    if len(chapters) > BOOK_AUDIT_SLICE_SIZE:
+        claim, findings, results, envelope = _run_book_audit_chunked(root, task_id, scope, imports, runner)
+        result = _synthetic_chunk_result(results, {"findings": findings}, role="canon-auditor")
+    else:
+        envelope = build_envelope(
+            root,
+            role="canon-auditor",
+            task_capsule={"design_scope": scope, "required_output": {"findings": []}},
+            imports=imports,
+            state={},
+            tools=[],
+            max_output_tokens=3000,
+        )
+        claim, result = _run_design_role(root, task_id, "canon-auditor", envelope, runner)
+        try:
+            value = _parse_contract_json(str(result["text"]))
+            findings = _validate_audit_output(_bind_audit_evidence(root, scope, value))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+            raise
     record = {
         "schema": 1,
         "state": "blocked" if any(row["severity"] == "blocking" for row in findings) else "design_clean",
@@ -4835,7 +4991,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     audit = _design_audit_record(
         root,
         f"AUDIT-{book_id}",
-        {"scope": "book", "book": book_id, "proposal": _audit_proposal(proposal)},
+        {"scope": "book", "book": book_id, "proposal": proposal},
         imports,
         runner,
         f"books/{book_id}/design-audit.json",
@@ -4963,7 +5119,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         audit = _design_audit_record(
             root,
             f"AUDIT-{book_id}",
-            {"scope": "book", "book": book_id, "proposal": _audit_proposal(proposal)},
+            {"scope": "book", "book": book_id, "proposal": proposal},
             imports,
             runner,
             f"books/{book_id}/design-audit.json",
