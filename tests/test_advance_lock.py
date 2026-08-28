@@ -266,7 +266,14 @@ class UnauditedDesignTests(unittest.TestCase):
 
     def test_a_succeeded_audit_finishes_the_stage(self):
         self.set_state(f"AUDIT-{self.book}", "succeeded")
+        # Succeeded is the task, clean is the verdict, and the stage needs both.
+        self.audit_record([])
         self.assertFalse(self.bf._advance_needs_design(self.root, self.book))
+
+    def test_a_succeeded_audit_that_blocked_does_not_finish_the_stage(self):
+        self.set_state(f"AUDIT-{self.book}", "succeeded")
+        self.audit_record([{"id": "F-001", "severity": "blocking"}])
+        self.assertTrue(self.bf._advance_needs_design(self.root, self.book))
 
     def test_a_book_with_no_audit_record_is_not_ready_to_write(self):
         self.set_state(f"AUDIT-{self.book}", "succeeded")

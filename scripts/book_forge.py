@@ -6010,7 +6010,15 @@ def _advance_needs_design(root: Path, book_id: str) -> bool:
     # succeeded reported "stages none" and did nothing, so the check that clears it
     # could never be reached by the stage that owns it.
     states = {str(task["id"]): str(task["state"]) for task in _load_plan(root)["tasks"]}
-    return states.get(f"AUDIT-{book_id}") != "succeeded"
+    if states.get(f"AUDIT-{book_id}") != "succeeded":
+        return True
+    # And an audit that ran and blocked is not a finished design either. Reported as
+    # done, the stage that owns the repair was never dispatched, and the driver
+    # printed "stages none" beside five blocking findings it had just listed.
+    audit_path = root / "books" / book_id / "design-audit.json"
+    if not audit_path.is_file():
+        return True
+    return _read_json(audit_path).get("state") == "blocked"
 
 
 def advance_book(

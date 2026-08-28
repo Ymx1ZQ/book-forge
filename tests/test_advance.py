@@ -306,3 +306,38 @@ class BudgetTests(AdvanceFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlockedAuditStageTests(unittest.TestCase):
+    """A design whose audit ran and blocked was reported finished, so the stage that
+    owns the repair was never dispatched: `stages none` beside five blocking
+    findings the same receipt had just listed."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        book_root = self.project / "books" / self.book
+        (book_root / "chapters").mkdir(parents=True, exist_ok=True)
+        (book_root / "outline.yaml").write_text(json.dumps({"schema": 1, "chapters": [{"id": "CH-0001", "order": 1}]}))
+        (book_root / "chapters" / "CH-0001.json").write_text(json.dumps({"id": "CH-0001", "order": 1}))
+        for task_id, role in ((f"DESIGN-{self.book}", "designer"), (f"AUDIT-{self.book}", "canon-auditor")):
+            self.bf.add_task(self.project, task_id, role, deps=[], priority=50, outputs=[])
+            plan = self.bf._load_plan(self.project)
+            next(row for row in plan["tasks"] if row["id"] == task_id)["state"] = "succeeded"
+            self.bf._save_plan(self.project, plan)
+        self.audit = book_root / "design-audit.json"
+
+    def test_a_blocking_verdict_keeps_the_design_stage_due(self):
+        self.audit.write_text(json.dumps({"schema": 1, "state": "blocked", "findings": [{"id": "F-001"}]}))
+        self.assertTrue(self.bf._advance_needs_design(self.project, self.book))
+
+    def test_a_clean_verdict_lets_the_stage_go(self):
+        self.audit.write_text(json.dumps({"schema": 1, "state": "design_clean", "findings": []}))
+        self.assertFalse(self.bf._advance_needs_design(self.project, self.book))
+
+    def test_a_missing_verdict_keeps_the_stage_due(self):
+        self.assertTrue(self.bf._advance_needs_design(self.project, self.book))

@@ -2659,7 +2659,9 @@ It stopped because of which path it was on. `execute_book_design` audits with `r
 - [x] Test: a repair that still blocks after the bounded rounds still halts
 - [x] A stored blocking verdict reopens the audit instead of short-circuiting every later run
 - [x] Test: a blocked verdict is tried again and repaired; a clean one still costs nothing
-- [x] Suite green: 408 passed, 23 subtests (era 401). Reinstall, commit & push
+- [x] `_advance_needs_design` keeps the stage due while the verdict is blocking, so the driver dispatches the repair instead of printing `stages none` beside the findings
+- [x] Test: a succeeded-but-blocking audit does not finish the stage
+- [x] Suite green: 412 passed, 23 subtests (era 401). Reinstall, commit & push
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** Reaching the audit late does not cost the book its repair.
