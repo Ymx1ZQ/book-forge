@@ -3546,6 +3546,16 @@ def _canon_markdown(row: dict[str, object], *, continuity: str | None = None) ->
         value = row.get(block)
         if isinstance(value, str) and value.strip():
             body += f"\n<!-- bf:block {block} -->\n{value.strip()}\n"
+    # An era's date and its material facts are the two blocks a scene is answerable
+    # to, and they are the reason the era is written as canon at all.
+    when = row.get("when")
+    if isinstance(when, (str, int)) and str(when).strip():
+        body += f"\n<!-- bf:block when -->\n{str(when).strip()}\n"
+    material = row.get("material")
+    if isinstance(material, list) and material:
+        lines = "\n".join(f"- {str(value).strip()}" for value in material if str(value).strip())
+        if lines:
+            body += f"\n<!-- bf:block material -->\n{lines}\n"
     return metadata + body
 
 
@@ -3612,6 +3622,11 @@ def _universe_design_outputs(proposal: dict[str, object]) -> dict[str, str | byt
         "---\nid: UNI-0001\nkind: universe-kernel\n---\n\n## Kernel\n<!-- bf:block kernel -->\n"
         f"{law_imports}\nThe following invariants are inherited by every continuity.\n"
     )
+    # An era must be addressable or its date reaches nobody: only markdown under
+    # universe/canon becomes a block, and a chapter is told to import the era it
+    # happens in.
+    for row in proposal["eras"]:
+        outputs[f"universe/canon/eras/{row['id']}.md"] = _canon_markdown(row, continuity="CNT-0001")
     for category, directory in (("kernel", "topics"), ("places", "places"), ("factions", "factions"), ("characters", "characters")):
         for row in proposal[category]:
             continuity = None if category == "kernel" else "CNT-0001"

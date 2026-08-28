@@ -2390,3 +2390,19 @@ The seven fixes below are ordered: the first opens the pipe, and the rest are wo
 **Measured against the manuscript that produced this plan.** Repetition, run over the two written chapters, returns `with the window open` three times, `a woman who wants` twice, `suitcase` ten times — none of which four paid style reviewers mentioned. The heading check flags `La Stanza Sopra il Portone`. The import rule makes both existing chapters blocking, which is correct: they were written with no world in front of them.
 
 **What is deliberately not mechanical.** The reveal schedule is judged by the auditor, not by a rule: plants and reveals are prose, and a regular expression pretending to read them would be a fake check that reports success.
+
+## The era became a fact nobody can import ⏳→✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** eras were given a date and material facts, and chapters were told to import "the era it happens in" — but eras live in `universe/timeline/eras.yaml` and only markdown under `universe/canon` becomes an addressable block. Measured on the live book: 238 blocks indexed, prefixes BOOK, CHR, FAC, LAW, PLC, STYLE, UNI, and **no ERA at all**. The date is required, and it can reach nobody.
+
+**Fix:** an era is materialised as canon like a character or a place, with its `summary`, `when` and `material` as blocks, so a chapter can import `ERA-0001#when` and the writer is told what century it is in.
+
+**Tasks:**
+- [x] `_universe_design_outputs` writes `universe/canon/eras/ERA-*.md`
+- [x] Test: an era becomes addressable blocks after a design
+- [x] Test: a chapter can import the era and the writer envelope carries the date
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** The century is a block someone can read.

@@ -163,5 +163,54 @@ class LocaleStyleGateTests(unittest.TestCase):
         self.assertIsNone(self.bf._heading_case_problem("# The Room Above the Gate\n\nText.", "en"))
 
 
+
+class EraAsCanonTests(unittest.TestCase):
+    """An era that is not a block reaches nobody: the index carried CHR, PLC, FAC,
+    LAW, UNI and STYLE, and no ERA at all, while chapters were told to import one."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+
+    def test_an_era_is_written_as_canon_with_its_date_and_its_facts(self):
+        outputs = self.bf._universe_design_outputs({
+            "kernel": [{"id": "LAW-0001", "summary": "Memory is property."}],
+            "eras": [{"id": "ERA-0001", "name": "Now", "summary": "The present season.",
+                      "when": "2020", "material": ["a bus twice a day", "everyone has a phone", "cash at the bar"]}],
+            "events": [], "places": [], "factions": [],
+            "characters": [{"id": "CHR-0001", "summary": "A diver."}],
+            "style": {"person": "third-limited", "tense": "past"},
+        })
+        path = "universe/canon/eras/ERA-0001.md"
+        self.assertIn(path, outputs)
+        text = outputs[path]
+        self.assertIn("<!-- bf:block when -->\n2020", text)
+        self.assertIn("- everyone has a phone", text)
+
+    def test_the_era_becomes_importable_and_reaches_the_writer(self):
+        canon = self.project / "universe" / "canon" / "eras"
+        canon.mkdir(parents=True, exist_ok=True)
+        (canon / "ERA-0001.md").write_text(
+            "---\nid: ERA-0001\ncontinuity: CNT-0001\n---\n\n# Now\n\n"
+            "<!-- bf:block summary -->\nThe present season.\n\n"
+            "<!-- bf:block when -->\n2020\n\n"
+            "<!-- bf:block material -->\n- everyone has a phone\n",
+            encoding="utf-8",
+        )
+        index = self.bf.rebuild_indexes(self.project)
+        self.assertIn("ERA-0001#when", index["blocks"])
+        envelope = self.bf.build_envelope(
+            self.project, role="writer",
+            task_capsule={"id": "CH-0001", "book": "BOOK-0001", "target_words": 900, "beats": ["b"], "pov": "CHR-0001"},
+            imports=["ERA-0001#when", "ERA-0001#material"], state={}, tools=[], max_output_tokens=2000,
+        )
+        blob = json.dumps(envelope["payload"]["context"], ensure_ascii=False)
+        self.assertIn("2020", blob)
+        self.assertIn("everyone has a phone", blob)
+
+
 if __name__ == "__main__":
     unittest.main()
