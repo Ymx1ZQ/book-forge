@@ -282,5 +282,61 @@ class UnauditedDesignTests(unittest.TestCase):
         self.assertTrue(receipt["design_audit"]["ran"])
 
 
+
+class DeadOwnerTests(unittest.TestCase):
+    """A stopped driver's claim was held for the rest of its lease although the
+    process was demonstrably gone: four recoveries tonight were a five-minute wait."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.root = self.bf._project_root(self.project)
+        self.bf.add_task(self.project, "AUDIT-BOOK-0001", "canon-auditor", deps=[], priority=50, outputs=[])
+
+    def claim(self):
+        return self.bf.claim_task(self.project, "AUDIT-BOOK-0001", request_hash="c" * 64)
+
+    def attempt(self, attempt_id):
+        return self.bf._attempt(self.bf._load_plan(self.root), attempt_id)
+
+    def set_owner(self, attempt_id, pid):
+        plan = self.bf._load_plan(self.root)
+        self.bf._attempt(plan, attempt_id)["owner_pid"] = pid
+        self.bf._save_plan(self.root, plan)
+
+    def test_a_claim_records_who_holds_it(self):
+        claim = self.claim()
+        self.assertEqual(self.attempt(claim["attempt"])["owner_pid"], os.getpid())
+
+    def test_a_dead_owner_frees_the_task_without_waiting_for_the_lease(self):
+        claim = self.claim()
+        self.set_owner(claim["attempt"], 2 ** 22 - 1)
+        self.bf.recover_run(self.root)
+        self.assertEqual(self.attempt(claim["attempt"])["state"], "orphaned")
+
+    def test_an_accepted_claim_with_a_dead_owner_still_needs_a_person(self):
+        claim = self.claim()
+        self.bf.mark_provider_accepted(self.project, claim["attempt"], "ses-1")
+        self.set_owner(claim["attempt"], 2 ** 22 - 1)
+        self.bf.recover_run(self.root)
+        self.assertEqual(self.attempt(claim["attempt"])["state"], "outcome_unknown")
+
+    def test_a_live_owner_is_left_alone(self):
+        claim = self.claim()
+        self.bf.recover_run(self.root)
+        self.assertEqual(self.attempt(claim["attempt"])["state"], "running")
+
+    def test_an_attempt_with_no_recorded_owner_still_waits_for_its_lease(self):
+        claim = self.claim()
+        plan = self.bf._load_plan(self.root)
+        self.bf._attempt(plan, claim["attempt"]).pop("owner_pid", None)
+        self.bf._save_plan(self.root, plan)
+        self.bf.recover_run(self.root)
+        self.assertEqual(self.attempt(claim["attempt"])["state"], "running")
+
+
 if __name__ == "__main__":
     unittest.main()

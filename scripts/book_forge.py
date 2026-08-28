@@ -1477,6 +1477,9 @@ def claim_task(
         "heartbeat_at": current_time,
         "lease_expires_at": current_time + lease_seconds,
         "lease_seconds": float(lease_seconds),
+        # Who is holding this. A stopped driver's claim used to be held for the rest
+        # of its lease although the process was demonstrably gone.
+        "owner_pid": os.getpid(),
     }
     plan["attempts"].append(attempt)
     capsule = {"schema": 1, "task": task, "attempt": attempt_id, "fence": fence, "request_hash": request_hash}
@@ -2431,7 +2434,15 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
     orphaned = []
     unknown = []
     for attempt in plan["attempts"]:
-        if attempt["state"] == "running" and current_time > float(attempt.get("lease_expires_at", current_time + 1)):
+        if attempt["state"] != "running":
+            continue
+        expired = current_time > float(attempt.get("lease_expires_at", current_time + 1))
+        owner = attempt.get("owner_pid")
+        # A claim whose owner is no longer running is stale now, not when the clock
+        # says so. The lease remains the fallback for a claim this machine cannot
+        # answer for.
+        orphaned_owner = isinstance(owner, int) and owner != os.getpid() and not _pid_alive(owner)
+        if expired or orphaned_owner:
             task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
             if attempt.get("provider_accepted"):
                 attempt["state"] = "outcome_unknown"

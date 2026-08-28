@@ -2541,3 +2541,21 @@ The role's pin is: `canon-auditor` at variant **max**, with an output allowance 
 - [x] Suite green, reinstall, sync the live projects, commit & push
 
 **Done when:** The role that must answer has room left to answer in.
+
+## A claim whose owner is gone waits five minutes to be noticed ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** every time a driver is stopped — killed, interrupted, taken down with its shell — its in-flight claim stays `running` until the lease expires, and nothing can be dispatched for that task until then. Four times tonight the recovery was a wait: the process was demonstrably gone, its pid absent from the process table, and the engine went on holding the task for the remainder of five minutes because the only staleness it knows is the clock.
+
+**Fix:** an attempt records the pid that claimed it. Recovery treats a claim whose owner is no longer running as stale immediately, and then applies the same split it always did — never accepted goes back to `pending`, accepted becomes `outcome_unknown` for a person to decide. The lease stays as the fallback for the case the pid cannot answer for: another machine, a container, a process that outlived its own record.
+
+**Tasks:**
+- [x] `claim_task` records the owning pid
+- [x] `recover_run` treats a dead owner as stale without waiting for the lease
+- [x] The accepted / never-accepted split is unchanged
+- [x] Test: a dead owner is recovered at once; a live one is left alone
+- [x] Test: an attempt with no recorded pid still waits for its lease
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** Work whose owner is gone is free at once.
