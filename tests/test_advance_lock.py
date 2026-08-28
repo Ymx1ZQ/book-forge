@@ -217,6 +217,13 @@ class LeaseRenewalTests(unittest.TestCase):
         self.bf.recover_run(self.root, now=original + 60)
         self.assertEqual(self.attempt()["state"], "orphaned")
 
+    def test_the_renewal_uses_the_window_the_claim_asked_for(self):
+        self.bf.add_task(self.project, "TASK-B", "writer", deps=[], priority=50, outputs=[])
+        claim = self.bf.claim_task(self.project, "TASK-B", request_hash="b" * 64, now=10, lease_seconds=5)
+        self.bf.mark_provider_accepted(self.project, claim["attempt"], "ses-b", now=11)
+        recovered = self.bf.recover_run(self.root, now=20)
+        self.assertEqual(recovered["outcome_unknown"], [claim["attempt"]])
+
     def test_the_renewal_never_shortens_a_lease(self):
         self.bf.mark_provider_accepted(self.project, str(self.claim["attempt"]), "ses-1", now=1.0)
         self.assertGreater(float(self.attempt()["lease_expires_at"]), 1000.0)

@@ -44,7 +44,9 @@ class FaultMatrixTests(unittest.TestCase):
         self.bf.add_task(second, "TASK-A", "writer")
         accepted = self.bf.claim_task(second, "TASK-A", request_hash="a" * 64, now=10, lease_seconds=5)
         self.bf.mark_provider_accepted(second, accepted["attempt"], "ses-accepted", now=11)
-        recovered = self.bf.recover_run(second, now=16)
+        # Answering renews the lease by the window the claim asked for, so the attempt
+        # is stale only once it has been silent for that long.
+        recovered = self.bf.recover_run(second, now=17)
         self.assertEqual(recovered, {"orphaned": [], "outcome_unknown": [accepted["attempt"]]})
         late = self.bf.record_late_result(second, accepted["attempt"], "9" * 64)
         self.assertEqual(late["state"], "orphaned")

@@ -1432,6 +1432,7 @@ def claim_task(
         "provider_accepted": False,
         "heartbeat_at": current_time,
         "lease_expires_at": current_time + lease_seconds,
+        "lease_seconds": float(lease_seconds),
     }
     plan["attempts"].append(attempt)
     capsule = {"schema": 1, "task": task, "attempt": attempt_id, "fence": fence, "request_hash": request_hash}
@@ -2176,7 +2177,8 @@ def mark_provider_accepted(
     # in that window converted live work into an unknown outcome and threw it away.
     # A provider answering is the one moment the work is demonstrably alive.
     attempt["heartbeat_at"] = current
-    attempt["lease_expires_at"] = max(float(attempt.get("lease_expires_at", 0.0)), current + LEASE_SECONDS)
+    window = float(attempt.get("lease_seconds", LEASE_SECONDS))
+    attempt["lease_expires_at"] = max(float(attempt.get("lease_expires_at", 0.0)), current + window)
     _save_plan(root, plan)
     intent = _attempt_dir(root, attempt) / "intent.json"
     value = _read_json(intent)
