@@ -1170,6 +1170,50 @@ def _opencode_binary() -> str:
     raise BookForgeError("OpenCode is not installed")
 
 
+OPENCODE_MINIMUM = (1, 18, 18)
+# What the engine actually calls. A CLI without one of these does not fail as a
+# missing capability, it fails as something else entirely: an argv whose `--file`
+# swallowed the prompt reported `File not found: Process the attached envelope`.
+OPENCODE_RUN_FLAGS = ("--agent", "--file", "--format", "--variant", "--dir")
+_OPENCODE_CHECKED: set[str] = set()
+
+
+def _opencode_version(binary: str) -> tuple[str, tuple[int, ...]]:
+    raw = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    return raw, tuple(int(value) for value in re.findall(r"\d+", raw)[:3])
+
+
+def _verify_opencode_cli(binary: str) -> None:
+    """Check once per process that the CLI can do what the engine calls.
+
+    Cheap by design — a version string and two help texts, no network — because it
+    runs before the first dispatch and its whole purpose is to turn an unmet
+    requirement into a sentence that names the flag.
+    """
+    if binary in _OPENCODE_CHECKED:
+        return
+    raw, numbers = _opencode_version(binary)
+    if numbers < OPENCODE_MINIMUM:
+        raise BookForgeError(
+            f"book-forge requires OpenCode {'.'.join(map(str, OPENCODE_MINIMUM))} or newer; found {raw}"
+        )
+    help_result = subprocess.run([binary, "run", "--help"], capture_output=True, text=True, check=True)
+    help_text = help_result.stdout + help_result.stderr
+    missing = [flag for flag in OPENCODE_RUN_FLAGS if flag not in help_text]
+    if missing:
+        raise BookForgeError(
+            f"OpenCode {raw} does not support {', '.join(missing)} on `run`; book-forge dispatches every "
+            "role through it and cannot run without them"
+        )
+    probe = subprocess.run([binary, "debug", "agent", "--help"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        raise BookForgeError(
+            f"OpenCode {raw} has no `debug agent` subcommand; book-forge verifies each role's model pin "
+            "with it before every call"
+        )
+    _OPENCODE_CHECKED.add(binary)
+
+
 def verify_runtime(project: Path | str) -> dict[str, object]:
     root = _project_root(project)
     binary = _opencode_binary()
@@ -1182,7 +1226,7 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
         raise BookForgeError(f"Pinned model is unavailable: {MODEL}")
     help_result = subprocess.run([binary, "run", "--help"], capture_output=True, text=True, check=True)
     help_text = help_result.stdout + help_result.stderr
-    for required in ("--format", "--session", "--variant"):
+    for required in ("--format", "--session", *OPENCODE_RUN_FLAGS):
         if required not in help_text:
             raise BookForgeError(f"OpenCode lacks required run capability: {required}")
     debug = subprocess.run(
@@ -5255,6 +5299,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         raise BookForgeError(f"Role cannot run headlessly: {role}")
     root = _project_root_from(attempt_dir)
     binary = _opencode_binary()
+    _verify_opencode_cli(binary)
     resolved_result = subprocess.run(
         [binary, "--pure", "debug", "agent", role],
         cwd=root,

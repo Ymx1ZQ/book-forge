@@ -45,7 +45,10 @@ class RunnerArgvTests(unittest.TestCase):
                 return mock.Mock(stdout=json.dumps(payload), stderr="", returncode=0)
             return mock.Mock(stdout=json.dumps({"parts": []}), stderr="", returncode=0)
 
-        with mock.patch.object(self.bf.subprocess, "run", side_effect=fake_run):
+        # These check how the argv is built, not whether the CLI is capable; the
+        # requirement check has its own suite and would consume this mock.
+        with mock.patch.object(self.bf, "_verify_opencode_cli", lambda binary: None), \
+             mock.patch.object(self.bf.subprocess, "run", side_effect=fake_run):
             try:
                 self.bf.run_opencode_role(role, self.envelope, self.attempt_dir)
             except Exception:

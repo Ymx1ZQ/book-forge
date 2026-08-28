@@ -2443,3 +2443,26 @@ So from the fifth minute onward a healthy, working attempt is indistinguishable 
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** Work that is answering is not mistaken for work that has died.
+
+## OpenCode is a hard requirement that nothing declares and nothing checks ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** `run_opencode_role` is the only executor. It builds `opencode run --pure --dir … --agent <role> --format json --file <envelope>` and verifies the pin with `opencode --pure debug agent <role>` before every call, so the skill needs a CLI that exposes `run` with `--agent`, `--file`, `--format` and `--variant`, and the `debug agent` subcommand. `init` and `runtime sync` go further and write `opencode.json` and `.opencode/agents/*.md` into the project: the skill does not merely call OpenCode, it configures it.
+
+None of that is declared. `SKILL.md` has no prerequisite, `install.sh` checks its own payload and never asks whether OpenCode exists, and `verify_runtime` — which does check the version and some run capabilities — **is called from nowhere in production**. It is reachable only from a test.
+
+The cost was measured tonight: a CLI whose `--file` is a yargs array swallowed the prompt, and the failure surfaced as `Error: File not found: Process the attached envelope and return the requested output contract.` An hour went into reading that as an engine bug. A declared requirement would have named it in one line.
+
+**Fix:** the capabilities the engine depends on are checked once per process before the first dispatch, cheaply and without a network call, and a missing one is reported as an unmet requirement naming the flag. `verify_runtime` gains the two capabilities that bit us, `install.sh` refuses to install without OpenCode, and `SKILL.md` states the requirement where a reader meets it.
+
+**Tasks:**
+- [x] `_verify_opencode_cli` checks `--agent`, `--file`, `--format`, `--variant` and `debug agent`, once per process
+- [x] `run_opencode_role` runs it before the first dispatch
+- [x] `verify_runtime` checks the same capabilities
+- [x] `install.sh` fails when OpenCode is absent or too old
+- [x] `SKILL.md` declares the requirement
+- [x] Test: a CLI missing a flag fails naming it, and the check runs once
+- [x] Suite green, reinstall, commit & push
+
+**Done when:** A CLI that cannot do what the engine needs says so, instead of failing as a missing file.

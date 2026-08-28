@@ -62,6 +62,23 @@ if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
     SOURCE_COMMIT="0000000000000000000000000000000000000000"
 fi
 
+# Every role runs through OpenCode; installing without it produces a skill that
+# fails at the first dispatch with an error about something else.
+if command -v opencode >/dev/null 2>&1; then
+    OPENCODE_BIN="$(command -v opencode)"
+elif [ -x "$HOME/.opencode/bin/opencode" ]; then
+    OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+else
+    echo "book-forge requires OpenCode on PATH; none found" >&2
+    exit 1
+fi
+OPENCODE_VERSION="$("$OPENCODE_BIN" --version 2>/dev/null | head -1)"
+# sort -V -C succeeds when its input is already ascending, so the minimum goes first.
+if ! printf '1.18.18\n%s\n' "$OPENCODE_VERSION" | sort -V -C; then
+    echo "book-forge requires OpenCode 1.18.18 or newer; found ${OPENCODE_VERSION:-unknown}" >&2
+    exit 1
+fi
+
 for required in SKILL.md agents/openai.yaml assets/opencode/book-forge-orchestrator.md assets/opencode/book-forge-command.md; do
     if [ ! -f "$SRC_ROOT/$required" ]; then
         echo "Error: runtime payload is missing $required." >&2

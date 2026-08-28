@@ -5,6 +5,12 @@ description: Design, write, review, resume, translate, audit, and publish token-
 
 # Book Forge
 
+## Requirement
+
+Every role runs through OpenCode. The engine dispatches with `opencode run --pure --dir … --agent <role> --format json --file <envelope>` and verifies each role's model pin with `opencode --pure debug agent <role>` before the call, so **OpenCode 1.18.18 or newer must be installed and on PATH**, exposing `run` with `--agent`, `--file`, `--format`, `--variant` and `--dir`, and the `debug agent` subcommand. `init` and `runtime sync` also write the project's `opencode.json` and `.opencode/agents/`: the skill configures OpenCode, it does not merely call it.
+
+The capabilities are checked once before the first dispatch and a missing one is reported by name. Run `verify_runtime` to check the pinned model is reachable as well.
+
 ## Route protocol
 
 Resolve the directory containing this loaded `SKILL.md` as `SKILL_ROOT`. The
