@@ -51,7 +51,7 @@ class ChorusTests(unittest.TestCase):
         orig = runner
         def wrapped(role, envelope, attempt_dir):
             if role == "canon-auditor":
-                return {"text": json.dumps({"findings": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "max", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+                return {"text": json.dumps({"findings": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
             return orig(role, envelope, attempt_dir)
         # Disable via flag
         self.bf.execute_universe_design(self.project, provider=wrapped, no_chorus=True)

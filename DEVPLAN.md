@@ -2523,3 +2523,21 @@ The receipt beside it was worse: `design_audit: {"state": null, "blocking": 0}` 
 - [x] Suite green, reinstall, commit & push
 
 **Done when:** A check that never ran cannot pass.
+
+## The canon auditor is pinned to think until the ceiling ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the book audit returned nothing three times running. Its receipts, across two payload sizes: input 41478 then 34835 tokens, and both times **reasoning 32000, output 0, finish `length`**. Cutting the payload by half moved the input and changed nothing else, so the size was never the binding constraint.
+
+The role's pin is: `canon-auditor` at variant **max**, with an output allowance of 3500 — maximum reasoning effort and the smallest budget but one. Asked an open question over a whole book, the model spends the entire ceiling thinking and never reaches the answer. The designer writes forty chapters at `medium`; the technical editor makes a comparable judgement at `high` and returns findings.
+
+**Fix:** the auditor runs at `high`. A pin change does not reach a project until `runtime sync` regenerates its agents, and until then `run_opencode_role` refuses with `Resolved OpenCode agent pin differs` — a sentence that names neither what differs nor what to do. It now names both.
+
+**Tasks:**
+- [x] `canon-auditor` variant `max` → `high`
+- [x] The pin mismatch error names the role, both variants and `runtime sync`
+- [x] Test: the pin is high and the mismatch message is actionable
+- [x] Suite green, reinstall, sync the live projects, commit & push
+
+**Done when:** The role that must answer has room left to answer in.

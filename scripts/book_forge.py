@@ -79,7 +79,7 @@ ROLE_SPECS = {
     "cold-reader": ("all", "low", 5),
     "technical-editor": ("all", "high", 7),
     "reviser": ("all", "low", 8),
-    "canon-auditor": ("all", "max", 8),
+    "canon-auditor": ("all", "high", 8),
     "translator": ("all", "low", 7),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
@@ -5348,7 +5348,13 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         or resolved_model.get("modelID") != expected_model_id
         or resolved.get("variant") != expected_variant
     ):
-        raise BookForgeError(f"Resolved OpenCode agent pin differs for {role}")
+        raise BookForgeError(
+            f"OpenCode resolves {role} to "
+            f"{resolved_model.get('providerID')}/{resolved_model.get('modelID')} variant "
+            f"{resolved.get('variant')}, but book-forge pins {expected_model_id} variant "
+            f"{expected_variant}. The project's .opencode/agents are stale — run "
+            "`book-forge runtime sync` to regenerate them"
+        )
     environment = dict(os.environ)
     environment.pop("OPENROUTER_API_KEY", None)
     started = time.monotonic()

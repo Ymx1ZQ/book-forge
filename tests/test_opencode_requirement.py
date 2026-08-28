@@ -86,5 +86,29 @@ class OpenCodeRequirementTests(unittest.TestCase):
         self.assertIn("1.18.18", script)
 
 
+
+class AuditorEffortTests(unittest.TestCase):
+    """The audit returned nothing three times: reasoning 32000, output 0, twice over
+    two payload sizes. Maximum effort with the second-smallest output allowance."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_the_auditor_does_not_run_at_maximum_effort(self):
+        mode, variant, steps = self.bf.ROLE_SPECS["canon-auditor"]
+        self.assertEqual(variant, "high")
+
+    def test_it_matches_the_other_judgement_role(self):
+        self.assertEqual(
+            self.bf.ROLE_SPECS["canon-auditor"][1],
+            self.bf.ROLE_SPECS["technical-editor"][1],
+        )
+
+    def test_a_stale_pin_says_what_differs_and_what_to_run(self):
+        source = Path(self.bf.__file__).read_text()
+        self.assertIn("book-forge runtime sync", source)
+        self.assertIn("stale", source)
+
+
 if __name__ == "__main__":
     unittest.main()

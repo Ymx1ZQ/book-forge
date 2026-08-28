@@ -105,7 +105,7 @@ class FixtureProvider:
                 raise AssertionError(role)
             self.calls.append(role)
             number = len(self.calls)
-        variants = {"designer": "medium", "canon-auditor": "max", "writer": "low", "cold-reader": "low", "technical-editor": "high", "reviser": "low", "translator": "low"}
+        variants = {"designer": "medium", "canon-auditor": "high", "writer": "low", "cold-reader": "low", "technical-editor": "high", "reviser": "low", "translator": "low"}
         return {
             "text": json.dumps(value),
             "provider": "openrouter",
