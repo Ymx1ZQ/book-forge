@@ -2261,3 +2261,132 @@ The two rules contradict each other sixty-five words apart. The floor exists to 
 - [x] Reinstall, commit & push
 
 **Done when:** The pass that is told to cut is measured against what it cut from.
+
+# The chapter pipeline is blind to the world it is writing about
+
+Two chapters of a finished book were read closely and the defects sorted by origin. The largest one is in neither the design nor the prose: **every chapter contract carries `imports: ['UNI-0001#kernel']`, and the engine hardcodes that list**. In `execute_book_design` the required output contains `"imports": chapter_imports` where `chapter_imports = ["UNI-0001#kernel", *relation_imports]`, so no chapter can import a character, a place or an era.
+
+What that means, traced through the code: the writer, the technical editor and the reviser all build their envelope from `contract["imports"]`, and the cold reader is denied context on purpose. **No role in the chapter pipeline ever sees the POV character's canon.** `technical-editor.md` is told to audit "against its contract and visible canon"; its visible canon is one block of universe invariants.
+
+The consequences, measured on the manuscript: a German protagonist whose canon says *"when she slips into German under her breath, the town notices"* speaks two chapters without an accent, a foreign word or anyone hearing she is foreign; the town says her name although nobody asked it; the era is never stated anywhere so the writer invented the 1950s inside a brief that says contemporary; and the geography is a generic fishing harbour with a ferryman in a town of salt pans and a straight beach.
+
+The seven fixes below are ordered: the first opens the pipe, and the rest are worth less without it.
+
+## 1. A chapter contract imports the canon it depends on ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the engine dictates every chapter's imports and dictates almost nothing. The designer receives the book's canon as context and is then told to write `["UNI-0001#kernel"]` into every chapter, so the canon it just read cannot reach anyone downstream.
+
+**Fix:** the designer chooses each chapter's imports from the canon it was given, and validation requires the minimum that makes a chapter checkable: the kernel, the POV character's `summary` and `voice`, and at least one place. An import that names no known block is blocking.
+
+**Tasks:**
+- [x] `required_output` asks the designer for the imports a chapter depends on
+- [x] `designer.md` states what belongs in a chapter's imports and why
+- [x] `validate_book_design` requires kernel + POV summary and voice + a place
+- [x] `validate_book_design` refuses an import that resolves to no block
+- [x] Test: a chapter importing only the kernel is blocking
+- [x] Test: a chapter naming a block that does not exist is blocking
+- [x] Test: the writer envelope carries the POV character's voice
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** The role that must judge whether the protagonist sounds like herself has her voice in front of it.
+
+## 2. An era is a date and its consequences, not a name ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** an era row carries a name and a summary — *"The Liminal Lull — late May, the off-season pause"* — and no year, no object, no price. The brief says contemporary; the prose is a 1950s novel with a postmistress writing arrivals in a book, a guesthouse with no key and a woman walking from the station with a suitcase. Nothing in the pipeline ever stated a period, so the writer chose one.
+
+**Fix:** an era carries `when` and `material` — three to five concrete facts a scene must obey: how people travel, how they reach each other, what money looks like, what a stranger's arrival means. An era without `when` is blocking.
+
+**Tasks:**
+- [x] `designer.md` universe scope requires `when` and `material` on every era
+- [x] `validate_universe_design` blocks an era with no `when`
+- [x] Test: an era without a date is blocking; one with a date and material passes
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** No book has to guess what century it is in.
+
+## 3. The technical editor judges the world, not the sentences ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** with canon in its envelope for the first time, the role's instruction is still generic. On a chapter where the protagonist's nationality had vanished and the town used a name nobody had given it, it returned six findings about phrasing.
+
+**Fix:** `technical-editor.md` asks the questions the canon makes answerable: does the POV character behave and sound as her voice block says, does the place match its block, does the chapter obey the era's material facts, and — the one that catches the name — does anyone act on knowledge the text never gave them.
+
+**Tasks:**
+- [x] `technical-editor.md` rewritten around conformance to the imported canon
+- [x] Test: the prompt names the checks and the role still returns its contract
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** A chapter that contradicts the canon it imported is a blocking finding.
+
+## 4. Dialogue rules, and a lens that reads for them ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** `writer.md` gives dialogue one line. Measured across two chapters: seventy-two lines of dialogue, six questions, and not one practical need. Nobody asks her name, how long she is staying or whether she has eaten. Every line states the book's theme — *"we are not a town of locked doors"*, *"the town has all summer to ask its questions"*, *"you'll pay me in the end"*. A fourteen-year-old reads an adult stranger twice in five minutes and introduces himself as "the ferryman's boy". In one dinner a woman the canon calls guarded answers eight consecutive questions truthfully.
+
+**Fix:** writer.md gains the rules that forbid it, and style-review.md gains the check, or four reviewers will go on counting appositives while the landlady speaks like a chorus.
+
+**Tasks:**
+- [x] `writer.md`: no line states the theme; every scene carries one practical want; someone misunderstands or answers beside the question; nobody introduces themselves by their function; an interrogation costs the asker something
+- [x] `style-review.md` reads dialogue for those five
+- [x] Test: both prompts carry the rules
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** A line that could serve as the book's epigraph is a finding.
+
+## 5. The design may not spend a reveal before the arc places it ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** the arc says the past surfaces from chapter nine. Chapter two's third beat says to take the photograph of the drowned man out of the suitcase, and its reveals say *"Reveal to the reader what the town cannot see: Mary carries a dead man"*. The design contradicts its own arc and nothing looks.
+
+**Fix:** the canon auditor, which already receives the whole proposal and the arc, is asked to check the reveal schedule against it, and to check that every reveal has a plant in an earlier chapter. This one stays a judgement: plants and reveals are prose, and a mechanical check would be a fake.
+
+**Tasks:**
+- [x] `canon-auditor.md` checks reveals against the arc's phases and against their plants
+- [x] Test: the prompt carries the check
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** A book cannot spend at chapter two what its own arc placed at chapter nine.
+
+## 6. A translation has a contract, not only a glossary ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** `translations/it/style.md` is still the stub the engine generated: *"Define register, dialogue punctuation, narrative tense, and voice-preservation decisions here."* Nobody defined them, so the translator improvised: `tu` and `Lei` mixed inside sentences that also say `signora`, a masculine adjective for a female character, calques that mean nothing in Italian, English title case on a chapter heading. And `The train stopped at sixteen past five` became `alle sedici e cinque` — 5:16 turned into 16:05 — because the numeric check only looks at digits.
+
+**Fix:** the locale style file stops being optional: a translation refuses to run while it is still the stub. The heading case check is deterministic and free. The register decision belongs in that file, and the translator is told to obey it.
+
+**Tasks:**
+- [x] `translate` refuses while the locale style file is unedited, naming the file
+- [x] Heading case validated against the locale
+- [x] `translator.md` obeys the locale style file's register and refuses calques
+- [x] Test: the stub blocks; an edited file passes; a title-cased heading is a finding
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** No translation starts before someone has decided how the book speaks in that language.
+
+## 7. Repetition is caught by counting, not by asking ✅
+
+**Status: ✅ Done — 2026-08-28**
+
+**Problem:** in two chapters, `counted` five times, `her own name` three, the wet stone in a pocket twice within twelve lines. Four paid style reviewers did not mention it once.
+
+**Fix:** a deterministic pass counts repeated phrases and adds them to the findings the reviser receives, at no model cost.
+
+**Tasks:**
+- [x] `_repetition_findings` over the draft, merged into the review findings
+- [x] Distinctive phrases only — stop words and dialogue tags excluded
+- [x] Test: a phrase repeated three times is a finding; ordinary prose is not
+- [x] Suite green: 334 passed, 23 subtests (era 310) · reinstall, commit & push
+
+**Done when:** The cheapest defect to find is not the one that survives four reviewers.
+
+**Measured against the manuscript that produced this plan.** Repetition, run over the two written chapters, returns `with the window open` three times, `a woman who wants` twice, `suitcase` ten times — none of which four paid style reviewers mentioned. The heading check flags `La Stanza Sopra il Portone`. The import rule makes both existing chapters blocking, which is correct: they were written with no world in front of them.
+
+**What is deliberately not mechanical.** The reveal schedule is judged by the auditor, not by a rule: plants and reveals are prose, and a regular expression pretending to read them would be a fake check that reports success.

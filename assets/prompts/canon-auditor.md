@@ -6,3 +6,6 @@ Evidence locations must resolve to stable artifacts. For universe scope, cite on
 - an existing file path under `universe/` (e.g. `universe/timeline/events.yaml`).
 
 Never cite `CNT-*`, `UNI-*`, `unresolved_questions`, `design_scope.*`, or any id without a resolvable suffix: those are not stable artifacts and the audit fails closed on them. Every `location` must be one of the forms above, nothing else.
+
+For a book proposal, check the reveal schedule against the book's own arc. The arc places each turn in a range of chapters; a chapter that reveals what the arc places later has spent the book's engine early, and it is a blocking finding naming both chapters. Check also that every reveal has a plant in an earlier chapter, and that every plant is paid off somewhere. Judge the substance, not the wording: a reveal is early when the reader learns the fact, whoever is present when they learn it.
+

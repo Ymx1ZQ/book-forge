@@ -36,7 +36,7 @@ def valid_proposal():
     places = [{"id": f"PLC-{i:04d}", "name": f"Place{i}", "tier": "L1" if i<4 else "L2" if i<9 else "L3", "summary": "place"} for i in range(15)]
     return {
         "kernel": [{"id": "LAW-0001", "summary": "law"}],
-        "eras": [{"id": "ERA-0001", "name": "Era", "order": 1}],
+        "eras": [{"id": "ERA-0001", "name": "Era", "order": 1, "when": "2087", "material": ["archive skiffs on the canals", "no radio below the waterline", "credit is a favour owed"]}],
         "events": [{"id": "EVT-0001", "era": "ERA-0001", "order": 1, "summary": "event"}],
         "places": places,
         "factions": [{"id": "FAC-0001", "summary": "faction"}],

@@ -22,7 +22,7 @@ ROLE_VARIANTS = {name: spec[1] for name, spec in load_module().ROLE_SPECS.items(
 def clean_proposal():
     return {
         "kernel": [{"id": "LAW-0001", "summary": "Memory cannot be manufactured."}],
-        "eras": [{"id": "ERA-0001", "name": "Afterlight", "order": 1}],
+        "eras": [{"id": "ERA-0001", "name": "Afterlight", "order": 1, "when": "2087", "material": ["archive skiffs on the canals", "no radio below the waterline", "credit is a favour owed"]}],
         "events": [{"id": "EVT-0001", "era": "ERA-0001", "order": 1, "summary": "The archive opens."}],
         "places": [{"id": "PLC-0001", "name": "Glass Harbor", "summary": "A tidal archive."}],
         "factions": [{"id": "FAC-0001", "name": "Keepers", "summary": "Guard inherited memories."}],
@@ -214,7 +214,7 @@ class UniverseDesignTests(unittest.TestCase):
     def test_normalizes_id_keyed_dict_proposal_shapes(self):
         proposal = {
             "kernel": {"LAW-0001": "The salt preserves every secret."},
-            "eras": {"ERA-0001": {"name": "Afterlight", "order": 1}},
+            "eras": {"ERA-0001": {"name": "Afterlight", "order": 1, "when": "2087", "material": ["skiffs", "no radio", "credit is a favour"]}},
             "events": {"EVT-0001": {"era": "ERA-0001", "order": 1, "name": "The archive opens.", "invariant": "The archive opens."}},
             "places": {"PLC-0001": {"name": "Glass Harbor", "invariant": "A tidal archive."}},
             "factions": {"FAC-0001": {"name": "Keepers", "invariant": "Guard inherited memories."}},

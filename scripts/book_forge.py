@@ -3028,6 +3028,15 @@ def validate_universe_design(project: Path | str, proposal: dict[str, object]) -
     if not laws:
         findings.append({"code": "kernel.empty", "severity": "blocking"})
     era_ids = {str(row["id"]) for row in eras}
+    for row in eras:
+        # An era named but not dated leaves the writer to choose a century. A brief
+        # saying "contemporary" produced a novel with a postmistress writing arrivals
+        # into a book, because nothing downstream ever stated a year.
+        if not str(row.get("when") or "").strip():
+            findings.append({"code": "era.undated", "severity": "blocking", "era": row["id"]})
+        material = row.get("material")
+        if not isinstance(material, list) or len([x for x in material if str(x).strip()]) < 3:
+            findings.append({"code": "era.material-thin", "severity": "warning", "era": row["id"]})
     event_slots: set[tuple[str, int]] = set()
     for event in events:
         era = str(event.get("era", ""))
@@ -3731,6 +3740,22 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
             findings.append({"code": "chapter.target-words", "severity": "blocking", "chapter": chapter.get("id")})
         if _title_is_beat_prefix(chapter):
             findings.append({"code": "chapter.title-from-beat", "severity": "warning", "chapter": chapter.get("id"), "title": chapter.get("title")})
+    index = rebuild_indexes(root)
+    known_blocks = set(index["blocks"])
+    for chapter in chapters:
+        imports = [str(value) for value in chapter.get("imports", []) if isinstance(value, str)]
+        unknown = sorted(value for value in imports if value not in known_blocks)
+        if unknown:
+            findings.append({"code": "chapter.import-unknown", "severity": "blocking", "chapter": chapter.get("id"), "imports": unknown})
+        pov = str(chapter.get("pov") or "")
+        # A chapter is only checkable by what it carries: the writer, the technical
+        # editor and the reviser all build their envelope from this list, so a chapter
+        # that imports nothing is written and judged with no world in front of it.
+        missing = [value for value in (f"{pov}#summary", f"{pov}#voice") if pov and value in known_blocks and value not in imports]
+        if missing:
+            findings.append({"code": "chapter.import-pov", "severity": "blocking", "chapter": chapter.get("id"), "missing": missing})
+        if any(value.startswith("PLC-") for value in known_blocks) and not any(value.startswith("PLC-") for value in imports):
+            findings.append({"code": "chapter.import-place", "severity": "blocking", "chapter": chapter.get("id")})
     required, _ = _book_obligations(root, book_id)
     assigned: dict[str, list[str]] = {obligation_id: [] for obligation_id in required}
     for chapter in chapters:
@@ -4645,7 +4670,12 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
                         "plants": [],
                         "reveals": [],
                         "target_words": 2000,
-                        "imports": chapter_imports,
+                        "imports": (
+                            "the ids of the canon blocks this chapter depends on, taken from the context you were given: "
+                            f"always {chapter_imports}, plus the POV character's #summary and #voice, plus every place the "
+                            "chapter is set in, plus the era it happens in. Whoever writes and whoever checks this chapter "
+                            "sees only what you list here"
+                        ),
                         "obligations": "identifiers taken from the task's obligations list and nothing else; empty when that list is empty. Your own setups go in plants and their payoffs in reveals",
                         "pivotal": None,
                     }
@@ -5765,7 +5795,7 @@ def recheck_style_closed_chapter(
     if not ms_path.is_file():
         raise BookForgeError(f"No manuscript prose for closed chapter {chapter_id}")
     prose = ms_path.read_text(encoding="utf-8")
-    style_findings = _call_style_review(root, book_id, chapter_id, contract, prose, runner)
+    style_findings = _call_style_review(root, book_id, chapter_id, contract, prose, runner) + _repetition_findings(prose)
     title = str(contract.get("title") or "").strip()
     if not style_findings and title:
         lines = prose.split("\n")
@@ -6019,6 +6049,85 @@ def _call_parallel_reviews(
     return parsed["cold-reader"], parsed["technical-editor"], receipts
 
 
+REPETITION_MIN_WORDS = 4
+REPETITION_STOPWORDS = frozenset(
+    "the a an and or but of to in on at for with from by as is was were be been it its "
+    "he she they him her them his their that this these those not no so if then than "
+    "had has have do did does said says say what who which when where how".split()
+)
+
+
+def _repetition_findings(prose: str) -> list[dict[str, object]]:
+    """Count what four paid reviewers did not mention once.
+
+    Measured on two chapters of a finished book: one word five times, one phrase three
+    times, and the same image twice within twelve lines. Repetition is the cheapest
+    defect to find and it survived every model that read the chapter, so it is found
+    by counting instead of by asking.
+    """
+    body = "\n".join(line for line in prose.splitlines() if not line.startswith("#"))
+    words = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)?", body.lower(), re.UNICODE)
+    seen: dict[str, int] = {}
+    for size in (REPETITION_MIN_WORDS, REPETITION_MIN_WORDS + 1):
+        for start in range(len(words) - size + 1):
+            window = words[start : start + size]
+            if all(word in REPETITION_STOPWORDS for word in window):
+                continue
+            if sum(1 for word in window if word not in REPETITION_STOPWORDS) < 2:
+                continue
+            phrase = " ".join(window)
+            seen[phrase] = seen.get(phrase, 0) + 1
+    repeated = sorted(((phrase, count) for phrase, count in seen.items() if count > 1), key=lambda row: (-row[1], row[0]))
+    covered: list[str] = []
+    findings = []
+    for phrase, count in repeated:
+        if any(phrase in longer for longer in covered):
+            continue
+        covered.append(phrase)
+        findings.append(
+            {
+                "id": f"R-{len(findings) + 1:04d}",
+                "dimension": "style",
+                "severity": "note",
+                "evidence": phrase,
+                "issue": f"the phrase appears {count} times in this chapter",
+                "fix_required": False,
+                "review": "repetition",
+            }
+        )
+        if len(findings) >= 6:
+            break
+    # A single distinctive word carried through a chapter is the commoner tic and the
+    # phrase window cannot see it: one chapter used the same verb five times.
+    # A name recurring is not a tic, so proper nouns are left alone: they are the words
+    # that appear capitalised where a sentence did not just begin.
+    proper = {
+        match.group(1).lower()
+        for match in re.finditer(r"(?<![.!?…]\s)(?<!^)(?<![\"«—-])\b([A-Z][^\W\d_]{2,})", body, re.UNICODE | re.MULTILINE)
+    }
+    counts: dict[str, int] = {}
+    for word in words:
+        if len(word) >= 6 and word not in REPETITION_STOPWORDS and word not in proper:
+            counts[word] = counts.get(word, 0) + 1
+    for word, count in sorted(((w, c) for w, c in counts.items() if c >= 5), key=lambda row: (-row[1], row[0]))[:4]:
+        if any(word in row["evidence"] for row in findings):
+            continue
+        # A note, never a warning: the reviser owes a disposition for warnings, and a
+        # recurring word is worth seeing without being worth an obligation.
+        findings.append(
+            {
+                "id": f"R-{len(findings) + 1:04d}",
+                "dimension": "style",
+                "severity": "note",
+                "evidence": word,
+                "issue": f"the word appears {count} times in this chapter",
+                "fix_required": False,
+                "review": "repetition",
+            }
+        )
+    return findings
+
+
 def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
     """Chorus style review on chapters: tag-aware, advisory only (note/warning, never blocking). On by default, opt-out via chorus.style_review: false. Supports per-tag rules with rewrite."""
     try:
@@ -6186,6 +6295,7 @@ def review_and_close_chapter(
     writer_consequences = _read_json(root / "books" / book_id / "work" / chapter_id / "consequences.json")
     _ensure_review_tasks(root, book_id, chapter_id)
     style_findings = _call_style_review(root, book_id, chapter_id, contract, draft, runner)
+    style_findings = style_findings + _repetition_findings(draft)
     cold, technical, receipts = _call_parallel_reviews(root, book_id, chapter_id, contract, draft, writer_consequences, runner)
     technical_findings = []
     for position, finding in enumerate(technical["findings"], start=1):
@@ -6511,6 +6621,41 @@ def add_translation(project: Path | str, book_id: str, locale: str) -> dict[str,
     return {**config, "created": True}
 
 
+LOCALE_STYLE_STUB = "Define register, dialogue punctuation, narrative tense, and voice-preservation decisions here."
+
+
+def _require_locale_style(root: Path, book_id: str, locale: str) -> None:
+    """A translation does not start before someone has decided how the book speaks.
+
+    Left unedited, the translator improvises: one book came back mixing the formal
+    and familiar registers inside sentences that also used the formal address, with
+    a masculine adjective on a female character and English title case on a heading.
+    """
+    path = root / "books" / book_id / "translations" / locale / "style.md"
+    if not path.is_file() or LOCALE_STYLE_STUB in path.read_text(encoding="utf-8"):
+        raise BookForgeError(
+            f"Locale style is still the generated stub: {path.relative_to(root)}. "
+            "Decide the register, how dialogue is punctuated, and which voices are preserved, "
+            "before any prose is translated"
+        )
+
+
+TITLE_CASE_LOCALES_EXEMPT = ("en",)
+
+
+def _heading_case_problem(translated: str, locale: str) -> str | None:
+    """English title case on a heading in a language that does not use it."""
+    if locale.split("-")[0].lower() in TITLE_CASE_LOCALES_EXEMPT:
+        return None
+    for line in translated.splitlines():
+        if not line.startswith("#"):
+            continue
+        words = [w for w in re.findall(r"[^\W\d_]+", line[1:], re.UNICODE) if len(w) > 3]
+        if len(words) >= 3 and all(w[:1].isupper() for w in words):
+            return f"heading uses English title case: {line.strip()!r}"
+    return None
+
+
 def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
     translated = value.get("translated_markdown")
     problems = []
@@ -6520,6 +6665,9 @@ def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
         problems.append("missing glossary_updates")
     if not isinstance(value.get("boundary"), str) or not value["boundary"].strip():
         problems.append("missing translated boundary")
+    heading = _heading_case_problem(translated, str(value.get("_locale") or ""))
+    if heading:
+        problems.append(heading)
     # A locale writes 5,8 where the source writes 5.8. Comparing the literal strings
     # made a correctly localized number look like a changed one, and since the repair
     # attempt carries the failure reason, the loop taught the translator to keep the
@@ -6662,7 +6810,7 @@ def _translate_one(
         _write_bytes_atomic(attempt_dir / "raw-output.txt", str(result["text"]).encode())
         try:
             value = _parse_contract_json(str(result["text"]))
-            problems = _translation_validation(source, value)
+            problems = _translation_validation(source, {**value, "_locale": locale})
             if problems:
                 raise BookForgeError("; ".join(problems))
         except BookForgeError as exc:
@@ -6734,6 +6882,7 @@ def translate_next(
     root = _project_root(project)
     canonical = _canonical_locale(locale)
     locale_root = root / "books" / book_id / "translations" / canonical
+    _require_locale_style(root, book_id, canonical)
     if not (locale_root / "locale.yaml").is_file():
         raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
     _ensure_locale_artifacts(root, book_id, canonical)

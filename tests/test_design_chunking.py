@@ -147,7 +147,7 @@ class DesignChunkingTests(unittest.TestCase):
         # Designer emits 7 per-category objects; merge must combine them.
         text = "\n".join([
             json.dumps({"kernel": [{"id": "LAW-0001", "summary": "a"}]}),
-            json.dumps({"eras": [{"id": "ERA-0001", "summary": "b"}]}),
+            json.dumps({"eras": [{"id": "ERA-0001", "summary": "b", "when": "2087", "material": ["a", "b", "c"]}]}),
             json.dumps({"places": [{"id": "PLC-0001", "summary": "c"}]}),
             json.dumps({"characters": [{"id": "CHR-0001", "summary": "d"}]}),
             json.dumps({"characters": [{"id": "CHR-0002", "summary": "e"}]}),

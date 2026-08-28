@@ -6,6 +6,12 @@ import unittest
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
@@ -59,6 +65,7 @@ class TranslateTests(unittest.TestCase):
         data["closed_chapters"] = ["CH-0001", "CH-0002"]
         state.write_text(json.dumps(data))
         self.bf.add_translation(self.project, self.book, "it-IT")
+        _decide_locale_style(self.bf, self.project, self.book, "it-IT")
 
     def test_translates_two_chapters_serially_one_call_each(self):
         provider = TranslationProvider([translated(1, 1), translated(2, 2)])
@@ -88,6 +95,7 @@ class TranslateTests(unittest.TestCase):
         (chapters / "CH-0001.json").write_text(json.dumps({"schema": 1, "book": book, "id": "CH-0001", "order": 1, "pov": "Mara", "beats": ["x"], "target_words": 20, "imports": ["UNI-0001#kernel"], "pivotal": None}))
         (second / f"books/{book}/manuscript/chapters/CH-0001.md").write_text("# Chapter 1\n\nMara sees number 42 and leaves.")
         self.bf.add_translation(second, book, "it-IT")
+        _decide_locale_style(self.bf, second, book, "it-IT")
         broken = TranslationProvider([bad, bad])
         with self.assertRaises(self.bf.BookForgeError):
             self.bf.translate_next(second, book, "it-IT", provider=broken)

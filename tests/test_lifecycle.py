@@ -4,6 +4,12 @@ import unittest
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 
 
@@ -135,6 +141,7 @@ class LifecycleTests(unittest.TestCase):
     def test_status_scopes_book_run_and_locale_explicitly(self):
         book = self.bf.add_book(self.project, "Book")["id"]
         self.bf.add_translation(self.project, book, "it-IT")
+        _decide_locale_style(self.bf, self.project, book, "it-IT")
         run = self.bf.claim_task(self.project, "TASK-A", request_hash="a" * 64)
         run_id = self.bf._attempt(self.bf._load_plan(self.project), run["attempt"])["run"]
         scoped = self.bf.status_project(self.project, book_id=book, run_id=run_id, locale="it-it")

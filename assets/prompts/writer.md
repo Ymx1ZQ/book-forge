@@ -6,7 +6,12 @@ How to write it. Where these conflict, the earlier one wins.
 2. In every scene someone wants something and something is in the way. When a beat describes a mechanism, an institution or a rule, dramatise who it presses on and what they do about it — never report it.
 3. Show an element of the world by using it, never by glossing it. If a term needs an explanation to be understood, put it in someone's hands and let the use carry the meaning. Introduce no invented term you cannot make concrete in the same scene.
 4. Prefer the thing to the statement about the thing. A sentence that tells the reader what something means is weaker than the thing doing it.
-5. When two people share a scene, let them speak. Dialogue applies pressure that narration only describes.
+5. When two people share a scene, let them speak. Dialogue applies pressure that narration only describes. Five rules govern it, and they are the difference between people and a chorus:
+   - No line states the theme. If a line could be printed as the book's epigraph, it is the author talking and it goes.
+   - Every scene carries at least one practical want said aloud — the price, the time, the way to somewhere, whether there is food.
+   - Someone misunderstands, answers beside the question, or does not answer. A conversation in which every line lands is a transcript of one mind.
+   - Nobody introduces themselves by their function, and nobody explains the local customs to a stranger unprompted.
+   - When one character is drawing another out, refusal is the norm and every answer costs the asker something. Two or three true answers in one sitting is already a great deal from someone with something to hide.
 6. Do not put a definite article on a noun the reader has never been given unless this chapter then shows it.
 7. Vary sentence length. A paragraph built out of long subordinated sentences reads as fog. Use apposition between dashes at most once a paragraph.
 

@@ -5,6 +5,12 @@ import unittest
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
@@ -43,6 +49,7 @@ class TranslationInvalidationTests(unittest.TestCase):
             (contracts / f"{chapter}.json").write_text(json.dumps({"schema": 1, "book": self.book, "id": chapter, "order": index, "pov": "Mara", "beats": ["signal"], "target_words": 20, "imports": ["UNI-0001#kernel"], "pivotal": None}))
             (manuscript / f"{chapter}.md").write_text(f"# Chapter {index}\n\nMara sees signal {index} and continues.")
         self.bf.add_translation(self.project, self.book, "it-IT")
+        _decide_locale_style(self.bf, self.project, self.book, "it-IT")
         self.bf.translate_next(self.project, self.book, "it-IT", provider=Provider(), run_all=True)
 
     def test_source_edit_marks_direct_prose_and_boundary_audit_suffix(self):

@@ -5,6 +5,12 @@ import unittest
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 
 
@@ -46,11 +52,13 @@ class TranslationWorkspaceTests(unittest.TestCase):
             with self.subTest(locale=locale):
                 with self.assertRaises(self.bf.BookForgeError):
                     self.bf.add_translation(self.project, self.book, locale)
+                    _decide_locale_style(self.bf, self.project, self.book, locale)
         translations = self.project / f"books/{self.book}/translations"
         self.assertFalse(translations.exists())
 
     def test_locale_state_is_isolated(self):
         self.bf.add_translation(self.project, self.book, "fr-FR")
+        _decide_locale_style(self.bf, self.project, self.book, "fr-FR")
         self.bf.add_translation(self.project, self.book, "de-DE")
         fr = self.project / f"books/{self.book}/translations/fr-FR/state.yaml"
         data = json.loads(fr.read_text())

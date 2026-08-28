@@ -6,6 +6,12 @@ import unittest
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
@@ -20,7 +26,7 @@ def load_module():
 def universe_proposal():
     return {
         "kernel": [{"id": "LAW-0001", "name": "Memory Law", "summary": "Memory cannot be manufactured."}],
-        "eras": [{"id": "ERA-0001", "name": "Afterlight", "order": 1}],
+        "eras": [{"id": "ERA-0001", "name": "Afterlight", "order": 1, "when": "2087", "material": ["archive skiffs on the canals", "no radio below the waterline", "credit is a favour owed"]}],
         "events": [{"id": "EVT-0001", "era": "ERA-0001", "order": 1, "summary": "The archive opens."}],
         "places": [{"id": "PLC-0001", "name": "Glass Harbor", "summary": "A tidal archive."}],
         "factions": [{"id": "FAC-0001", "name": "Keepers", "summary": "They guard inherited memories."}],
@@ -61,7 +67,8 @@ def book_proposal():
             "plants": [],
             "reveals": [],
             "target_words": 700,
-            "imports": ["UNI-0001#kernel", "CHR-0001#voice"],
+            # A chapter carries the world it is written and judged against.
+            "imports": ["UNI-0001#kernel", "CHR-0001#summary", "CHR-0001#voice", "PLC-0001#summary"],
             "obligations": [],
             "pivotal": None,
         }],
@@ -141,6 +148,8 @@ class EndToEndTests(unittest.TestCase):
             self.assertGreaterEqual(bf.audit_continuity(project, relation_id=sequel["id"], provider=provider)["calls"], 1)
 
             bf.add_translation(project, local, "it-IT")
+
+            _decide_locale_style(bf, project, local, "it-IT")
             translated = bf.translate_next(project, local, "it-IT", provider=provider, run_all=True)
             self.assertEqual(translated["state"], "current")
             epub = bf.export_epub(project, local, "it-IT")

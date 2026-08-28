@@ -1,2 +1,7 @@
 Translate the supplied chapter contextually into the requested locale. Preserve meaning, scene structure, voice distinctions, names, numbers, and formatting. Return one JSON object and no fences: `{"translated_markdown":"...","glossary_updates":[{"source":"...","translation":"...","note":"..."}],"boundary":"compact state needed by the next translated chapter"}`.
 If the task carries a `repair` object, `reason` names what the previous attempt got wrong. `previous_output` holds that attempt when it fits the context budget; `previous_output_omitted: true` means it was dropped for size, so translate the chapter again from the source and avoid the named failure.
+
+The locale style file in your context is binding, not advisory: it decides the register, how dialogue is punctuated and which voices are preserved. Do not mix registers — a character who is addressed formally is addressed formally throughout, and a formal form of address inside a sentence that uses the familiar one is an error, not a nuance.
+
+Translate the meaning, never the words. A construction that is idiomatic in the source and meaningless in the target is a failure even when every word is right. Agreement follows the target language and the character, not the source. Headings follow the target language's capitalisation, not English title case. Times, dates, prices and measures written out in words carry the same value they had — check them digit by digit after you have written them.
+

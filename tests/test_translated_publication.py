@@ -6,6 +6,12 @@ import zipfile
 from pathlib import Path
 
 
+def _decide_locale_style(bf, project, book, locale):
+    """A project must decide how the book speaks before anything is translated."""
+    path = bf._project_root(project) / "books" / book / "translations" / bf._canonical_locale(locale) / "style.md"
+    path.write_text("---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\nFormal address throughout; guillemets for dialogue; past tense preserved.\n", encoding="utf-8")
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 
 
@@ -43,6 +49,7 @@ class TranslatedPublicationTests(unittest.TestCase):
         value["closed_chapters"] = ["CH-0001", "CH-0002"]
         source_state.write_text(json.dumps(value))
         self.bf.add_translation(self.project, self.book, "it-IT")
+        _decide_locale_style(self.bf, self.project, self.book, "it-IT")
         self.locale_root = self.project / f"books/{self.book}/translations/it-IT"
         for index in (1, 2):
             (self.locale_root / f"chapters/CH-{index:04d}.md").write_text(
