@@ -39,13 +39,20 @@ Report the receipt it returns — stages completed, chapter steps taken, edition
 Launch it detached, because a backgrounded process started inside a tool call does not outlive the call:
 
 ```
-setsid nohup python3 <skill>/scripts/book_forge.py --project . advance --book <id> --until <stage> < /dev/null > /tmp/advance.log 2>&1 &
-echo $! > /tmp/advance.pid
+setsid nohup python3 <skill>/scripts/book_forge.py --project . advance --book <id> --until <stage> < /dev/null > /tmp/bf-$(basename $PWD).log 2>&1 &
 disown
-sleep 10; kill -0 $(cat /tmp/advance.pid) 2>/dev/null && echo alive || echo died
+sleep 10
 ```
 
-Poll the saved pid, never `pgrep -f`: every project invokes the engine as `--project .`, so a pattern match finds the drivers of other books too and reports a run as alive when it has already finished.
+**Do not save `$!` and poll it.** `setsid` forks, so `$!` is the pid of a process that exits immediately and reports the run as dead while it is working. Do not use `pgrep -f` either: every project invokes the engine as `--project .`, so a pattern match finds other books' drivers.
+
+The driver writes its own pid where it can be trusted — `.book-forge/advance-<book>.lock` — and removes the file when it finishes. That is what to poll:
+
+```
+pid=$(cat .book-forge/advance-<id>.lock 2>/dev/null) && kill -0 "$pid" 2>/dev/null && echo running || echo finished
+```
+
+Name log files after the project, never `/tmp/advance.log`: another book may be running on the same machine, and a shared path means one session's `kill $(cat /tmp/advance.pid)` stops the other one's work.
 
 `advance` refuses to start while another driver holds the same book and names the pid that holds it. Do not work around that: two drivers contend for the same claims, one orphans the other's attempt, and both pay for work that is discarded. A lock left by a dead process is stale and taken over automatically.
 
