@@ -3411,6 +3411,76 @@ CHUNK_DOES_NOT_READ = {
 # less in front of it, which is what has worked every time this ceiling was hit.
 LAST_RESORT_CUT = ("worldbuilding", "chorus_report")
 
+
+def _call_cache_path(root: Path, task_id: str, envelope: dict[str, object]) -> Path:
+    return root / ".book-forge" / "call-cache" / str(task_id) / f"{envelope['hash']}.json"
+
+
+def _cached_call(root: Path, task_id: str, envelope: dict[str, object]) -> dict[str, object] | None:
+    """An answer this project already paid for, or None.
+
+    A book design is around thirty calls and an hour and a half, and it writes its
+    artifacts once, at the end. Landfall's was killed at the twenty-seventh call
+    and the other twenty-six were lost: their answers sat on disk as raw text that
+    nothing read back. The key is the envelope's hash, so a changed brief, canon or
+    spine misses the cache — it cannot serve a stale answer to a question that has
+    moved.
+    """
+    path = _call_cache_path(root, task_id, envelope)
+    if not path.is_file():
+        return None
+    try:
+        entry = _read_json(path)
+    except (OSError, ValueError):
+        return None
+    result = entry.get("result")
+    if not isinstance(result, dict) or not str(result.get("text") or "").strip():
+        return None
+    # The run that paid for this already counted it; charging it again would make
+    # a resumed design look like it cost twice what it did.
+    return {**result, "cost": 0.0, "cached": True}
+
+
+def _remember_call(root: Path, task_id: str, envelope: dict[str, object], result: dict[str, object]) -> None:
+    """Remember an answer that was accepted, and only that.
+
+    A truncation or an empty body must stay a failure: remembering one would
+    freeze it in place, and no retry could ever get past it.
+    """
+    if str(result.get("finish")) == "length" or not str(result.get("text") or "").strip():
+        return
+    path = _call_cache_path(root, task_id, envelope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, {
+        "schema": 1,
+        "hash": str(envelope["hash"]),
+        "role": str(envelope.get("role", "")),
+        "remembered_at": time.time(),
+        "result": {key: value for key, value in result.items() if key != "cached"},
+    })
+
+
+def _caching_runner(root: Path, task_id: str, runner):
+    """A runner that answers from the cache, and remembers what parses.
+
+    Used for the chorus, whose advisors are advisory and whose failures are
+    tolerated: an answer that did not parse is returned but never remembered, so
+    the next run asks that advisor again rather than inheriting its bad reply.
+    """
+    def call(role, envelope, attempt_dir):
+        cached = _cached_call(root, task_id, envelope)
+        if cached is not None:
+            return cached
+        result = runner(role, envelope, attempt_dir)
+        try:
+            json.loads(str(result.get("text") or ""), strict=False)
+        except ValueError:
+            return result
+        _remember_call(root, task_id, envelope, result)
+        return result
+
+    return call
+
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
     {"category": "eras"},
@@ -3575,6 +3645,11 @@ def _run_design_chunk(
             max_output_tokens=max_output_tokens,
         )
         _write_bytes_atomic(attempt_dir / f"envelope-{slug}{suffix}.json", envelope["bytes"])
+        remembered = _cached_call(root, task_id, envelope)
+        if remembered is not None:
+            print(f"[designer] {slug}{suffix} answered from a call this project already paid for", file=sys.stderr)
+            results.append(remembered)
+            return remembered, envelope
         answer = None
         for attempt in range(3):
             answer = runner("designer", envelope, attempt_dir)
@@ -3612,6 +3687,7 @@ def _run_design_chunk(
     except BookForgeError as exc:
         _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
         raise
+    _remember_call(root, task_id, envelope, result)
     return parsed, telemetry, results
 
 
@@ -4678,6 +4754,12 @@ def _run_book_audit_chunked(
             max_output_tokens=max_output_tokens,
         )
         _write_bytes_atomic(attempt_dir / f"envelope-{slug}.json", envelope["bytes"])
+        # Deliberately not cached. The auditor is never shown a chapter's beats, so
+        # a repair that rewrites only beats leaves its question byte-identical and a
+        # remembered verdict would be served back unchanged, looping the repair to
+        # exhaustion without a single call. And an audit is a judgment rather than a
+        # content: remembering one would make a spurious blocking finding permanent,
+        # with no retry able to overturn it.
         result = runner("canon-auditor", envelope, attempt_dir)
         results.append(result)
         mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
@@ -5483,7 +5565,7 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     _log_step(2, 7, "chorus", "→")
     if should_chorus:
         try:
-            run_chorus(root, {"scope": "book", "book": book_id, "brief": brief}, envelope, _chorus_effective, provider=runner)
+            run_chorus(root, {"scope": "book", "book": book_id, "brief": brief}, envelope, _chorus_effective, provider=_caching_runner(root, task_id, runner))
             _log_step(2, 7, "chorus", "✓")
         except Exception as exc:
             print(f"Chorus advisory failed (non-blocking): {exc}", file=sys.stderr)

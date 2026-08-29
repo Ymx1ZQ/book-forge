@@ -2950,3 +2950,63 @@ And a rangeless chunk gets the rescue a ranged one has: when it exhausts its att
 - [ ] Re-run landfall's design
 
 **Done when:** A call that comes back empty is asked again with less, whatever kind of chunk it is.
+
+## The slice width is measured, not guessed ⏳
+
+**Status: ⏳ Not started — opened 2026-08-29, to be worked once landfall's design closes**
+
+**What this run measured.** `BOOK_DESIGN_SLICE_SIZE = 8` was set on margherita and carried to landfall unchanged. On landfall every chapter slice needed two or three attempts: chapters 1-8 answered on the third, 9-16 on the second, and 17-24 came back empty three times and was halved into 17-20 and 21-24. Seven calls paid for three slices, and the discovery happened at run time against a paid provider. The engine already knows how to split when a chunk is too big; what it does not know is how wide a slice should have been in the first place.
+
+**Why a wider constant is not the fix.** Eight was a guess that fitted one book. Four would be a guess that fits this one. The author's constraint is explicit: there will be longer books with denser chapters carrying more per chapter, so any single number is a guess that will be wrong later, and being wrong costs three empty calls per slice to find out.
+
+**The shape of the fix, to be settled when the numbers are in.** The engine already records the output tokens of every chunk in `chunk_telemetry`. A design can size its own slices: take the first slice narrow, measure what one chapter contract actually cost in output tokens, and set every later slice from that measurement against the model's ceiling — with headroom, because the chapter that overruns is the one that had most to say. A book of dense chapters gets narrow slices and more calls; a book of light ones gets wide slices and fewer. Neither is a number anybody typed.
+
+Leave the constant as the opening width only, and make it the width the engine starts from before it knows anything, not the width it uses all the way through.
+
+**And the right width is not one width.** Landfall split 17-24 into 17-20 and then 17-20 again into 17-18 and 19-20, while 1-8 and 9-16 answered whole. The chapters that would not fit are the ones carrying the revelation: CH-0017 and CH-0018 hold the first two withheld layers, so their contracts carry far heavier plants and reveals than a chapter of crossing does. A book's density is concentrated where something happens, and the engine can see that before it calls — the outline and the withheld rows already tell it which chapters do the revealing. A slice containing a reveal chapter should be narrower than one that does not, decided in advance rather than discovered by three empty calls.
+
+**Tasks:**
+- [ ] Read this run's `chunk_telemetry`: output tokens per chapter contract, and the spread between the lightest and heaviest slice
+- [ ] Decide the opening width from that measurement, with headroom stated in the comment beside it
+- [ ] Size later slices from what the first ones actually cost, rather than from the constant
+- [ ] Narrow a slice that contains a chapter the withheld rows reveal in, or that the outline marks as carrying an arc turn, before calling rather than after failing
+- [ ] Test: a book whose chapters answer heavily gets narrower slices without any slice failing first
+- [ ] Test: a book of light chapters is not split more than it needs to be
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A slice is the width the book's own chapters turned out to need.
+
+## A run resumes from the calls it already paid for 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**What happened.** Landfall's design was killed at its twenty-seventh call, and the engine had nothing to show for the other twenty-six. Nine chorus calls, the spine, three outline slices, the withheld list and fourteen chapter-contract calls — ninety-five minutes of work — were on disk as `raw-*.txt` files that nothing ever reads back. A book design writes its artifacts once, at the end, when every chunk has answered; anything that interrupts it burns the whole run.
+
+That is not an accident of today. These runs take an hour and a half, and a kill, a reboot, a dropped connection or a design that fails its third retry all cost the same: everything.
+
+**Fix.** Every call the engine makes is remembered under its task, keyed by the hash of the envelope that produced it. Before spending a call the engine looks for that hash; on a hit it uses the answer it already has. The key is the envelope, so a changed brief, a changed canon or a changed spine misses the cache and the call is made again — the cache cannot serve a stale answer to a question that has moved.
+
+Only an answer that was accepted is written: never a truncation, never an empty body, and for a chorus advisor never something that did not parse. A failure must stay a failure, or the cache would freeze it in place and no retry could ever get past it.
+
+A cached answer reports zero cost, because the run that paid for it already counted it, and carries `cached: true` so a receipt says which calls were real.
+
+It covers the two paths that make these runs long: the chorus advisors and the design chunks — twenty-eight of landfall's thirty-eight calls. Each advisor builds its own envelope with its own role, so the hashes are distinct and one advisor cannot be served another's answer.
+
+**The audit is deliberately not cached, and the suite is what said so.** With the audit cached, the repair loop ran to exhaustion without making a single call. The auditor is never shown a chapter's beats, so a repair that rewrites only beats leaves its question byte-identical, and the remembered verdict came straight back: the same blocking finding, forever. Beyond that loop there is a reason of kind rather than of mechanism — a design chunk is content and an audit is a judgment. Remembering a judgment makes a spurious blocking finding permanent, with no retry able to overturn it. So the ten audit calls of a killed run are lost, and that is the right trade: they are the cheap end of the run, and the repair loop depends on being able to ask again.
+
+**Tasks:**
+- [x] `_cached_call` and `_remember_call`, keyed by envelope hash under `.book-forge/call-cache/<task>/`
+- [x] A cached answer reports zero cost and carries `cached: true`
+- [x] Never remember a truncation, an empty body, or an advisor answer that did not parse
+- [x] The design chunks read and write it; a hit is reported on stderr
+- [x] The audit passes deliberately do NOT read or write it — see above; the suite caught the repair loop spinning on a frozen verdict
+- [x] The chorus advisors read and write it
+- [x] Test: a second design with the same inputs makes no provider calls at all
+- [x] Test: a design killed halfway resumes and calls only for what is missing
+- [x] Test: a changed brief misses the cache
+- [x] Test: a truncated answer is not remembered, so the retry still happens
+- [x] Test: two advisors never share an entry
+- [x] Suite green: 500 passed, 206 subtests (era 491). Reinstall, commit & push
+- [ ] Resume landfall's design
+
+**Done when:** Killing a design costs the call it was making, not the run.
