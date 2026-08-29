@@ -3383,7 +3383,15 @@ BOOK_DESIGN_SLICE_SIZE = 8
 # Measured in production, not on a probe: ten chapters failed at 9508 tokens of
 # input with reasoning 31999 and no output, and five answered at 7638 with 16816 of
 # reasoning. The first request has to be the size that answers.
-BOOK_AUDIT_SLICE_SIZE = 5
+# Measured again on landfall, where five almost never answered: window-6-10 came
+# back empty, then 6-8, then 6-7, and only 6-6 and 7-7 answered — in a minute each.
+# It is not the payload. A five-chapter window is 48400 bytes against the design's
+# 150000, and a one-chapter window is 41803. What fails is the judgment: reading a
+# run of chapters for contradictions is a question this model spends its whole
+# completion budget on, and above a width it emits nothing. Headroom is deliberately
+# on the small side — a window too narrow costs one extra call, a window too wide
+# costs three empty ones and then the narrow calls anyway.
+BOOK_AUDIT_SLICE_SIZE = 2
 # One-line outline rows are small, so a slice can hold more of them than a slice
 # of full chapter contracts can.
 BOOK_OUTLINE_SLICE_SIZE = 12
@@ -4808,10 +4816,11 @@ def _run_book_audit_chunked(
         required: dict[str, object] = {"findings": []}
         if chunk.get("category") == "schedule":
             required["open_promises"] = []
+        sliced_scope = _audit_chunk_scope(scope, chunk, open_promises)
         envelope = build_envelope(
             root,
             role="canon-auditor",
-            task_capsule={"design_scope": _audit_chunk_scope(scope, chunk, open_promises), "required_output": required},
+            task_capsule={"design_scope": sliced_scope, "required_output": required},
             imports=imports,
             state={},
             tools=[],
@@ -4832,16 +4841,52 @@ def _run_book_audit_chunked(
             value = _parse_contract_json(str(result["text"]))
         except BookForgeError as exc:
             halves = _halve_chunk(chunk)
-            if not halves:
-                _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
-                raise
+            if halves:
+                print(
+                    f"[canon-auditor] {slug} returned no answer; splitting into "
+                    f"{', '.join(_chunk_slug(half) for half in halves)}",
+                    file=sys.stderr,
+                )
+                pending = halves + pending
+                continue
+            # A window of one chapter cannot be halved, and an audit that gives up
+            # there ends the design and burns one of three attempts — landfall's
+            # first audit died exactly that way on window-11-11. So it is asked once
+            # more about the chapter alone, without the neighbourhood it was being
+            # read against and without the canon blocks: a narrower question than
+            # the one that went unanswered, which is the only thing that has ever
+            # worked at this ceiling.
             print(
-                f"[canon-auditor] {slug} returned no answer; splitting into "
-                f"{', '.join(_chunk_slug(half) for half in halves)}",
+                f"[canon-auditor] {slug} cannot be split further; asking once more about it alone",
                 file=sys.stderr,
             )
-            pending = halves + pending
-            continue
+            reduced = {
+                "design_scope": {
+                    key: value_
+                    for key, value_ in sliced_scope.items()
+                    if key not in {"neighbourhood_digest", "book_digest", "open_promises"}
+                },
+                "required_output": required,
+            }
+            envelope = build_envelope(
+                root,
+                role="canon-auditor",
+                task_capsule=reduced,
+                imports=[],
+                state={},
+                tools=[],
+                max_output_tokens=max_output_tokens,
+            )
+            _write_bytes_atomic(attempt_dir / f"envelope-{slug}-alone.json", envelope["bytes"])
+            result = runner("canon-auditor", envelope, attempt_dir)
+            results.append(result)
+            mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+            _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
+            try:
+                value = _parse_contract_json(str(result["text"]))
+            except BookForgeError as alone_exc:
+                _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {alone_exc}")
+                raise
         try:
             rows = _validate_audit_output(_bind_audit_evidence(root, scope, value))
             if chunk.get("category") == "schedule":

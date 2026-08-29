@@ -33,10 +33,11 @@ def chapter(index):
 class AuditProvider:
     """Answers the design in slices and the audit in passes, recording both."""
 
-    def __init__(self, bf, chapter_count=CHAPTER_COUNT, schedule_ceiling=None):
+    def __init__(self, bf, chapter_count=CHAPTER_COUNT, schedule_ceiling=None, silent_windows=()):
         self.bf = bf
         self.chapter_count = chapter_count
         self.schedule_ceiling = schedule_ceiling
+        self.silent_windows = set(silent_windows)
         self.audit_scopes = []
         self.calls = []
 
@@ -65,6 +66,11 @@ class AuditProvider:
             scope = task["design_scope"]
             self.audit_scopes.append(scope)
             rows = scope.get("proposal", {}).get("chapters", [])
+            if self.silent_windows and "neighbourhood_digest" in scope and rows:
+                slug = f"window-{rows[0]['order']}-{rows[-1]['order']}"
+                if slug in self.silent_windows:
+                    # What production returns: the whole budget spent reasoning, nothing emitted.
+                    return {**self._ok(envelope, {}, role), "text": ""}
             if self.schedule_ceiling is not None and "neighbourhood_digest" not in scope and len(rows) > self.schedule_ceiling:
                 return self._truncated(envelope, role)
             answer = {"findings": [{
@@ -99,14 +105,13 @@ class PassBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
 
-    def test_forty_chapters_become_eight_windows_and_a_walk_of_five(self):
-        chunks = self.bf._book_audit_chunks(40)
-        self.assertEqual([(c["category"], c["first_order"], c["last_order"]) for c in chunks], [
-            ("window", 1, 5), ("window", 6, 10), ("window", 11, 15), ("window", 16, 20),
-            ("window", 21, 25), ("window", 26, 30), ("window", 31, 35), ("window", 36, 40),
-            ("schedule", 1, 8), ("schedule", 9, 16), ("schedule", 17, 24),
-            ("schedule", 25, 32), ("schedule", 33, 40),
-        ])
+    def test_twenty_six_chapters_become_thirteen_windows_and_a_walk_of_four(self):
+        chunks = self.bf._book_audit_chunks(26)
+        windows = [(c["first_order"], c["last_order"]) for c in chunks if c["category"] == "window"]
+        schedule = [(c["first_order"], c["last_order"]) for c in chunks if c["category"] == "schedule"]
+        self.assertEqual(windows, [(n, n + 1) for n in range(1, 26, 2)])
+        self.assertEqual(len(windows), 13)
+        self.assertEqual(schedule, [(1, 8), (9, 16), (17, 24), (25, 26)])
 
     def test_no_pass_reads_more_than_a_fixed_number_of_chapters(self):
         """The width of a pass is a constant, so a longer book buys more passes
@@ -117,8 +122,10 @@ class PassBoundaryTests(unittest.TestCase):
                 self.assertLessEqual(max(widths), max(self.bf.BOOK_AUDIT_SLICE_SIZE, self.bf.SCHEDULE_WINDOW_SIZE))
 
     def test_the_window_is_the_width_production_answers_at(self):
-        """Ten chapters failed at 9508 tokens of input; five answered at 7638."""
-        self.assertEqual(self.bf.BOOK_AUDIT_SLICE_SIZE, 5)
+        """Five almost never answered on landfall: window-6-10 came back empty, then
+        6-8, then 6-7, and only 6-6 and 7-7 answered. It is not the payload — five
+        chapters are 48400 bytes and one is 41803 — it is the difficulty."""
+        self.assertEqual(self.bf.BOOK_AUDIT_SLICE_SIZE, 2)
 
     def test_a_book_with_no_chapters_asks_nothing(self):
         self.assertEqual(self.bf._book_audit_chunks(0), [])
@@ -221,9 +228,10 @@ class SlicedAuditTests(AuditFixture):
         provider = AuditProvider(self.bf)
         result = self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(provider.calls.count("canon-auditor"), 13)
+        # Forty chapters: twenty windows of two, and a walk of five.
+        self.assertEqual(provider.calls.count("canon-auditor"), 25)
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
-        self.assertEqual(len(record["findings"]), 13)
+        self.assertEqual(len(record["findings"]), 25)
 
     def test_no_pass_is_handed_the_staging_or_the_wiring(self):
         provider = AuditProvider(self.bf)
@@ -240,11 +248,10 @@ class SlicedAuditTests(AuditFixture):
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
         ids = [row["id"] for row in record["findings"]]
         self.assertEqual(len(set(ids)), len(ids))
-        self.assertIn("A-window-1-5-F-001", ids)
+        self.assertIn("A-window-1-2-F-001", ids)
         self.assertIn("A-schedule-1-8-F-001", ids)
         self.assertEqual({row["pass"] for row in record["findings"]}, {
-            "window-1-5", "window-6-10", "window-11-15", "window-16-20",
-            "window-21-25", "window-26-30", "window-31-35", "window-36-40",
+            *(f"window-{n}-{n + 1}" for n in range(1, 40, 2)),
             "schedule-1-8", "schedule-9-16", "schedule-17-24", "schedule-25-32", "schedule-33-40",
         })
 
@@ -255,6 +262,23 @@ class SlicedAuditTests(AuditFixture):
         schedule = [len(s["proposal"]["chapters"]) for s in provider.audit_scopes if "neighbourhood_digest" not in s]
         self.assertEqual(schedule, [8, 4, 4, 8, 4, 4, 8, 4, 4, 8, 4, 4, 8, 4, 4])
 
+    def test_a_window_of_one_chapter_is_asked_about_it_alone_before_the_audit_dies(self):
+        """Landfall's first audit ended on window-11-11: a window of one chapter
+        cannot be halved, and there was nothing between an empty answer and a dead
+        design."""
+        provider = AuditProvider(self.bf, chapter_count=6, silent_windows={"window-3-4", "window-3-3", "window-4-4"})
+        result = self.bf.execute_book_design(self.project, self.book, provider=provider)
+        self.assertEqual(result["state"], "design_clean")
+        alone = [scope for scope in provider.audit_scopes if "neighbourhood_digest" not in scope and "pass" in scope and scope["pass"]["reading"].startswith("chapters 3")]
+        self.assertTrue(alone, "the chapter must have been asked about on its own")
+
+    def test_the_reduced_pass_is_a_last_resort_and_never_the_first_call(self):
+        provider = AuditProvider(self.bf, chapter_count=6)
+        self.bf.execute_book_design(self.project, self.book, provider=provider)
+        for scope in provider.audit_scopes:
+            if scope.get("pass", {}).get("reading", "").endswith("immediately around them"):
+                self.assertIn("neighbourhood_digest", scope)
+
     def test_each_window_of_the_walk_is_handed_what_the_last_one_left_open(self):
         provider = AuditProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider)
@@ -264,8 +288,8 @@ class SlicedAuditTests(AuditFixture):
 
 
 class ShortBookTests(AuditFixture):
-    def test_a_book_that_fits_is_still_one_call(self):
-        provider = AuditProvider(self.bf, chapter_count=4)
+    def test_a_book_that_fits_in_one_window_is_still_one_call(self):
+        provider = AuditProvider(self.bf, chapter_count=2)
         self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(provider.calls.count("canon-auditor"), 1)
         self.assertNotIn("pass", provider.audit_scopes[0])

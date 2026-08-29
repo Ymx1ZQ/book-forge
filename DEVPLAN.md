@@ -2963,6 +2963,8 @@ And a rangeless chunk gets the rescue a ranged one has: when it exhausts its att
 
 Leave the constant as the opening width only, and make it the width the engine starts from before it knows anything, not the width it uses all the way through.
 
+**A third case, measured on the repair pass.** After landfall's design failed validation, the retry carries a repair context — the list of blocking findings and the hint — inside the capsule. Chapters 1-8, which had answered whole twice, then truncated and had to be halved. So the width that fits depends on what the capsule is carrying at that moment, not only on the book: the same slice of the same book is too wide on a repair pass and fits on a first pass. A width chosen once, however carefully measured, is wrong for half the passes the engine makes.
+
 **And the right width is not one width.** Landfall split 17-24 into 17-20 and then 17-20 again into 17-18 and 19-20, while 1-8 and 9-16 answered whole. The chapters that would not fit are the ones carrying the revelation: CH-0017 and CH-0018 hold the first two withheld layers, so their contracts carry far heavier plants and reveals than a chapter of crossing does. A book's density is concentrated where something happens, and the engine can see that before it calls — the outline and the withheld rows already tell it which chapters do the revealing. A slice containing a reveal chapter should be narrower than one that does not, decided in advance rather than discovered by three empty calls.
 
 **Tasks:**
@@ -3029,3 +3031,28 @@ The hash chain did its job — a different spine invalidates everything downstre
 - [x] Test: two attempts answering the same question, and the one with more accepted answers is the one remembered
 
 **Done when:** Killing a design costs the call it was making, not the run.
+
+## An audit window is two chapters, and a pass that cannot be halved still has a way down 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**Measured on landfall, not guessed.** `BOOK_AUDIT_SLICE_SIZE = 5` was set when five chapters answered where ten did not. On landfall five almost never answers: `window-6-10` came back empty, then `6-8`, then `6-7`, and only `6-6` and `7-7` answered — in a minute each. The first audit attempt died outright when `window-11-11` came back empty, because a window of one chapter cannot be halved and the pass had nothing left to try.
+
+**And it is not the envelope.** An audit window of five chapters is 48400 bytes and a window of one is 41803 — against the design's 150000. The input is small either way. What fails is the judgment: reading a run of chapters for contradictions is the kind of question this model spends its whole completion budget thinking about, and above a certain width it emits nothing at all. So the width that works is decided by the difficulty of the question, not by the size of the payload, which is why measuring it on one book and carrying the number to another was always going to break.
+
+**Fix, in two parts.**
+
+The window becomes two chapters, which is where landfall converges, with headroom deliberately on the small side: a window too narrow costs one extra call, a window too wide costs three empty ones and then the narrow calls anyway.
+
+And an audit pass that cannot be halved gets the rescue the design chunks were given: before failing, it is asked once more with the bulk of its scope removed. Today a single-chapter window that comes back empty ends the audit, which ends the design, which burns one of three attempts.
+
+**Tasks:**
+- [x] `BOOK_AUDIT_SLICE_SIZE` is 2, with the measurement in the comment beside it
+- [x] An audit pass that cannot be halved is retried once on a reduced scope before it fails
+- [x] Test: a pass that answers only on the reduced scope completes the audit instead of ending it
+- [x] Test: the reduced pass is a last resort, never the first call
+- [x] Test: twenty-six chapters produce thirteen windows and the schedule fold is unchanged
+- [x] Suite green: 508 passed, 341 subtests (era 506, 206). Reinstall, commit & push
+- [ ] Re-run landfall's audit
+
+**Done when:** An audit that cannot answer a question asks a smaller one instead of ending the design.

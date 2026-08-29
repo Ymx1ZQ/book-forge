@@ -148,7 +148,10 @@ class BookDesignTests(unittest.TestCase):
         result = self.bf.execute_book_design(self.project, book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
         self.assertEqual(result["calls"], 2)
-        self.assertEqual(provider.calls, ["designer", "designer", "canon-auditor"])
+        # Three chapters are audited in two windows of two and one schedule pass:
+        # the window is narrow because the auditor's difficulty, not its payload, is
+        # what decides how much it can read at once.
+        self.assertEqual(provider.calls, ["designer", "designer"] + ["canon-auditor"] * 3)
         self.assertTrue((self.project / f"books/{book}/chapters/CH-0001.json").is_file())
 
     def test_binds_book_scoped_proposal_evidence_to_helper_hashes(self):
@@ -299,7 +302,7 @@ class BookDesignTests(unittest.TestCase):
         rerun = DesignProvider(proposal(), audit={"findings": []})
         result = self.bf.execute_book_design(self.project, book, provider=rerun)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(rerun.calls, ["canon-auditor"])
+        self.assertEqual(rerun.calls, ["canon-auditor"] * 3)
         audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
         self.assertEqual(audit["findings"], [])
 
