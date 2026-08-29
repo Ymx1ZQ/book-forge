@@ -2776,3 +2776,36 @@ Reading the raw newline as the newline it plainly is loses nothing: it decodes t
 - [x] Suite green: 434 passed, 23 subtests (era 429). Reinstall, commit & push
 
 **Done when:** A chapter is not lost to a character.
+
+## A book can withhold its premise ✅
+
+**Status: ✅ Done — 2026-08-29**
+
+**Problem:** landfall's premise is that the story happens on Kepler-442b four millennia after five ships landed. The author wants the reader to meet that world as a world — the weight, the metered light, the machines that must be fed — and to learn what it is only at a reveal placed late in the book, told by a character who knows. The engine has no way to hold a fact back, and three of its parts actively push the other way. The cold-reader is instructed to flag ungrounded terms and missing setup, which is precisely what a withheld premise produces on every page. The reviser repairs what the cold-reader flags, and the cheapest repair is a sentence of explanation. The designer, handed a brief whose first six words name the planet, writes it into the book's premise and from there into chapter one. None of the three is malfunctioning: each assumes everything the reader needs is meant to be on the page.
+
+**Fix:** a book declares what it withholds, and the engine decides which role gets to see it.
+
+The designer returns a book-level `withheld` list alongside `premise` and `arc`. Each row is `{"id":"WH-0001","fact":"the truth, stated plainly","seen_as":"what a person living in the world experiences instead","revealed_in":"CH-00NN","told_by":"CHR-000N"}`.
+
+The engine writes that list into `design.md` and copies it into every chapter contract, cut to what that chapter's writer is allowed to know: before `revealed_in` the row carries `seen_as` and `status: withheld` and **not** `fact`; at `revealed_in` it carries the whole row and `status: revealed here`; after it, `status: known`. A writer cannot leak a fact it was never given, and before the reveal it does not need one — the clue it must drop is already written in that chapter's `plants` by the designer, who does know.
+
+The cold-reader is the fresh reader and never receives `fact` at any point. It receives the `seen_as` rows and one instruction: a row on this list is not missing setup, and asking for it to be explained is out of scope. What it should flag instead is prose that explains one early.
+
+The canon-auditor already refuses a reveal fired before the chapter the arc places it in — it caught four of those in margherita. It needs one addition: a withheld row revealed before its `revealed_in` is blocking, named with both chapters.
+
+The whole field is optional. A book that declares no `withheld` list behaves exactly as it does today.
+
+**Tasks:**
+- [x] `designer.md`: the `withheld` field, its shape, and that the plants leading to a reveal are spread across the chapters before it
+- [x] The spine capsule's `required_output` carries `withheld`
+- [x] `_book_design_outputs` writes the `withheld` block into `design.md` and the per-chapter cut into each contract
+- [x] `_book_proposal_from_artifacts` reads the block back, so a resumed or repaired design keeps it
+- [x] `validate_book_design`: `revealed_in` names a real chapter and never the first one, `told_by` names a real character; blocking when either fails
+- [x] `writer.md`: a withheld row is lived, not discussed — write what the people notice and do, never why the world is so
+- [x] `never_write`, added while building and not in the plan above: cutting `fact` out of the contract removes the temptation, not the knowledge, because the canon every chapter imports states the fact outright — LAW-0001 puts a whole Landing in one sentence, and the kernel is imported by every chapter of every book. So a withheld row also names the words that give it away, and `validate_writer_output` — which the writer and the reviser both pass through — rejects a draft before `revealed_in` that uses one, naming the word. It is the only part of this that is checked rather than asked for
+- [x] `cold-reader.md`: rows on the withheld list are not ungrounded terms; flag prose that explains one before its chapter
+- [x] `canon-auditor.md`: a withheld row revealed before `revealed_in` is blocking
+- [x] Tests: the cut before, at and after the reveal; `fact` never reaches a pre-reveal contract or any cold-reader capsule; validation rejects a dangling `revealed_in`; a book with no `withheld` list produces byte-identical outputs
+- [x] Suite green: 457 passed, 30 subtests (era 434, 23). Reinstall, commit & push
+
+**Done when:** A chapter written before the reveal cannot state the withheld fact, because the model that wrote it was never told.

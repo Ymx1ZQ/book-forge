@@ -3992,18 +3992,99 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
     for obligation_id, targets in assigned.items():
         if len(targets) != 1:
             findings.append({"code": "obligation.target-count", "severity": "blocking", "obligation": obligation_id, "targets": targets})
+    for row in _withheld_rows(proposal):
+        if not row.get("id") or not str(row.get("fact") or "").strip() or not str(row.get("seen_as") or "").strip():
+            findings.append({"code": "withheld.incomplete", "severity": "blocking", "withheld": row.get("id")})
+        never = row.get("never_write", [])
+        if not isinstance(never, list) or any(not isinstance(word, str) or not word.strip() for word in never):
+            findings.append({"code": "withheld.never-write-shape", "severity": "blocking", "withheld": row.get("id")})
+        target = str(row.get("revealed_in") or "")
+        if target not in ids:
+            findings.append({"code": "withheld.reveal-unknown", "severity": "blocking", "withheld": row.get("id"), "revealed_in": target})
+        elif ids.index(target) == 0:
+            # A truth revealed in chapter one was never withheld from anyone.
+            findings.append({"code": "withheld.reveal-first-chapter", "severity": "blocking", "withheld": row.get("id")})
+        told_by = str(row.get("told_by") or "")
+        # Checked only where the project has characters at all, the way the place
+        # import is: a project with no CHR- blocks has nobody to name as a teller.
+        if told_by and any(value.startswith("CHR-") for value in known_blocks) and f"{told_by}#summary" not in known_blocks:
+            findings.append({"code": "withheld.teller-unknown", "severity": "blocking", "withheld": row.get("id"), "told_by": told_by})
     if not proposal.get("premise") or len(proposal.get("arc", [])) < 3 or not proposal.get("entry_state") or not proposal.get("exit_boundary"):
         findings.append({"code": "book.arc-incomplete", "severity": "blocking"})
     return findings
 
 
+def _withheld_rows(proposal: dict[str, object]) -> list[dict[str, object]]:
+    rows = proposal.get("withheld")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _withheld_for_chapter(rows: list[dict[str, object]], chapter_id: str, orders: dict[str, int]) -> list[dict[str, object]]:
+    """The withheld list cut to what this chapter's writer is allowed to know.
+
+    Before the chapter that reveals a row the cut carries `seen_as` — what a
+    person living in the world experiences — and not `fact`. A writer cannot
+    leak a truth it was never given, and before the reveal it does not need
+    one: the clue it must drop is already written into that chapter's plants
+    by the designer, who does know.
+    """
+    here = orders.get(chapter_id)
+    cut: list[dict[str, object]] = []
+    for row in rows:
+        target = orders.get(str(row.get("revealed_in")))
+        if here is None or target is None or here < target:
+            status = "withheld"
+        elif here == target:
+            status = "revealed here"
+        else:
+            status = "known"
+        item: dict[str, object] = {
+            "id": row.get("id"),
+            "seen_as": row.get("seen_as"),
+            "revealed_in": row.get("revealed_in"),
+            "told_by": row.get("told_by"),
+            "status": status,
+        }
+        if status != "withheld":
+            item["fact"] = row.get("fact")
+        elif row.get("never_write"):
+            item["never_write"] = row.get("never_write")
+        cut.append(item)
+    return cut
+
+
+def _withheld_for_reader(contract: dict[str, object]) -> dict[str, object]:
+    """The contract as the cold-reader gets it: no withheld fact, at any chapter.
+
+    The cold-reader is the fresh reader. It is told which rows are deliberately
+    withheld so that it stops reporting them as missing setup, and it is never
+    told what they are — including at the chapter that reveals one, where its
+    job is to say whether the prose delivered the revelation on its own.
+    """
+    rows = contract.get("withheld")
+    if not isinstance(rows, list):
+        return contract
+    return {
+        **contract,
+        "withheld": [{key: value for key, value in row.items() if key not in {"fact", "never_write"}} for row in rows if isinstance(row, dict)],
+    }
+
+
 def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) -> dict[str, str | bytes]:
     obligations, relation_imports = _book_obligations(root, book_id)
     chapters = sorted(proposal["chapters"], key=lambda row: int(row["order"]))
+    withheld = _withheld_rows(proposal)
+    chapter_orders = {str(chapter["id"]): int(chapter["order"]) for chapter in chapters}
+    # Withheld is written before Arc because both are one JSON line and the Arc
+    # reader is greedy: a second list after it would be swallowed into the arc.
+    withheld_section = f"## Withheld\n\n{json.dumps(withheld, ensure_ascii=False)}\n\n" if withheld else ""
     outputs: dict[str, str | bytes] = {
         f"books/{book_id}/design.md": (
             f"---\nid: {book_id}\ncontinuity: {next(book['continuity'] for book in list_books(root) if book['id'] == book_id)}\n---\n\n"
             f"# Premise\n\n<!-- bf:block premise -->\n{proposal['premise']}\n\n"
+            f"{withheld_section}"
             f"## Arc\n\n{json.dumps(proposal['arc'], ensure_ascii=False)}\n"
         ),
         f"books/{book_id}/outline.yaml": _json_bytes({"schema": 1, "chapters": chapters}),
@@ -4033,6 +4114,9 @@ def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) 
             **{key: value for key, value in chapter.items() if not (key == "title" and _title_is_beat_prefix(chapter))},
             "imports": sorted(set(chapter.get("imports", []) + relation_imports)),
         }
+        cut = _withheld_for_chapter(withheld, str(chapter["id"]), chapter_orders)
+        if cut:
+            contract["withheld"] = cut
         outputs[f"books/{book_id}/chapters/{chapter['id']}.json"] = _json_bytes(contract)
     return outputs
 
@@ -4109,8 +4193,10 @@ def _book_proposal_from_artifacts(root: Path, book_id: str) -> dict[str, object]
     entry_match = re.search(r"^Entry: (\{.*\})$", reader, re.MULTILINE)
     exit_match = re.search(r"^Intended exit: (\{.*\})$", reader, re.MULTILINE)
     premise_match = re.search(r"<!--\s*bf:block\s+premise\s*-->([\s\S]*?)(?=\n##\s|<!--)", design_text)
+    withheld_match = re.search(r"^## Withheld\s*\n+(\[.*\])\s*$", design_text, re.MULTILINE)
     return {
         "premise": premise_match.group(1).strip() if premise_match else "",
+        "withheld": json.loads(withheld_match.group(1)) if withheld_match else [],
         "entry_state": json.loads(entry_match.group(1)) if entry_match else {},
         "arc": json.loads(arc_match.group(1)),
         "exit_boundary": json.loads(exit_match.group(1)) if exit_match else {},
@@ -5006,6 +5092,16 @@ def _book_design_base_capsule(
             "obligations": list(obligations.values()),
             "required_output": {
                 "premise": "string",
+                "withheld": [
+                    {
+                        "id": "WH-0001",
+                        "fact": "the truth, stated plainly",
+                        "seen_as": "what a person living in the world experiences in its place",
+                        "revealed_in": "the chapter that tells it, never CH-0001",
+                        "told_by": "stable character ID of whoever says it",
+                        "never_write": ["words that give the fact away and must not appear before revealed_in"],
+                    }
+                ],
                 "entry_state": {},
                 "arc": ["at least three causal turns"],
                 "exit_boundary": {},
@@ -5520,6 +5616,29 @@ def _invented_title_problem(contract: dict[str, object], prose: str) -> str | No
     return None
 
 
+def _withheld_leak(contract: dict[str, object], prose: str) -> dict[str, object] | None:
+    """The one mechanical check standing behind a withheld fact.
+
+    The truth is in the canon every chapter imports — LAW-0001 states a whole
+    Landing in one sentence — so cutting `fact` out of the contract removes the
+    temptation, not the knowledge, and a prompt rule is otherwise the only thing
+    between it and the page. A withheld row may name the words that give it away.
+    Before the chapter that reveals it, any of those words in the prose fails the
+    draft, and the writer is told which one it used.
+    """
+    rows = contract.get("withheld")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != "withheld":
+            continue
+        words = [str(word).strip() for word in (row.get("never_write") or []) if str(word).strip()]
+        found = sorted({word for word in words if re.search(rf"\b{re.escape(word)}\b", prose, re.IGNORECASE)})
+        if found:
+            return {"id": row.get("id"), "revealed_in": row.get("revealed_in"), "words": ", ".join(found)}
+    return None
+
+
 def validate_writer_output(contract: dict[str, object], text_value: str) -> dict[str, object]:
     value = _parse_contract_json(text_value)
     prose = value.get("prose_markdown")
@@ -5531,6 +5650,12 @@ def validate_writer_output(contract: dict[str, object], text_value: str) -> dict
         raise BookForgeError("Writer output has no consequence disclosure")
     if re.search(r"\b(?:TODO|TBD)\b|\[(?:INSERT|PLACEHOLDER)[^]]*\]", prose, re.IGNORECASE):
         raise BookForgeError("Writer output contains a placeholder")
+    leak = _withheld_leak(contract, prose)
+    if leak:
+        raise BookForgeError(
+            f"Prose uses what {leak['id']} withholds until {leak['revealed_in']}: {leak['words']}. "
+            "Write what the people notice and do instead; the reader is not told this yet"
+        )
     title_problem = _invented_title_problem(contract, prose)
     if title_problem:
         raise BookForgeError(title_problem)
@@ -6606,6 +6731,7 @@ def _call_parallel_reviews(
     ):
         capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft}
         if role == "cold-reader":
+            capsule["contract"] = _withheld_for_reader(contract)
             capsule["previous_synthetic"] = previous_synthetic
             capsule["has_full_canon"] = False
         if role == "technical-editor":
