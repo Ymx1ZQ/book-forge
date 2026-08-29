@@ -2697,3 +2697,33 @@ There is a second cost above it. On the resume path the engine re-audits the who
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** A repair that could not be delivered says so.
+
+## Rewriting one chapter costs a digest of the other thirty-nine 🔄
+
+**Status: 🔄 In corso — 2026-08-29**
+
+**Problem:** the repair halved down to a single chapter and still came back empty, and the engine said so — which is the improvement working, and also the end of what halving can do. Measured on that one-chapter envelope, 75216 bytes:
+
+| field | bytes |
+|---|---|
+| `written_so_far` | 34787 |
+| `context` (canon imports) | 19831 |
+| `role_prompt` | 5473 |
+| `available_blocks` | 4802 |
+| `spine` | 2627 |
+| `chapters_to_rewrite` | 2530 |
+
+Forty-six percent of the call is the digest of the thirty-nine chapters it is not touching, and the chapter it *is* touching is three percent. Slicing cannot reach that: the part that dominates is the part that does not shrink when the slice does. The digest exists for a real reason — a slice that cannot see what the other chapters promised invents a detail that contradicts one — but a repair does not need all of them. It needs the chapters its findings name, and the ones on either side of what it is rewriting.
+
+**Fix:** the repair's `written_so_far` carries the chapters the slice actually reasons about — every chapter named in the findings handed to this slice, plus two either side of each chapter being rewritten — instead of the whole book. For a single-chapter repair that is six or seven rows rather than thirty-nine, and the envelope drops by about thirty thousand bytes without the slice losing anything it was using.
+
+**Tasks:**
+- [x] `_repair_neighbourhood(proposal, ids, findings)` selects the chapters a slice must see
+- [x] `_repair_blocked_design` uses it for `written_so_far`
+- [x] Test: a one-chapter repair is not handed the whole book
+- [x] Test: the chapters a finding names are in the neighbourhood even when far away
+- [x] Test: the neighbours either side are included, and the ends of the book do not break it
+- [x] Suite green: 424 passed, 23 subtests (era 418). Reinstall, commit & push
+- [ ] Margherita's design clears and the first three chapters are written
+
+**Done when:** The cost of a repair is set by what it rewrites.

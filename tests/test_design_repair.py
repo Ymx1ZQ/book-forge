@@ -322,3 +322,49 @@ class SlicedRepairTests(unittest.TestCase):
         with self.assertRaises(self.bf.BookForgeError) as caught:
             self.bf.execute_book_design(self.project, self.book, provider=always_truncate, no_chorus=True, no_post_chorus=True)
         self.assertIn("produced no usable answer", str(caught.exception))
+
+
+class RepairNeighbourhoodTests(unittest.TestCase):
+    """Rewriting one chapter cost a digest of the other thirty-nine: 34787 bytes of
+    a 75216-byte envelope, against 2530 for the chapter itself."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.proposal = {
+            "premise": "p", "arc": ["a"],
+            "chapters": [
+                {"id": f"CH-{i:04d}", "order": i, "title": f"T{i}", "pov": "CHR-0001",
+                 "plants": [f"plant {i}"], "reveals": [f"reveal {i}"]}
+                for i in range(1, 41)
+            ],
+        }
+
+    def ids_in(self, rows):
+        return sorted(str(row["id"]) for row in rows)
+
+    def test_a_one_chapter_repair_is_not_handed_the_whole_book(self):
+        rows = self.bf._repair_neighbourhood(self.proposal, ["CH-0027"], [])
+        self.assertEqual(self.ids_in(rows), ["CH-0025", "CH-0026", "CH-0028", "CH-0029"])
+
+    def test_the_chapter_being_rewritten_is_not_in_its_own_digest(self):
+        rows = self.bf._repair_neighbourhood(self.proposal, ["CH-0027"], [])
+        self.assertNotIn("CH-0027", self.ids_in(rows))
+
+    def test_a_chapter_a_finding_names_is_included_however_far_away(self):
+        finding = {"repair_scope": ["CH-0027", "CH-0003"]}
+        rows = self.bf._repair_neighbourhood(self.proposal, ["CH-0027"], [finding])
+        self.assertIn("CH-0003", self.ids_in(rows))
+
+    def test_the_edges_of_the_book_do_not_break_it(self):
+        self.assertEqual(self.ids_in(self.bf._repair_neighbourhood(self.proposal, ["CH-0001"], [])), ["CH-0002", "CH-0003"])
+        self.assertEqual(self.ids_in(self.bf._repair_neighbourhood(self.proposal, ["CH-0040"], [])), ["CH-0038", "CH-0039"])
+
+    def test_a_wider_slice_takes_the_union_of_its_neighbourhoods(self):
+        rows = self.ids_in(self.bf._repair_neighbourhood(self.proposal, ["CH-0010", "CH-0011"], []))
+        self.assertEqual(rows, ["CH-0008", "CH-0009", "CH-0012", "CH-0013"])
+
+    def test_it_is_a_digest_and_carries_the_promises(self):
+        row = self.bf._repair_neighbourhood(self.proposal, ["CH-0027"], [])[0]
+        self.assertIn("plants", row)
+        self.assertIn("reveals", row)
+        self.assertNotIn("beats", row)

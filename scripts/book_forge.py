@@ -5238,6 +5238,39 @@ def _halve_repair_slice(chunk: dict[str, object]) -> list[dict[str, object]]:
     return [_repair_chunk(ids[:middle]), _repair_chunk(ids[middle:])]
 
 
+# Two either side: enough for a rewritten chapter to know what it is handed and what
+# it must hand on, without carrying the book.
+REPAIR_NEIGHBOURS = 2
+
+
+def _repair_neighbourhood(proposal: dict[str, object], ids: list[str], findings: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The chapters one repair slice actually reasons about.
+
+    It used to be handed a digest of every chapter it was not rewriting. Measured on
+    a one-chapter repair: 34787 bytes of a 75216-byte envelope, against 2530 for the
+    chapter being rewritten. Halving the slice cannot touch that, because the part
+    that dominates is the part that does not shrink with the slice — and a repair
+    that is refused at one chapter has nowhere left to go.
+
+    What a slice needs is what it reasons about: the chapters its findings name, and
+    the ones on either side of what it rewrites, so a promise made just before and
+    collected just after still holds.
+    """
+    chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
+    orders = {str(row.get("id")): int(row.get("order") or 0) for row in chapters}
+    wanted = {str(value) for finding in findings for value in finding.get("repair_scope", [])}
+    for value in ids:
+        centre = orders.get(value)
+        if centre is None:
+            continue
+        wanted.update(
+            str(row.get("id")) for row in chapters
+            if abs(int(row.get("order") or 0) - centre) <= REPAIR_NEIGHBOURS
+        )
+    rewriting = set(ids)
+    return _design_digest([row for row in chapters if str(row.get("id")) in wanted and str(row.get("id")) not in rewriting])
+
+
 def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports, runner):
     """Rewrite the chapters a blocking finding names, then audit again.
 
@@ -5266,7 +5299,6 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         _log_step(7, 7, f"audit repair {round_number}/{MAX_DESIGN_REPAIR_ROUNDS} on {', '.join(targets)}", "→")
         round_dir = root / ".book-forge" / "repairs" / book_id / f"round-{round_number}"
         round_dir.mkdir(parents=True, exist_ok=True)
-        untouched = _design_digest([row for row in proposal.get("chapters", []) if str(row.get("id")) not in set(targets)])
         spine = {key: value for key, value in proposal.items() if key != "chapters"}
         rewritten: dict[str, object] = {}
         advisors: list[dict[str, object]] = []
@@ -5275,14 +5307,15 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
             chunk = pending.pop(0)
             ids = list(chunk["ids"])
             slug = str(chunk["part"])
+            slice_findings = [row for row in findings if set(str(v) for v in row.get("repair_scope", [])) & set(ids)]
             capsule = {
                 **base_capsule,
                 "chunk": {"category": "repair", "part": slug},
                 "spine": spine,
-                "written_so_far": untouched,
+                "written_so_far": _repair_neighbourhood(proposal, ids, slice_findings),
                 "repair": {
                     "reason": "the independent canon audit found blocking contradictions",
-                    "findings": [row for row in findings if set(str(v) for v in row.get("repair_scope", [])) & set(ids)],
+                    "findings": slice_findings,
                     "rewrite_only": ids,
                 },
                 "chapters_to_rewrite": [chapters[value] for value in ids],
