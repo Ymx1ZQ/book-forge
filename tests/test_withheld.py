@@ -228,6 +228,21 @@ class NeverWriteTests(unittest.TestCase):
         with self.assertRaises(self.bf.BookForgeError):
             self.bf.validate_writer_output(self.contract("withheld"), self.draft("EARTH was a word nobody used."))
 
+    def test_a_capitalised_entry_is_a_name_and_spares_the_common_word(self):
+        contract = self.contract("withheld", never_write=("Earth", "Kepler"))
+        value = self.bf.validate_writer_output(contract, self.draft("She turned the wet earth over with her heel."))
+        self.assertIn("earth", value["prose_markdown"])
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.validate_writer_output(contract, self.draft("Earth was a word nobody used."))
+        self.assertIn("Earth", str(caught.exception))
+
+    def test_a_lowercase_entry_is_still_caught_in_any_case(self):
+        contract = self.contract("withheld", never_write=("ship",))
+        for sentence in ("The ship was gone.", "The Ship was gone.", "The SHIP was gone."):
+            with self.subTest(sentence=sentence):
+                with self.assertRaises(self.bf.BookForgeError):
+                    self.bf.validate_writer_output(contract, self.draft(sentence))
+
     def test_a_chapter_with_no_withheld_list_is_never_checked(self):
         contract = {"id": "CH-0002", "title": "The Dawn Warden", "beats": ["A warden counts the light"], "target_words": 100}
         value = self.bf.validate_writer_output(contract, self.draft("The ship had brought them here."))

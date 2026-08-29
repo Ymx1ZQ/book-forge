@@ -5616,6 +5616,13 @@ def _invented_title_problem(contract: dict[str, object], prose: str) -> str | No
     return None
 
 
+def _never_write_hit(word: str, prose: str) -> bool:
+    if word == word.lower():
+        return bool(re.search(rf"\b{re.escape(word)}\b", prose, re.IGNORECASE))
+    spellings = "|".join(re.escape(value) for value in dict.fromkeys((word, word.upper())))
+    return bool(re.search(rf"\b(?:{spellings})\b", prose))
+
+
 def _withheld_leak(contract: dict[str, object], prose: str) -> dict[str, object] | None:
     """The one mechanical check standing behind a withheld fact.
 
@@ -5633,7 +5640,12 @@ def _withheld_leak(contract: dict[str, object], prose: str) -> dict[str, object]
         if not isinstance(row, dict) or row.get("status") != "withheld":
             continue
         words = [str(word).strip() for word in (row.get("never_write") or []) if str(word).strip()]
-        found = sorted({word for word in words if re.search(rf"\b{re.escape(word)}\b", prose, re.IGNORECASE)})
+        # A word the author capitalised is a name and is matched as written, plus
+        # its all-caps rendering for headings and epigraphs; an all-lowercase word
+        # is matched in any case. Without the distinction the entry `Earth` also
+        # rejects the earth under a character's feet, sending a correct chapter
+        # back to be written again.
+        found = sorted(word for word in words if _never_write_hit(word, prose))
         if found:
             return {"id": row.get("id"), "revealed_in": row.get("revealed_in"), "words": ", ".join(found)}
     return None

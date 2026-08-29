@@ -2809,3 +2809,22 @@ The whole field is optional. A book that declares no `withheld` list behaves exa
 - [x] Suite green: 457 passed, 30 subtests (era 434, 23). Reinstall, commit & push
 
 **Done when:** A chapter written before the reveal cannot state the withheld fact, because the model that wrote it was never told.
+
+## A forbidden word and a proper noun are not the same check ✅
+
+**Status: ✅ Done — 2026-08-29**
+
+**Correction to "A book can withhold its premise".** The leak check matches every `never_write` entry case-insensitively. That is right for a common noun and wrong for a proper noun, and the difference is not cosmetic: `Earth` is the fact being withheld, `earth` is the ground under a character's feet. Landfall is a book of fens, salt and gold-mud, so `the earth under her feet` is a sentence it will write, and the check as shipped rejects that draft and sends a correct chapter back to be rewritten. The same holds for `Kepler` against no ordinary word at all, which is the point: an entry the author capitalised is a name.
+
+**Fix:** an entry containing an uppercase letter is matched as written; an all-lowercase entry keeps the case-insensitive match it has now. The author chooses which by how they write the word, and the designer prompt says so.
+
+**Also found, in landfall's own list rather than in the engine:** two entries collide with canon that means something else. `colony` and `colonies` name the native Hwen memory-colonies, which predate the fleet and are a biological colony in the sense a coral reef is — PLC-0014 is titled "The Hwen Colony", so the entry forbids the writer from naming a place that exists. `alien` appears in CHR-0007 as `surface alien memories`, meaning unfamiliar. Both come off the list; `colonist`, `colonists`, `colonise` and `colonize` stay, because those carry the fact. `another world` and `other worlds` come off as well — a person can be in another world without having come from one.
+
+**Tasks:**
+- [x] `_withheld_leak` matches an entry with an uppercase letter case-sensitively, an all-lowercase entry case-insensitively
+- [x] `designer.md` says which spelling produces which match
+- [x] Test: `Earth` is caught and `the earth under her feet` is not; `ship` is still caught as `Ship`. The old case-blind test failed as written, which surfaced a hole the plan had not seen: an all-caps `EARTH` in a heading or an epigraph escaped a name matched as written, so a capitalised entry is now matched in its own spelling and in its all-caps rendering
+- [x] Landfall's `never_write` drops `colony`, `colonies`, `alien`, `aliens`, `extraterrestrial`, `another world`, `other worlds`
+- [x] Suite green: 459 passed, 33 subtests (era 457, 30). Reinstall, commit & push
+
+**Done when:** A chapter is not sent back for writing the word "earth" about soil.
