@@ -298,7 +298,12 @@ class BookDesignTests(unittest.TestCase):
         design_task = next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{book}")
         self.assertEqual(design_task["state"], "succeeded")
 
-        self.bf.resume_run(self.project, blocked_resolutions={f"AUDIT-{book}": "retry"})
+        # The audit no longer blocks: it finishes, records what it could not look
+        # up, and halts for a person. Nothing is waiting on a decision, so asking
+        # again is the whole of the resume.
+        record = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        self.assertEqual(record["state"], "needs_review")
+        self.assertTrue(record["unverifiable"])
         rerun = DesignProvider(proposal(), audit={"findings": []})
         result = self.bf.execute_book_design(self.project, book, provider=rerun)
         self.assertEqual(result["state"], "design_clean")

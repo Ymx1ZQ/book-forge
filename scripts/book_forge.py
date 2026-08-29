@@ -4680,6 +4680,7 @@ def _bind_audit_evidence(
     if not isinstance(findings, list):
         return value
     promises = promises or {}
+    unverifiable: list[dict[str, object]] = []
     book_id = str(scope.get("book")) if scope.get("scope") == "book" and scope.get("book") else None
     design_artifact = _design_artifact_path(root, scope)
     bound: list[dict[str, object]] = []
@@ -4690,17 +4691,32 @@ def _bind_audit_evidence(
         if not isinstance(evidence, list):
             continue
         fixed = []
+        unresolved: list[str] = []
         for item in evidence:
             if not isinstance(item, dict):
                 continue
             location = promises.get(str(item.get("location", "")), str(item.get("location", "")))
             target = _resolve_evidence_target(root, book_id, design_artifact, location)
             if target is None:
-                raise BookForgeError(f"Audit evidence location is not a stable artifact: {location}")
+                # Dropped, not raised. Failing closed on a citation nobody can look
+                # up is right — a repair aimed at nothing is worse than no repair —
+                # but enforcing it over the whole audit made one mistyped prefix
+                # cost twenty-five completed passes. `PL-0001#summary` did exactly
+                # that, on a project whose places are PLC-.
+                unresolved.append(location)
+                continue
             fixed.append({**item, "location": location, "hash": _file_hash(target)})
+        if not fixed:
+            # Nothing left to look up, so this cannot stand as a blocking finding.
+            # It is set aside rather than dropped: the record keeps it, and a person
+            # reads what the auditor was trying to say.
+            unverifiable.append({**finding, "evidence": evidence, "unresolved": sorted(set(unresolved))})
+            continue
         finding["evidence"] = fixed
+        if unresolved:
+            finding["unresolved_evidence"] = sorted(set(unresolved))
         bound.append(finding)
-    return {"findings": bound}
+    return {"findings": bound, "unverifiable": unverifiable}
 
 
 def _audit_digest(chapters: list[object]) -> list[dict[str, object]]:
@@ -4830,6 +4846,7 @@ def _run_book_audit_chunked(
     attempt_dir = Path(claim["capsule"]).parent
     results: list[dict[str, object]] = []
     findings: list[dict[str, object]] = []
+    unverifiable: list[dict[str, object]] = []
     envelope: dict[str, object] = {}
     open_promises: list[dict[str, object]] = []
     pending = list(_book_audit_chunks(len(chapters)))
@@ -4911,14 +4928,22 @@ def _run_book_audit_chunked(
                 _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {alone_exc}")
                 raise
         try:
-            rows = _validate_audit_output(
-                _bind_audit_evidence(root, scope, value, _promise_chapters(open_promises, value.get("open_promises")))
-            )
+            bound = _bind_audit_evidence(root, scope, value, _promise_chapters(open_promises, value.get("open_promises")))
+            rows = _validate_audit_output(bound)
             if chunk.get("category") == "schedule":
                 open_promises = _carry_open_promises(open_promises, value, slug)
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
             raise
+        for row in bound.get("unverifiable", []):
+            row["id"] = f"A-{slug}-{row.get('id', '000')}"
+            row["pass"] = slug
+            print(
+                f"[canon-auditor] {slug} set aside {row['id']} ({row.get('severity')}): "
+                f"it cites {', '.join(row.get('unresolved', []))}, which cannot be looked up",
+                file=sys.stderr,
+            )
+        unverifiable.extend(bound.get("unverifiable", []))
         for row in rows:
             # Five passes each numbering its findings from 001 would hand the repair
             # five different requests answering to one identifier; four style
@@ -4926,7 +4951,7 @@ def _run_book_audit_chunked(
             row["id"] = f"A-{slug}-{row.get('id', '000')}"
             row["pass"] = slug
         findings.extend(rows)
-    return claim, findings, results, envelope
+    return claim, findings, results, envelope, unverifiable
 
 
 def _design_audit_record(
@@ -4948,7 +4973,7 @@ def _design_audit_record(
         scope = {**scope, "proposal": _audit_proposal(scope["proposal"])}
     chapters = [row for row in (scope.get("proposal") or {}).get("chapters", []) if isinstance(row, dict)]
     if len(chapters) > BOOK_AUDIT_SLICE_SIZE:
-        claim, findings, results, envelope = _run_book_audit_chunked(root, task_id, scope, imports, runner)
+        claim, findings, results, envelope, unverifiable = _run_book_audit_chunked(root, task_id, scope, imports, runner)
         result = _synthetic_chunk_result(results, {"findings": findings}, role="canon-auditor")
     else:
         envelope = build_envelope(
@@ -4963,18 +4988,39 @@ def _design_audit_record(
         claim, result = _run_design_role(root, task_id, "canon-auditor", envelope, runner)
         try:
             value = _parse_contract_json(str(result["text"]))
-            findings = _validate_audit_output(_bind_audit_evidence(root, scope, value))
+            bound = _bind_audit_evidence(root, scope, value)
+            findings = _validate_audit_output(bound)
+            unverifiable = bound.get("unverifiable", [])
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
             raise
     record = {
         "schema": 1,
-        "state": "blocked" if any(row["severity"] == "blocking" for row in findings) else "design_clean",
+        # A citation nobody can look up does not pass silently, whatever its
+        # severity: it means the audit is confused or the artifacts have moved, and
+        # either way a person has to look. But the audit finishes first — one
+        # mistyped prefix used to destroy twenty-five completed passes and burn a
+        # retry, and now the verdict on everything else is written before anyone is
+        # asked anything.
+        "state": (
+            "blocked" if any(row["severity"] == "blocking" for row in findings)
+            else "needs_review" if unverifiable
+            else "design_clean"
+        ),
         "findings": findings,
+        "unverifiable": unverifiable,
     }
     _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
     if record["state"] == "blocked" and raise_on_blocked:
         raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(findings, sort_keys=True)}")
+    if record["state"] == "needs_review" and raise_on_blocked:
+        # Halted, not failed: retrying asks the same auditor the same question and
+        # gets the same citation. Every pass that did resolve is already on disk.
+        raise AdvanceHalted(
+            f"The audit finished and {len(unverifiable)} finding(s) cite a location nobody can look up: "
+            f"{json.dumps(unverifiable, sort_keys=True)}. The verdict on every other pass is in {output_path}. "
+            "A person decides whether the finding is real and what it should have cited"
+        )
     return record
 
 
@@ -5401,7 +5447,13 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     if refresh:
         _reset_universe_design_tasks(root)
     elif all(task["state"] == "succeeded" for task in tasks):
-        return {**_read_json(root / "universe" / "design-audit.json"), "calls": 0}
+        # Only a clean verdict is a finished job. One that needs review has findings
+        # nobody could look up, and returning it here left the universe with no way
+        # forward that did not involve reopening a task by hand.
+        record = _read_json(root / "universe" / "design-audit.json")
+        if record.get("state") == "design_clean":
+            return {**record, "calls": 0}
+        _reopen_task(root, "AUDIT-UNI-0001")
     plan = _load_plan(root)
     design_task = next(task for task in plan["tasks"] if task["id"] == "DESIGN-UNI-0001")
     if design_task["state"] == "succeeded":
@@ -5624,7 +5676,11 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         # by hand: the repair rounds live further down this function and were never
         # reached again. Reopening the audit costs a re-audit, which is what the
         # caller asked for by invoking the design at all.
-        if record.get("state") != "blocked":
+        # Only a clean verdict is a finished job. A blocked one has a repair to run,
+        # and one that needs review has findings nobody could look up — returning
+        # either here left the book with no way forward that did not involve
+        # reopening a task by hand.
+        if record.get("state") == "design_clean":
             return {**record, "calls": 0}
         _reopen_task(root, f"AUDIT-{book_id}")
     plan = _load_plan(root)
@@ -5743,6 +5799,17 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         _log_step(7, 7, "audit", "✗")
         raise BookForgeError(
             f"Independent design audit found blocking issues: {json.dumps(audit['findings'], sort_keys=True)}"
+        )
+    if audit.get("unverifiable"):
+        # A citation nobody can look up does not pass silently, whatever its
+        # severity. Halted rather than failed: asking the same auditor the same
+        # question returns the same citation, and every pass that did resolve is
+        # already recorded.
+        _log_step(7, 7, "audit", "✗")
+        raise AdvanceHalted(
+            f"The audit finished and {len(audit['unverifiable'])} finding(s) cite a location nobody can look up: "
+            f"{json.dumps(audit['unverifiable'], sort_keys=True)}. The verdict on every other pass is in "
+            f"books/{book_id}/design-audit.json. A person decides whether the finding is real and what it should have cited"
         )
     _log_step(7, 7, "audit", "✓")
     # M2: post-design ensemble — re-read book product (arc + chapters per-chapter beats/POV)
@@ -6745,7 +6812,7 @@ def _advance_needs_design(root: Path, book_id: str) -> bool:
     audit_path = root / "books" / book_id / "design-audit.json"
     if not audit_path.is_file():
         return True
-    return _read_json(audit_path).get("state") == "blocked"
+    return _read_json(audit_path).get("state") != "design_clean"
 
 
 def advance_book(

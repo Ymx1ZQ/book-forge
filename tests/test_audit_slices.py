@@ -239,10 +239,38 @@ class PromiseEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(bound["findings"][0]["evidence"][0]["location"], "UNI-0001#kernel")
 
-    def test_a_promise_that_cannot_be_placed_still_fails_closed(self):
-        with self.assertRaises(self.bf.BookForgeError) as caught:
-            self.bf._bind_audit_evidence(self.project, self.scope, self.finding("OP-9999"), {})
-        self.assertIn("OP-9999", str(caught.exception))
+    def test_a_promise_that_cannot_be_placed_is_set_aside_rather_than_binding(self):
+        bound = self.bf._bind_audit_evidence(self.project, self.scope, self.finding("OP-9999"), {})
+        self.assertEqual(bound["findings"], [])
+        self.assertEqual(bound["unverifiable"][0]["unresolved"], ["OP-9999"])
+
+    def test_a_finding_keeps_the_citation_that_resolves_and_reports_the_one_that_does_not(self):
+        """PL-0001#summary killed an audit of twenty-five completed passes, on a
+        project whose places are PLC-."""
+        value = {"findings": [{
+            "id": "F-001", "severity": "blocking", "issue": "Seeded.",
+            "evidence": [{"location": "UNI-0001#kernel"}, {"location": "PL-0001#summary"}],
+            "repair_scope": [self.book],
+        }]}
+        bound = self.bf._bind_audit_evidence(self.project, self.scope, value, {})
+        finding = bound["findings"][0]
+        self.assertEqual([row["location"] for row in finding["evidence"]], ["UNI-0001#kernel"])
+        self.assertEqual(finding["unresolved_evidence"], ["PL-0001#summary"])
+        self.assertEqual(finding["severity"], "blocking", "a finding that still has evidence keeps its severity")
+        self.assertEqual(bound["unverifiable"], [])
+
+    def test_a_finding_whose_every_citation_is_unlookupable_never_blocks(self):
+        value = {"findings": [{
+            "id": "F-001", "severity": "blocking", "issue": "Seeded.",
+            "evidence": [{"location": "PL-0001#summary"}, {"location": "PL-0002#summary"}],
+            "repair_scope": [self.book],
+        }]}
+        bound = self.bf._bind_audit_evidence(self.project, self.scope, value, {})
+        self.assertEqual(bound["findings"], [])
+        self.assertEqual(self.bf._validate_audit_output(bound), [])
+        aside = bound["unverifiable"][0]
+        self.assertEqual(aside["unresolved"], ["PL-0001#summary", "PL-0002#summary"])
+        self.assertEqual(aside["issue"], "Seeded.", "what the auditor tried to say is kept")
 
     def test_a_promise_row_with_no_chapter_is_not_a_mapping(self):
         rows = [{"id": "OP-0001", "promise": "no chapter given"}, {"chapter": "CH-0002", "promise": "no id"}]

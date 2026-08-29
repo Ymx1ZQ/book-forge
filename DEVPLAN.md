@@ -3085,3 +3085,33 @@ And the prompt says what evidence is: a chapter or a canon block, never a promis
 - [ ] Re-run landfall's audit
 
 **Done when:** The auditor is not punished for using a name the engine gave it.
+
+## One bad citation must not destroy thirty good passes 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**Third audit failure in a row on the same seam.** `OP-0014` was a promise id the engine itself had handed out — fixed. Then `PL-0001#summary`: a canon block that does not exist, because the project's places are `PLC-` and the auditor wrote `PL-`. One mistyped prefix, in one evidence item, in one finding, killed an audit of twenty-five completed passes and burned an attempt.
+
+**The defect is the granularity, not the check.** Failing closed on unresolvable evidence is right: a blocking finding must not be raised on a citation nobody can look up, because the repair that follows would be aimed at nothing. But it is enforced over the whole audit, so the cost of one bad citation is every call the audit has already paid for. The chorus already got this right — an advisor's unresolved evidence is marked and skipped rather than raised globally — and the audit, which is longer and more expensive, is the one that fails hardest.
+
+**Fix.** An evidence item that cannot be resolved is dropped from its finding and recorded. A finding left with no resolvable evidence at all is set aside as unverifiable rather than kept: it never reaches the blocking verdict, so nothing is repaired against a citation that does not exist, and it is written into the audit record and printed, so nothing is silently lost either. A person can read what the auditor tried to say and decide.
+
+The safety property is unchanged — no blocking finding stands on evidence that cannot be looked up — and the audit survives to give its verdict.
+
+**Tasks:**
+- [x] `_bind_audit_evidence` drops unresolvable evidence and returns what it set aside instead of raising
+- [x] A finding with no resolvable evidence left becomes unverifiable, never blocking
+- [x] `_run_book_audit_chunked` carries the unverifiable findings out, namespaced by pass like the rest
+- [x] `design-audit.json` records them, and they are printed when there are any
+- [x] `canon-auditor.md`: cite block ids exactly as the context spells them
+- [x] Test: a finding with one good and one bad citation keeps the good one and stays blocking
+- [x] Test: a finding with only bad citations is set aside, not blocking, and appears in the record
+- [x] Test: an audit with one bad citation still returns a verdict for every other pass
+- [x] Suite green: 515 passed, 341 subtests (era 513). Reinstall, commit & push
+- [ ] Re-run landfall's audit
+
+**What the suite corrected, mid-change.** Four tests asserted that *any* unresolvable citation fails the design closed, whatever its severity — a stronger property than the one this entry set out to keep, and the right one: a citation nobody can look up means the audit is confused or the artifacts have moved, and either way a person has to look. Setting such a finding quietly aside would have let a design pass that should not have.
+
+So the audit finishes, writes its verdict on every pass that did resolve, and then halts: the record's state is `needs_review`, and `AdvanceHalted` stops the driver rather than sending it round the retry loop, because asking the same auditor the same question returns the same citation. And only a clean verdict now counts as a finished job — a record that needs review reopens the audit on the next `advance`, on both the book and the universe path, instead of being returned as if it were done.
+
+**Done when:** An auditor's typo costs its own finding and a person's attention, not thirty paid calls.
