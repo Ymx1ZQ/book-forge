@@ -5308,16 +5308,19 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
             ids = list(chunk["ids"])
             slug = str(chunk["part"])
             slice_findings = [row for row in findings if set(str(v) for v in row.get("repair_scope", [])) & set(ids)]
+            repair_capsule = {
+                "reason": "the independent canon audit found blocking contradictions",
+                "findings": slice_findings,
+                "rewrite_only": ids,
+            }
+            if chunk.get("correction"):
+                repair_capsule["correction"] = chunk["correction"]
             capsule = {
                 **base_capsule,
                 "chunk": {"category": "repair", "part": slug},
                 "spine": spine,
                 "written_so_far": _repair_neighbourhood(proposal, ids, slice_findings),
-                "repair": {
-                    "reason": "the independent canon audit found blocking contradictions",
-                    "findings": slice_findings,
-                    "rewrite_only": ids,
-                },
+                "repair": repair_capsule,
                 "chapters_to_rewrite": [chapters[value] for value in ids],
             }
             repair_envelope = build_envelope(
@@ -5346,6 +5349,25 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
                     file=sys.stderr,
                 )
                 pending = halves + pending
+                continue
+            moved = sorted(
+                f"{key} was sent at order {chapters[key].get('order')} and came back at order {row.get('order')}"
+                for key, row in rows.items()
+                if key in chapters and row.get("order") != chapters[key].get("order")
+            )
+            if moved:
+                # The designer's instinct is right — the event does belong earlier —
+                # but a chapter cannot move: ids carry the reading order, other
+                # chapters point at these by id, and the writer is handed its past by
+                # id. Ask again for the same fix expressed as an exchange of content.
+                if chunk.get("correction"):
+                    raise BookForgeError(f"Design repair for {slug} renumbered chapters twice: {'; '.join(moved)}")
+                print(f"[designer] repair {slug} renumbered chapters; asking again in place", file=sys.stderr)
+                pending = [{**chunk, "correction": {
+                    "problem": moved,
+                    "rule": "every chapter keeps the id and the order it was given",
+                    "instead": "exchange what the chapters contain, so the earlier chapter carries the earlier event and both keep their number",
+                }}] + pending
                 continue
             rewritten.update(rows)
         # The repair runs outside the DAG, like a chorus round: its own attempt is

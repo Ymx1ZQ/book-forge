@@ -2727,3 +2727,27 @@ Forty-six percent of the call is the digest of the thirty-nine chapters it is no
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** The cost of a repair is set by what it rewrites.
+
+## The repair moved a chapter, and a chapter cannot move 🔄
+
+**Status: 🔄 In corso — 2026-08-29**
+
+**Problem:** told that CH-0028 "The German Face" fires the arc's third turn after the pressure it is supposed to precede, the designer did the right narrative thing and swapped the two chapters: it returned CH-0028 at order 27 and CH-0027 at order 28. The engine refused the result with `chapter.order` and the run ended.
+
+The refusal is correct, and not only on a formality. `validate_book_design` requires each chapter's `order` to match its position in the list, and beyond that the engine assumes elsewhere that `CH-000N` *is* the Nth chapter: the previous-chapters context handed to whoever writes and cold-reads is assembled by comparing ids lexicographically. Let the orders swap while the ids stay put and a writer is given the wrong chapters as its past. Ids also appear inside the prose of plants and reveals — "payoff CH-0030" — so renumbering silently repoints those too.
+
+So a chapter keeps its id and its place, and a repair that needs an event to happen earlier moves the *event*, exchanging what two chapters do while both stay where they are. The designer was never told this: the repair instruction says to return the chapters "complete and in order, with the contradiction resolved", which reads as permission to reorder.
+
+**Fix:** the repair instruction states that `id` and `order` are fixed, and that moving an event means exchanging what two chapters contain. The engine checks it rather than trusting it: a slice that comes back with an order it was not given is asked once more with the rule and its own violation quoted, the way a truncated slice is asked again smaller. A second violation raises with both orders named.
+
+**Tasks:**
+- [x] `designer.md`: `id` and `order` are fixed in a repair; move the event, not the chapter
+- [x] The engine rejects a slice whose returned orders differ from the ones it sent
+- [x] Such a slice is re-asked once, carrying the violation, before the round fails
+- [x] Test: a repair that renumbers is re-asked and the corrected answer is taken
+- [x] Test: a repair that renumbers twice fails with both chapters named
+- [x] Test: a repair that keeps the orders is merged untouched
+- [x] Suite green: 429 passed, 23 subtests (era 424). Reinstall, commit & push
+- [ ] Margherita's design clears and the first three chapters are written
+
+**Done when:** A repair changes what a chapter does, never which chapter it is.

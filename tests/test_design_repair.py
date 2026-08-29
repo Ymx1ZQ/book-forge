@@ -368,3 +368,77 @@ class RepairNeighbourhoodTests(unittest.TestCase):
         self.assertIn("plants", row)
         self.assertIn("reveals", row)
         self.assertNotIn("beats", row)
+
+
+class OrderIsFixedTests(unittest.TestCase):
+    """Told a chapter fires its turn too late, the designer swapped two chapters'
+    orders. The narrative fix was right and the renumbering is not available: ids
+    carry the reading order, plants point at chapters by id, and a writer is handed
+    its past by id."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+
+    def _provider(self, swaps):
+        """A designer that renumbers `swaps` times before answering in place."""
+        provider = RepairProvider(self.bf)
+        original = provider.__call__
+        state = {"left": swaps, "corrections": []}
+
+        def renumbering(role, envelope, attempt_dir):
+            task = envelope["payload"]["task"]
+            chunk = task.get("chunk") or {}
+            if chunk.get("category") == "repair":
+                state["corrections"].append(task["repair"].get("correction"))
+                result = original(role, envelope, attempt_dir)
+                if state["left"] > 0:
+                    state["left"] -= 1
+                    value = json.loads(result["text"])
+                    rows = value["chapters"]
+                    rows[0]["order"], rows[-1]["order"] = rows[-1]["order"], rows[0]["order"]
+                    return {**result, "text": json.dumps(value)}
+                return result
+            return original(role, envelope, attempt_dir)
+
+        return provider, state, renumbering
+
+    def test_a_renumbering_repair_is_asked_again_in_place(self):
+        provider, state, renumbering = self._provider(swaps=1)
+        result = self.bf.execute_book_design(self.project, self.book, provider=renumbering, no_chorus=True, no_post_chorus=True)
+        self.assertEqual(result["state"], "design_clean")
+        self.assertEqual(len(state["corrections"]), 2)
+        self.assertIsNone(state["corrections"][0])
+        self.assertIn("rule", state["corrections"][1])
+        self.assertTrue(any("order" in line for line in state["corrections"][1]["problem"]))
+
+    def test_the_second_attempt_is_what_reaches_disk(self):
+        provider, _, renumbering = self._provider(swaps=1)
+        self.bf.execute_book_design(self.project, self.book, provider=renumbering, no_chorus=True, no_post_chorus=True)
+        outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
+        self.assertEqual([row["order"] for row in outline], list(range(1, len(outline) + 1)))
+        self.assertEqual([row["id"] for row in outline], [f"CH-{i:04d}" for i in range(1, len(outline) + 1)])
+
+    def test_renumbering_twice_fails_with_the_chapters_named(self):
+        provider, _, renumbering = self._provider(swaps=2)
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.execute_book_design(self.project, self.book, provider=renumbering, no_chorus=True, no_post_chorus=True)
+        self.assertIn("renumbered chapters twice", str(caught.exception))
+        self.assertIn("CH-0002", str(caught.exception))
+
+    def test_a_repair_that_keeps_the_orders_is_taken_as_it_is(self):
+        provider, state, renumbering = self._provider(swaps=0)
+        self.bf.execute_book_design(self.project, self.book, provider=renumbering, no_chorus=True, no_post_chorus=True)
+        self.assertEqual(state["corrections"], [None])
+
+    def test_the_prompt_says_the_number_is_not_the_designer_s_to_change(self):
+        prompt = (Path(__file__).parents[1] / "assets" / "prompts" / "designer.md").read_text()
+        self.assertIn("keeps the `id` and the `order` it was given", prompt)
+        self.assertIn("move the **event**, not the chapter", prompt)
