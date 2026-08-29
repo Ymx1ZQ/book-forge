@@ -3460,6 +3460,59 @@ def _remember_call(root: Path, task_id: str, envelope: dict[str, object], result
     })
 
 
+def backfill_call_cache(project: Path | str, *, run: str | None = None) -> dict[str, object]:
+    """Remember answers a run paid for before the cache existed.
+
+    Landfall's design was killed after twenty-six accepted answers that nothing
+    read back. They are still on disk beside the envelopes that produced them,
+    and an envelope's hash is the sha256 of exactly the bytes that were written,
+    so the entries the cache would have made can be made now. A hash that no
+    longer matches simply never hits: the worst this can do is nothing.
+    """
+    root = _project_root(project)
+    runs_dir = root / ".book-forge" / "runs"
+    run_ids = [run] if run else sorted(path.name for path in runs_dir.glob("RUN-*") if path.is_dir())
+    remembered: list[str] = []
+    skipped: list[str] = []
+    for run_id in run_ids:
+        for attempt_dir in sorted((runs_dir / run_id).glob("attempts/*")):
+            intent_path = attempt_dir / "intent.json"
+            if not intent_path.is_file():
+                continue
+            task_id = str(_read_json(intent_path).get("task") or "")
+            if not task_id:
+                continue
+            for envelope_path in sorted(attempt_dir.glob("envelope-*.json")):
+                slug = envelope_path.name[len("envelope-"):-len(".json")]
+                raw_path = attempt_dir / f"raw-{slug}.txt"
+                where = f"{run_id}/{attempt_dir.name}/{slug}"
+                if not raw_path.is_file() or not raw_path.read_text(encoding="utf-8", errors="replace").strip():
+                    skipped.append(f"{where}: no accepted answer")
+                    continue
+                envelope_bytes = envelope_path.read_bytes()
+                try:
+                    role = str(_read_json(envelope_path).get("role") or "designer")
+                except (OSError, ValueError):
+                    skipped.append(f"{where}: envelope is not readable")
+                    continue
+                envelope = {"hash": _sha256_bytes(envelope_bytes), "role": role}
+                if _call_cache_path(root, task_id, envelope).is_file():
+                    skipped.append(f"{where}: already remembered")
+                    continue
+                _remember_call(root, task_id, envelope, {
+                    "text": raw_path.read_text(encoding="utf-8", errors="replace"),
+                    "finish": "stop",
+                    "cost": 0.0,
+                    "session_id": f"backfilled-{run_id}-{attempt_dir.name}",
+                    "provider": "openrouter",
+                    "model": MODEL,
+                    "variant": ROLE_SPECS.get(role, ("all", "high", 5))[1],
+                    "tokens": {},
+                })
+                remembered.append(f"{where} -> {task_id}")
+    return {"remembered": remembered, "skipped": skipped, "runs": run_ids}
+
+
 def _caching_runner(root: Path, task_id: str, runner):
     """A runner that answers from the cache, and remembers what parses.
 
@@ -9006,6 +9059,8 @@ def build_parser() -> argparse.ArgumentParser:
     runtime = commands.add_parser("runtime")
     runtime_commands = runtime.add_subparsers(dest="runtime_command", required=True)
     runtime_commands.add_parser("sync")
+    _backfill_cache = runtime_commands.add_parser("backfill-cache")
+    _backfill_cache.add_argument("--run", help="Only this run; default every run in the project")
     artifacts = commands.add_parser("artifacts")
     artifacts_commands = artifacts.add_subparsers(dest="artifacts_command", required=True)
     artifacts_backfill = artifacts_commands.add_parser("backfill")
@@ -9104,6 +9159,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"removed": args.collection}, sort_keys=True))
         elif args.command == "runtime" and args.runtime_command == "sync":
             print(json.dumps(sync_runtime(args.project), sort_keys=True))
+        elif args.command == "runtime" and args.runtime_command == "backfill-cache":
+            print(json.dumps(backfill_call_cache(args.project, run=args.run), sort_keys=True))
         elif args.command == "artifacts" and args.artifacts_command == "backfill":
             print(json.dumps(backfill_artifacts(args.project, book=args.book, locale=args.locale), sort_keys=True))
         elif args.command == "migrate":

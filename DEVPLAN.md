@@ -3006,7 +3006,15 @@ It covers the two paths that make these runs long: the chorus advisors and the d
 - [x] Test: a changed brief misses the cache
 - [x] Test: a truncated answer is not remembered, so the retry still happens
 - [x] Test: two advisors never share an entry
-- [x] Suite green: 500 passed, 206 subtests (era 491). Reinstall, commit & push
+- [x] Suite green: 504 passed, 206 subtests (era 491). Reinstall, commit & push
 - [ ] Resume landfall's design
+
+**And the run that taught us this can still be recovered.** Its answers are on disk beside the envelopes that produced them, and the hash is the sha256 of exactly those envelope bytes — so the entries the cache would have written can be written now. `runtime backfill-cache` walks a run's attempts, pairs each `envelope-<slug>.json` with its accepted `raw-<slug>.txt`, and remembers the pair under the task the attempt belonged to. A hash that no longer matches simply never hits, so the command cannot serve a wrong answer: the worst it can do is nothing.
+
+**Tasks (recovery):**
+- [x] `backfill_call_cache`, walking a run's attempts and pairing envelopes with accepted answers
+- [x] `runtime backfill-cache` on the CLI, reporting what it remembered and what it skipped
+- [x] Never backfill a slug with no accepted answer, an empty body, or an entry that already exists
+- [x] Test: a run's answers become cache hits; a truncated slug is skipped; a changed envelope does not hit
 
 **Done when:** Killing a design costs the call it was making, not the run.

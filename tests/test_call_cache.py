@@ -196,5 +196,55 @@ class TheCachingRunnerTests(CacheFixture):
         self.assertEqual(len(seen), 2, "a bad answer must not be inherited by the next run")
 
 
+class BackfillTests(CacheFixture):
+    """The run that taught us this is still recoverable: its answers sit beside the
+    envelopes that produced them."""
+
+    def run_dir(self):
+        return next((self.project / ".book-forge" / "runs").glob("RUN-*"))
+
+    def test_a_runs_answers_become_hits_and_the_design_asks_for_nothing(self):
+        first = CountingProvider(self.bf)
+        self.design(first)
+        self.assertTrue(first.designer_calls())
+        # Wipe the cache the run wrote, so only the backfill can supply the answers.
+        for entry in (self.project / ".book-forge" / "call-cache").rglob("*.json"):
+            entry.unlink()
+        report = self.bf.backfill_call_cache(self.project)
+        self.assertTrue(report["remembered"])
+        self.reopen()
+        second = CountingProvider(self.bf)
+        self.design(second)
+        self.assertEqual(second.designer_calls(), [])
+
+    def test_a_slug_with_no_accepted_answer_is_skipped(self):
+        self.design(CountingProvider(self.bf))
+        attempt = next(self.run_dir().glob("attempts/*/envelope-spine.json")).parent
+        (attempt / "envelope-chapters-99-99.json").write_bytes(b'{"role":"designer"}')
+        report = self.bf.backfill_call_cache(self.project)
+        self.assertTrue(any("chapters-99-99" in row and "no accepted answer" in row for row in report["skipped"]))
+
+    def test_an_envelope_that_has_changed_since_never_hits(self):
+        self.design(CountingProvider(self.bf))
+        for entry in (self.project / ".book-forge" / "call-cache").rglob("*.json"):
+            entry.unlink()
+        spine = next(self.run_dir().glob("attempts/*/envelope-spine.json"))
+        spine.write_bytes(spine.read_bytes() + b" ")
+        self.bf.backfill_call_cache(self.project)
+        self.reopen()
+        second = CountingProvider(self.bf)
+        self.design(second)
+        self.assertIn("spine", second.designer_calls(), "a moved question must be asked again")
+
+    def test_backfilling_twice_remembers_nothing_the_second_time(self):
+        self.design(CountingProvider(self.bf))
+        for entry in (self.project / ".book-forge" / "call-cache").rglob("*.json"):
+            entry.unlink()
+        self.assertTrue(self.bf.backfill_call_cache(self.project)["remembered"])
+        again = self.bf.backfill_call_cache(self.project)
+        self.assertEqual(again["remembered"], [])
+        self.assertTrue(any("already remembered" in row for row in again["skipped"]))
+
+
 if __name__ == "__main__":
     unittest.main()
