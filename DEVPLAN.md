@@ -2564,9 +2564,9 @@ The role's pin is: `canon-auditor` at variant **max**, with an output allowance 
 
 **Done when:** Work whose owner is gone is free at once.
 
-## The audit is one question over forty chapters, and only a tenth of it fits 🔄
+## The audit is one question over forty chapters, and only a tenth of it fits ✅
 
-**Status: 🔄 In corso — 2026-08-28** (codice fatto; resta la corsa su margherita)
+**Status: ✅ Done — 2026-08-29**
 
 **Problem:** the book audit has now returned an empty answer five times. Three measurements on the same design settle what is actually binding. Forty chapters with the whole proposal: input 34822, reasoning 32000, output 0. Forty chapters with `beats` and `imports` removed: input 18079, reasoning 32000, output 0. Ten chapters: input 10763, reasoning 27237, **output 917 and findings that name real defects** — it caught CH-0009 spending the book's engine ahead of the arc. The task is too large to answer in one call, and the threshold sits between eleven and eighteen thousand tokens of input.
 
@@ -2637,9 +2637,9 @@ The probe that set the number was run on an envelope that still carried the beat
 
 **Done when:** The common case does not begin with a call that cannot succeed.
 
-## A design that is already promoted cannot be repaired, only refused 🔄
+## A design that is already promoted cannot be repaired, only refused ✅
 
-**Status: 🔄 In corso — 2026-08-28**
+**Status: ✅ Done — 2026-08-29**
 
 **Problem:** the audit finally ran end to end on a forty-chapter design and returned ten findings, four of them blocking — CH-0019, CH-0024 and CH-0025 each firing the arc's fifth turn between five and eleven chapters before the arc places it, and CH-0028 answering a pressure the arc has it precede. The engine then stopped: `design failed and nothing could be recovered`.
 
@@ -2662,13 +2662,13 @@ It stopped because of which path it was on. `execute_book_design` audits with `r
 - [x] `_advance_needs_design` keeps the stage due while the verdict is blocking, so the driver dispatches the repair instead of printing `stages none` beside the findings
 - [x] Test: a succeeded-but-blocking audit does not finish the stage
 - [x] Suite green: 412 passed, 23 subtests (era 401). Reinstall, commit & push
-- [ ] Margherita's design clears and the first three chapters are written
+- [x] Margherita's design clears (`design_clean`, 0 blocking) and CH-0001..0003 are written, translated, exported and published
 
 **Done when:** Reaching the audit late does not cost the book its repair.
 
-## The repair asks for ten chapters in one answer, gets none, and says nothing 🔄
+## The repair asks for ten chapters in one answer, gets none, and says nothing ✅
 
-**Status: 🔄 In corso — 2026-08-28**
+**Status: ✅ Done — 2026-08-29**
 
 **Problem:** the repair round finally ran on a real blocked design and produced an empty file. `raw-repair.txt` is 0 bytes. The call carried an envelope of 34473 tokens — the whole designer capsule, the spine, a digest of the thirty chapters not being touched, ten full chapter contracts and the findings — and asked for ten rewritten contracts back. It is the shape that has failed at every other size in this engine, and it failed here.
 
@@ -2694,13 +2694,13 @@ There is a second cost above it. On the resume path the engine re-audits the who
 - [x] Test: a truncated slice is retried smaller, not silently dropped
 - [x] Test: a repair that produces nothing at all is an error, not a clean return
 - [x] Suite green: 418 passed, 23 subtests (era 412). Reinstall, commit & push
-- [ ] Margherita's design clears and the first three chapters are written
+- [x] Margherita's design clears (`design_clean`, 0 blocking) and CH-0001..0003 are written, translated, exported and published
 
 **Done when:** A repair that could not be delivered says so.
 
-## Rewriting one chapter costs a digest of the other thirty-nine 🔄
+## Rewriting one chapter costs a digest of the other thirty-nine ✅
 
-**Status: 🔄 In corso — 2026-08-29**
+**Status: ✅ Done — 2026-08-29**
 
 **Problem:** the repair halved down to a single chapter and still came back empty, and the engine said so — which is the improvement working, and also the end of what halving can do. Measured on that one-chapter envelope, 75216 bytes:
 
@@ -2724,13 +2724,13 @@ Forty-six percent of the call is the digest of the thirty-nine chapters it is no
 - [x] Test: the chapters a finding names are in the neighbourhood even when far away
 - [x] Test: the neighbours either side are included, and the ends of the book do not break it
 - [x] Suite green: 424 passed, 23 subtests (era 418). Reinstall, commit & push
-- [ ] Margherita's design clears and the first three chapters are written
+- [x] Margherita's design clears (`design_clean`, 0 blocking) and CH-0001..0003 are written, translated, exported and published
 
 **Done when:** The cost of a repair is set by what it rewrites.
 
-## The repair moved a chapter, and a chapter cannot move 🔄
+## The repair moved a chapter, and a chapter cannot move ✅
 
-**Status: 🔄 In corso — 2026-08-29**
+**Status: ✅ Done — 2026-08-29**
 
 **Problem:** told that CH-0028 "The German Face" fires the arc's third turn after the pressure it is supposed to precede, the designer did the right narrative thing and swapped the two chapters: it returned CH-0028 at order 27 and CH-0027 at order 28. The engine refused the result with `chapter.order` and the run ended.
 
@@ -2748,7 +2748,7 @@ So a chapter keeps its id and its place, and a repair that needs an event to hap
 - [x] Test: a repair that renumbers twice fails with both chapters named
 - [x] Test: a repair that keeps the orders is merged untouched
 - [x] Suite green: 429 passed, 23 subtests (era 424). Reinstall, commit & push
-- [ ] Margherita's design clears and the first three chapters are written
+- [x] Margherita's design clears (`design_clean`, 0 blocking) and CH-0001..0003 are written, translated, exported and published
 
 **Done when:** A repair changes what a chapter does, never which chapter it is.
 
