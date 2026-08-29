@@ -2751,3 +2751,28 @@ So a chapter keeps its id and its place, and a repair that needs an event to hap
 - [ ] Margherita's design clears and the first three chapters are written
 
 **Done when:** A repair changes what a chapter does, never which chapter it is.
+
+## One raw newline throws away a finished chapter ✅
+
+**Status: ✅ Done — 2026-08-29**
+
+**Problem:** the draft of CH-0003 was written in full — 14988 characters of prose — and the engine discarded it: `Model output is not contract JSON: Invalid control character at: line 1 column 2883`. The whole output contained exactly one raw newline inside a JSON string, sitting between thousands of correctly escaped ones:
+
+```
+tasting it. \"From?\"<raw newline>\n\n\"Berlin.\"
+```
+
+Python's decoder is strict about control characters inside strings by default, and rejects the document. So one slip in fifteen thousand characters costs a chapter, its repair round, and the run — and it will happen again on every book, because it is a property of how models emit long prose, not of this one.
+
+Reading the raw newline as the newline it plainly is loses nothing: it decodes to the same character the escaped ones decode to, and no other leniency is involved.
+
+**Fix:** the contract decoders read model output with `strict=False`. Everything else — the object shape, the size ceilings, the required fields — is checked exactly as before.
+
+**Tasks:**
+- [x] `_parse_contract_json` and `_parse_chunked_contract` decode with `strict=False`
+- [x] Test: a raw newline inside a string parses to the same value as an escaped one
+- [x] Test: output that is genuinely not JSON still fails
+- [x] Test: the object-shape and size checks are unchanged
+- [x] Suite green: 434 passed, 23 subtests (era 429). Reinstall, commit & push
+
+**Done when:** A chapter is not lost to a character.

@@ -5428,7 +5428,7 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
     if start < 0:
         raise BookForgeError("Model output contains no JSON object")
     try:
-        value, _ = json.JSONDecoder().raw_decode(stripped[start:])
+        value, _ = json.JSONDecoder(strict=False).raw_decode(stripped[start:])
     except json.JSONDecodeError as exc:
         raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
     if not isinstance(value, dict):
@@ -5457,7 +5457,7 @@ def _parse_chunked_contract(text_value: str, *, max_bytes: int = DESIGN_CHUNK_MA
     start = stripped.find("{")
     if start < 0:
         raise BookForgeError("Model output contains no JSON object")
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     merged: dict[str, object] = {}
     pos = start
     found = 0

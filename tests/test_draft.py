@@ -95,3 +95,33 @@ class DraftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RawControlCharacterTests(unittest.TestCase):
+    """A finished 14988-character chapter was discarded for one raw newline inside a
+    JSON string, among thousands of correctly escaped ones."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_a_raw_newline_reads_as_the_newline_it_is(self):
+        escaped = self.bf._parse_contract_json('{"prose":"a\\n\\nb"}')
+        raw = self.bf._parse_contract_json('{"prose":"a\n\nb"}')
+        self.assertEqual(raw, escaped)
+        self.assertEqual(raw["prose"], "a\n\nb")
+
+    def test_a_raw_newline_survives_the_chunked_decoder_too(self):
+        value = self.bf._parse_chunked_contract('{"chapters":[{"id":"CH-0001","prose":"one\ntwo"}]}')
+        self.assertEqual(value["chapters"][0]["prose"], "one\ntwo")
+
+    def test_output_that_is_not_json_still_fails(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._parse_contract_json("I am afraid I cannot help with that.")
+
+    def test_a_truncated_object_still_fails(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._parse_contract_json('{"prose":"unterminated')
+
+    def test_a_non_object_contract_still_fails(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._parse_contract_json('["a list is not a contract"]')
