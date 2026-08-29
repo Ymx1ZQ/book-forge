@@ -254,6 +254,90 @@ class WithheldIsItsOwnCallTests(unittest.TestCase):
         self.assertNotIn("fact", contract["withheld"][0])
 
 
+class RevealWindowTests(unittest.TestCase):
+    """Where a book does its telling is the author's decision. The engine had two
+    thirds compiled into it, and landfall's designer, offered only the last third
+    of twenty-six chapters, chose the twenty-sixth."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.outline = [{"id": f"CH-{i:04d}", "order": i, "title": "t", "pov": "CHR-0001", "summary": "s"} for i in range(1, 27)]
+
+    def orders(self, brief):
+        return [int(r["order"]) for r in self.bf._reveal_candidates(self.outline, 26, brief)]
+
+    def test_a_brief_that_says_nothing_gets_the_final_third(self):
+        self.assertEqual(min(self.orders({})), 17)
+        self.assertEqual(max(self.orders({})), 26)
+
+    def test_a_brief_that_names_a_window_gets_that_window(self):
+        self.assertEqual(self.orders({"reveal_window": [0.6, 0.92]}), list(range(15, 25)))
+
+    def test_an_early_window_is_honoured(self):
+        self.assertEqual(self.orders({"reveal_window": [0.2, 0.35]}), [5, 6, 7, 8, 9])
+
+    def test_the_first_chapter_is_never_a_candidate(self):
+        for window in ([0.0, 0.1], [0.0, 1.0], [-1, 0.05]):
+            with self.subTest(window=window):
+                self.assertNotIn(1, self.orders({"reveal_window": window}))
+
+    def test_the_list_stays_capped_however_wide_the_window_is(self):
+        self.assertEqual(len(self.orders({"reveal_window": [0.0, 1.0]})), self.bf.REVEAL_CANDIDATE_CAP)
+
+    def test_a_window_given_the_wrong_way_round_is_read_the_right_way_round(self):
+        self.assertEqual(self.orders({"reveal_window": [0.92, 0.6]}), self.orders({"reveal_window": [0.6, 0.92]}))
+
+    def test_a_window_that_is_not_two_numbers_falls_back_to_the_default(self):
+        for value in ("late", [0.5], None, {"from": "x", "to": "y"}):
+            with self.subTest(value=value):
+                self.assertEqual(self.orders({"reveal_window": value}), self.orders({}))
+
+    def test_a_window_written_as_from_and_to_is_read(self):
+        self.assertEqual(self.orders({"reveal_window": {"from": 0.6, "to": 0.92}}), self.orders({"reveal_window": [0.6, 0.92]}))
+
+
+class LayeredTruthTests(unittest.TestCase):
+    """A truth can arrive in layers: the telling that reframes the book, then what
+    that telling did not yet explain."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.orders_by_id = {"CH-0001": 1, "CH-0017": 17, "CH-0020": 20, "CH-0024": 24}
+
+    def rows(self):
+        return [
+            row(id="WH-0001", revealed_in="CH-0017", fact="The gods are the machines they came in."),
+            row(id="WH-0002", revealed_in="CH-0020", fact="The Verse is the machine's own silenced voice."),
+            row(id="WH-0003", revealed_in="CH-0024", fact="What they fled is still looking."),
+        ]
+
+    def test_each_layer_opens_at_its_own_chapter_and_not_before(self):
+        at_seventeen = self.bf._withheld_for_chapter(self.rows(), "CH-0017", self.orders_by_id)
+        self.assertEqual([r["status"] for r in at_seventeen], ["revealed here", "withheld", "withheld"])
+        self.assertIn("fact", at_seventeen[0])
+        self.assertNotIn("fact", at_seventeen[1])
+        self.assertNotIn("fact", at_seventeen[2])
+
+    def test_a_later_chapter_holds_what_has_opened_and_still_hides_the_rest(self):
+        at_twenty = self.bf._withheld_for_chapter(self.rows(), "CH-0020", self.orders_by_id)
+        self.assertEqual([r["status"] for r in at_twenty], ["known", "revealed here", "withheld"])
+
+    def test_the_first_chapter_holds_none_of_it(self):
+        at_one = self.bf._withheld_for_chapter(self.rows(), "CH-0001", self.orders_by_id)
+        self.assertEqual({r["status"] for r in at_one}, {"withheld"})
+        self.assertNotIn("fact", json.dumps(at_one))
+
+    def test_every_layer_is_validated_on_its_own(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        project = Path(temp.name) / "world"
+        self.bf.init_project(project, "World")
+        book = self.bf.add_book(project, "Landfall")["id"]
+        layered = [row(id="WH-0001", revealed_in="CH-0002"), row(id="WH-0002", revealed_in="CH-0099")]
+        codes = {f["code"] for f in self.bf.validate_book_design(project, book, proposal(layered))}
+        self.assertIn("withheld.reveal-unknown", codes)
+
+
 class WithheldValidationTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()

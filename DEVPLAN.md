@@ -2841,7 +2841,7 @@ The spine already asks for the premise, the entry state, the arc, the exit bound
 
 The chunk runs only when the book's brief carries a non-empty `reader_knowledge`. A book that withholds nothing pays nothing, and the author's intent is declared in one place rather than inferred.
 
-**Tasks:**
+**Tasks — never started; the entry was replaced before any of it was built, so the boxes below stay open as a record of what was proposed:**
 - [ ] `reader_knowledge` joins the allowed keys of a book brief
 - [ ] `_run_book_design_chunked` runs a `{"category":"withheld"}` chunk after the spine when the brief carries `reader_knowledge`, and folds the rows into the spine snapshot the chapter slices receive
 - [ ] The spine's `required_output` drops `withheld`; the new chunk carries its own
@@ -2895,3 +2895,29 @@ The audit's schedule pass becomes a fold. It walks the book in fixed windows, ea
 - [ ] Re-run landfall's design
 
 **Done when:** The number of chapters changes how many calls a design costs, and nothing else about it.
+
+## Where the telling falls is the author's choice, not the engine's 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**Correction to "A design call is bounded by construction, not by the book".** `_reveal_candidates` offers the designer only the chapters from two thirds of the way in, and the constant is written into the engine. That is one book's taste compiled into every book. Landfall's designer, given that window, chose the last chapter of twenty-six: the truth and the climax in the same scene, and the reader holding the key for a handful of pages.
+
+The author wants it earlier, and named the model: in *The Sword of Shannara* the history of the Great Wars is told early, and the rest of the book is read by that light. The revelation is the lens, not the ending.
+
+**Fix:** a book's brief may carry `reveal_window`, two fractions between 0 and 1 naming the part of the book the telling may fall in. `_reveal_candidates` reads it and offers the outline rows inside it, still capped at twelve so the call stays bounded. Absent, the default stays the final third, which is what an author who says nothing about it most likely means.
+
+The engine keeps only the rule it can justify: never CH-0001, because a truth told in the first chapter was never withheld from anyone. Everything else about placement is a craft decision and belongs to whoever is writing the book.
+
+**And the truth need not arrive all at once.** The author asked for the telling around chapter seventeen of twenty-six and then for more to come out step by step in the chapters after it. The `withheld` list already carries that: it is a list, each row has its own `revealed_in`, its own `seen_as` and its own forbidden words, and the engine cuts every chapter's contract against each row separately. So a book whose truth has layers returns several rows revealed in ascending order — the first reframing what the reader has been reading, the later ones deepening it — and nothing in the engine needs to change for that. What needs to change is the designer being told it is allowed, because a prompt describing one row will produce one row.
+
+**Tasks:**
+- [x] `reveal_window` joins the allowed keys of a book brief
+- [x] `_reveal_candidates` takes the window from the brief, defaulting to the final third, and stays capped at twelve rows
+- [x] `designer.md`: the candidates are the author's window, the telling is placed inside it, and a truth with layers is several rows revealed in ascending order rather than one row carrying everything
+- [x] Test: a brief that names an early window gets early candidates; a brief that names none gets the final third; the cap holds in both
+- [x] Test: CH-0001 is never a candidate, whatever the window says
+- [x] Landfall's brief carries the window the author chose
+- [x] Suite green: 483 passed, 202 subtests (era 471, 195). Reinstall, commit & push
+- [ ] Re-run landfall's design
+
+**Done when:** Moving the revelation is an edit to the brief, not to the engine.

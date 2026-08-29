@@ -3636,16 +3636,39 @@ def _outline_rows(parsed: object) -> list[dict[str, object]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
-def _reveal_candidates(outline: list[dict[str, object]], chapter_count: int) -> list[dict[str, object]]:
+# Where a book does its telling is the author's decision. The engine keeps one
+# rule — never the first chapter, because a truth told there was withheld from
+# nobody — and offers the default an author who says nothing most likely means.
+DEFAULT_REVEAL_WINDOW = (2 / 3, 1.0)
+REVEAL_CANDIDATE_CAP = 12
+
+
+def _reveal_window(brief: object) -> tuple[float, float]:
+    value = brief.get("reveal_window") if isinstance(brief, dict) else None
+    if isinstance(value, dict):
+        value = [value.get("from"), value.get("to")]
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return DEFAULT_REVEAL_WINDOW
+    try:
+        first, last = float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return DEFAULT_REVEAL_WINDOW
+    first, last = max(0.0, min(1.0, first)), max(0.0, min(1.0, last))
+    return (first, last) if first <= last else (last, first)
+
+
+def _reveal_candidates(outline: list[dict[str, object]], chapter_count: int, brief: object = None) -> list[dict[str, object]]:
     """The chapters a withholding book may do its telling in.
 
-    Bounded on purpose. The withheld chunk needs somewhere plausible late in the
-    book, not the book: handing it the whole outline would make the one call whose
-    answer is short depend on the book's length again.
+    Bounded on purpose. The withheld chunk needs somewhere the author considers
+    plausible, not the book: handing it the whole outline would make the one call
+    whose answer is short depend on the book's length again.
     """
-    first_of_final_third = max(1, (chapter_count * 2) // 3)
-    tail = [row for row in outline if int(row.get("order") or 0) >= first_of_final_third]
-    return tail[:12]
+    first_fraction, last_fraction = _reveal_window(brief)
+    first = max(2, int(chapter_count * first_fraction) or 2)
+    last = max(first, min(chapter_count, int(round(chapter_count * last_fraction)) or chapter_count))
+    inside = [row for row in outline if first <= int(row.get("order") or 0) <= last]
+    return inside[:REVEAL_CANDIDATE_CAP]
 
 
 def _run_ranged_chunks(
@@ -3779,7 +3802,7 @@ def _run_book_design_chunked(
                 **base_capsule,
                 "spine": spine_core,
                 "chapter_count": chapter_count,
-                "reveal_candidates": _reveal_candidates(outline, chapter_count),
+                "reveal_candidates": _reveal_candidates(outline, chapter_count, brief),
             },
             {"category": "withheld"},
         )
@@ -4053,7 +4076,7 @@ def _write_book_brief(project: Path | str, book_id: str, brief: str) -> dict[str
     value = json.loads(brief)
     if not isinstance(value, dict):
         raise BookForgeError("book brief must be a JSON object")
-    allowed = {"schema", "premise", "characters", "plot", "tone", "length_notes", "reader_knowledge"}
+    allowed = {"schema", "premise", "characters", "plot", "tone", "length_notes", "reader_knowledge", "reveal_window"}
     if not allowed & set(value):
         raise BookForgeError(f"book brief must contain at least one of: {sorted(allowed)}")
     value.setdefault("schema", 1)
