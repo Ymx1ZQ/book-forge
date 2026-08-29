@@ -2921,3 +2921,32 @@ The engine keeps only the rule it can justify: never CH-0001, because a truth to
 - [ ] Re-run landfall's design
 
 **Done when:** Moving the revelation is an edit to the brief, not to the engine.
+
+## A chunk reads what it needs, and a rangeless chunk has a way down 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**What happened.** Landfall's `withheld` chunk came back empty three times and blocked the design, which the driver then restarted from the spine, re-paying nine chorus calls to arrive at the same wall. The chunk's envelope is 154473 bytes. Its task is 119729 of those, and 85102 of the task — 71% — is `worldbuilding.md`, a document this call has no use for. It is asked for a handful of rows: the truth, what a person living in the world experiences instead, which chapter tells it and who does the telling. It works from the author's `reader_knowledge`, the spine, the chapters it may choose between, and the canon summaries that let it name a teller.
+
+**Two things are wrong, and they are different.**
+
+The first is that every chunk is handed the same capsule whatever it was asked for. The base capsule was built for the chunk that needs the most, and the rest carry it. Cutting `worldbuilding` out of the withheld chunk takes its task from 119729 bytes to about 34600.
+
+The second is structural, and it is the same defect that took three days to find in the spine: a chunk with no range of chapters cannot be halved, so when it comes back empty there is nothing between it and a blocked design. `_halve_chunk` is the only rescue the engine has, and it only works on chunks that carry a range. The spine, the withheld chunk and the repair all sit outside it.
+
+**Fix.** A chunk declares what it reads, and the engine gives it that and no more. The withheld chunk does not read the worldbuilding document; the outline and the chapter slices do, because they invent what happens in the world.
+
+And a rangeless chunk gets the rescue a ranged one has: when it exhausts its attempts, the engine retries it once with the bulk of the capsule removed — the same cut the withheld chunk now takes by default — before blocking the design. Asking for the same thing with less in front of it is what has worked every other time this ceiling has been hit.
+
+**Tasks:**
+- [x] A per-category list of what a chunk does not read, applied in `_run_design_chunk`
+- [x] The withheld chunk does not read `worldbuilding`
+- [x] A rangeless chunk that exhausts its length retries once on the reduced capsule before blocking
+- [x] The reduction is reported on stderr with what it dropped, so a run that took it says so
+- [x] Test: the withheld capsule carries the brief, the spine and the candidates and not the worldbuilding; the chapter slices still carry it
+- [x] Test: a rangeless chunk that answers only on the reduced capsule completes the design instead of blocking it
+- [x] Test: the reduced retry is a last resort, not the first call
+- [x] Suite green: 491 passed, 206 subtests (era 483, 202). Reinstall, commit & push
+- [ ] Re-run landfall's design
+
+**Done when:** A call that comes back empty is asked again with less, whatever kind of chunk it is.

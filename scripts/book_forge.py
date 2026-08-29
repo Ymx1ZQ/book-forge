@@ -3400,6 +3400,16 @@ MAX_OPEN_PROMISES = 60
 # shares. Measured before the call: over this, the engine splits rather than
 # spending a question that cannot be answered.
 CHUNK_PAYLOAD_TOKEN_BOUND = 6000
+# What a chunk does not read. The base capsule is built for the call that needs
+# the most and every other call carries it: the withheld chunk was handed 85102
+# bytes of worldbuilding to return four rows, and came back empty three times.
+CHUNK_DOES_NOT_READ = {
+    "withheld": ("worldbuilding",),
+}
+# What the engine takes away when a chunk it cannot halve comes back empty. These
+# are context rather than instruction: dropping them asks the same question with
+# less in front of it, which is what has worked every time this ceiling was hit.
+LAST_RESORT_CUT = ("worldbuilding", "chorus_report")
 
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
@@ -3528,12 +3538,18 @@ def _run_design_chunk(
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     """Run the designer for one chunk under an already-claimed task.
 
-    Length truncation is retried locally up to three times; exhaustion blocks the
-    task as failed_length rather than leaving it outcome_unknown.
+    Length truncation is retried locally up to three times. A chunk carrying a
+    range of chapters is then handed back to the caller to be halved. A chunk
+    carrying none — the spine, the withheld list, a repair — has no halving to
+    fall back on, and used to block the whole design: landfall's withheld chunk
+    came back empty three times and the driver restarted from the spine, paying
+    nine chorus calls to arrive at the same wall. So it is asked once more with
+    the bulk of its capsule removed before the task is blocked.
     """
-    capsule = dict(base_capsule)
-    capsule["chunk"] = chunk
     slug = _chunk_slug(chunk)
+    unread = CHUNK_DOES_NOT_READ.get(str(chunk.get("category")), ())
+    capsule = {key: value for key, value in base_capsule.items() if key not in unread}
+    capsule["chunk"] = chunk
     # What this chunk adds on top of the capsule every chunk shares. A truncation
     # discovered by the provider costs three calls and a blocked task; the same
     # answer measured here costs nothing, so a chunk that is plainly too big is
@@ -3545,28 +3561,42 @@ def _run_design_chunk(
             file=sys.stderr,
         )
         raise DesignChunkTruncated(chunk, [])
-    envelope = build_envelope(
-        root,
-        role="designer",
-        task_capsule=capsule,
-        imports=imports,
-        state={},
-        tools=[],
-        max_output_tokens=max_output_tokens,
-    )
-    _write_bytes_atomic(attempt_dir / f"envelope-{slug}.json", envelope["bytes"])
+
     results: list[dict[str, object]] = []
-    result = None
-    for attempt in range(3):
-        result = runner("designer", envelope, attempt_dir)
-        results.append(result)
-        mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
-        if result["finish"] != "length":
-            break
-        _write_bytes_atomic(attempt_dir / f"raw-{slug}-attempt{attempt + 1}.txt", str(result.get("text", "")).encode())
+
+    def ask(value: dict[str, object], suffix: str = "") -> tuple[dict[str, object] | None, dict[str, object]]:
+        envelope = build_envelope(
+            root,
+            role="designer",
+            task_capsule=value,
+            imports=imports,
+            state={},
+            tools=[],
+            max_output_tokens=max_output_tokens,
+        )
+        _write_bytes_atomic(attempt_dir / f"envelope-{slug}{suffix}.json", envelope["bytes"])
+        answer = None
+        for attempt in range(3):
+            answer = runner("designer", envelope, attempt_dir)
+            results.append(answer)
+            mark_provider_accepted(root, str(claim["attempt"]), str(answer["session_id"]))
+            if answer["finish"] != "length":
+                break
+            _write_bytes_atomic(attempt_dir / f"raw-{slug}{suffix}-attempt{attempt + 1}.txt", str(answer.get("text", "")).encode())
+        return answer, envelope
+
+    result, envelope = ask(capsule)
     if result is None or _is_length_finish(result):
         if "first_order" in chunk and "last_order" in chunk:
             raise DesignChunkTruncated(chunk, results)
+        dropped = [key for key in LAST_RESORT_CUT if key in capsule]
+        if dropped:
+            print(
+                f"[designer] {slug} came back empty and cannot be halved; asking once more without {', '.join(dropped)}",
+                file=sys.stderr,
+            )
+            result, envelope = ask({key: value for key, value in capsule.items() if key not in dropped}, suffix="-reduced")
+    if result is None or _is_length_finish(result):
         _block_task_failed_length(root, task_id, claim)
         raise BookForgeError(f"Design {task_id} failed_length on chunk {slug}")
     _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
