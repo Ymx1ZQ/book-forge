@@ -4653,10 +4653,33 @@ def _resolve_evidence_target(root: Path, book_id: str | None, design_artifact: P
     return None
 
 
-def _bind_audit_evidence(root: Path, scope: dict[str, object], value: dict[str, object]) -> dict[str, object]:
+def _promise_chapters(*promise_lists: object) -> dict[str, str]:
+    """Where each open promise was made.
+
+    The schedule fold hands the auditor a vocabulary it did not have before — a
+    promise with an id — and it cites one as evidence, which is the natural thing
+    to do with an identifier it was just given. A promise is not an artifact, so
+    the binder refused it and the whole audit died. The chapter that made the
+    promise is an artifact, and the engine knows which one it is.
+    """
+    lookup: dict[str, str] = {}
+    for rows in promise_lists:
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and str(row.get("id") or "").strip() and str(row.get("chapter") or "").strip():
+                lookup[str(row["id"])] = str(row["chapter"])
+    return lookup
+
+
+def _bind_audit_evidence(
+    root: Path,
+    scope: dict[str, object],
+    value: dict[str, object],
+    promises: dict[str, str] | None = None,
+) -> dict[str, object]:
     findings = value.get("findings")
     if not isinstance(findings, list):
         return value
+    promises = promises or {}
     book_id = str(scope.get("book")) if scope.get("scope") == "book" and scope.get("book") else None
     design_artifact = _design_artifact_path(root, scope)
     bound: list[dict[str, object]] = []
@@ -4670,7 +4693,7 @@ def _bind_audit_evidence(root: Path, scope: dict[str, object], value: dict[str, 
         for item in evidence:
             if not isinstance(item, dict):
                 continue
-            location = str(item.get("location", ""))
+            location = promises.get(str(item.get("location", "")), str(item.get("location", "")))
             target = _resolve_evidence_target(root, book_id, design_artifact, location)
             if target is None:
                 raise BookForgeError(f"Audit evidence location is not a stable artifact: {location}")
@@ -4888,7 +4911,9 @@ def _run_book_audit_chunked(
                 _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {alone_exc}")
                 raise
         try:
-            rows = _validate_audit_output(_bind_audit_evidence(root, scope, value))
+            rows = _validate_audit_output(
+                _bind_audit_evidence(root, scope, value, _promise_chapters(open_promises, value.get("open_promises")))
+            )
             if chunk.get("category") == "schedule":
                 open_promises = _carry_open_promises(open_promises, value, slug)
         except BookForgeError as exc:

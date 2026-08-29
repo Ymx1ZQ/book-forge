@@ -3055,4 +3055,33 @@ And an audit pass that cannot be halved gets the rescue the design chunks were g
 - [x] Suite green: 508 passed, 341 subtests (era 506, 206). Reinstall, commit & push
 - [ ] Re-run landfall's audit
 
+**What narrowing costs, and the direction that would not cost it.** Measured on the same envelopes: a five-chapter window is 48400 bytes and a one-chapter window is 41803, so a chapter adds about 1650 bytes and roughly 40000 — 84% — is fixed: the role prompt, the arc, the premise, and 24097 bytes of canon blocks, all carried identically whatever the width. Per chapter checked that is 41800 bytes at a width of one, 21700 at two, 9700 at five. Narrowing to one costs more than four times as much for the same work.
+
+The heavier cost is what stops being checked. A window pass is asked two things — whether these chapters contradict each other, and whether one of them stands where the arc does not place it — and the first needs more than one chapter to mean anything. At a width of one it silently disappears: the audit reports clean having checked less, and the last-resort pass, which drops the neighbourhood digest too, checks less still. What saves this is that the check that matters most at distance — a promise planted at chapter three and paid at chapter twenty — lives in the schedule fold rather than in the window.
+
+So the width is not really the defect. One call is being asked to do two different kinds of thinking over a large context. Splitting by question rather than by chapters would let a wide window stand: one pass asking only whether each chapter sits where the arc places it — light, mechanical, per chapter — and another asking only whether a run of chapters contradicts itself, given nothing but their plants and reveals. Two easy questions on small inputs instead of one hard question on a large one. And 24097 bytes of canon travels in every audit call unmeasured; how much of it the auditor actually needs is the thing to measure before narrowing anything further.
+
 **Done when:** An audit that cannot answer a question asks a smaller one instead of ending the design.
+
+## A promise is not an artifact, but the chapter that made it is 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**Correction to the schedule fold.** The fold hands each window the promises still open when the last one ended, so the auditor now has a vocabulary it did not have before: `OP-0014`, a promise. Asked for evidence, it cited one — which is the natural thing to do with an identifier it was just given — and `_bind_audit_evidence` refused it, because evidence must resolve to a stable artifact. The whole audit died on it, after seventeen passes, and burned one of three attempts.
+
+The auditor is not wrong. The engine gave it an id and then rejected it for using it.
+
+**Fix.** The engine carries the promise list, so it knows which chapter each promise was made in. An evidence location naming a promise — one it was handed, or one this pass is returning — is rewritten to that promise's chapter before binding. A promise it cannot place still fails closed, because unresolvable evidence is meant to fail closed.
+
+And the prompt says what evidence is: a chapter or a canon block, never a promise id, because the promise is the claim and the chapter is where it can be checked.
+
+**Tasks:**
+- [x] `_bind_audit_evidence` resolves a promise id to the chapter that made it, from the promises carried in and the promises returned
+- [x] `canon-auditor.md`: evidence is a chapter or a canon block; cite the chapter that made a promise, never the promise
+- [x] Test: a finding citing a carried promise binds to that promise's chapter
+- [x] Test: a finding citing a promise the pass is itself returning binds too
+- [x] Test: a promise that cannot be placed still fails closed
+- [x] Suite green: 513 passed, 341 subtests (era 508). Reinstall, commit & push
+- [ ] Re-run landfall's audit
+
+**Done when:** The auditor is not punished for using a name the engine gave it.

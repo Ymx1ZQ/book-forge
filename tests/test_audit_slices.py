@@ -204,6 +204,55 @@ class PassScopeTests(unittest.TestCase):
         self.assertIn("open_promises", prompt)
 
 
+class PromiseEvidenceTests(unittest.TestCase):
+    """The fold gave the auditor an id and then refused it for using it: landfall's
+    audit died on `OP-0014` after seventeen passes."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        self.scope = {"scope": "book", "book": self.book, "proposal": {"chapters": [chapter(1)]}}
+        (self.project / f"books/{self.book}/design.md").write_text("# Design\n", encoding="utf-8")
+
+    def finding(self, location):
+        return {"findings": [{
+            "id": "F-001", "severity": "note", "issue": "Seeded.",
+            "evidence": [{"location": location}], "repair_scope": [self.book],
+        }]}
+
+    def test_a_finding_citing_a_carried_promise_binds_to_the_chapter_that_made_it(self):
+        carried = [{"id": "OP-0014", "chapter": "UNI-0001#kernel", "promise": "the warden owes an answer"}]
+        bound = self.bf._bind_audit_evidence(
+            self.project, self.scope, self.finding("OP-0014"), self.bf._promise_chapters(carried, None)
+        )
+        self.assertEqual(bound["findings"][0]["evidence"][0]["location"], "UNI-0001#kernel")
+        self.assertNotEqual(bound["findings"][0]["evidence"][0]["hash"], "")
+
+    def test_a_promise_the_pass_is_itself_returning_binds_too(self):
+        returned = [{"id": "OP-0021", "chapter": "UNI-0001#kernel", "promise": "the door is owed"}]
+        bound = self.bf._bind_audit_evidence(
+            self.project, self.scope, self.finding("OP-0021"), self.bf._promise_chapters([], returned)
+        )
+        self.assertEqual(bound["findings"][0]["evidence"][0]["location"], "UNI-0001#kernel")
+
+    def test_a_promise_that_cannot_be_placed_still_fails_closed(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf._bind_audit_evidence(self.project, self.scope, self.finding("OP-9999"), {})
+        self.assertIn("OP-9999", str(caught.exception))
+
+    def test_a_promise_row_with_no_chapter_is_not_a_mapping(self):
+        rows = [{"id": "OP-0001", "promise": "no chapter given"}, {"chapter": "CH-0002", "promise": "no id"}]
+        self.assertEqual(self.bf._promise_chapters(rows, None), {})
+
+    def test_the_prompt_says_what_evidence_is(self):
+        prompt = (PROMPTS / "canon-auditor.md").read_text()
+        self.assertIn("never a promise's own id", prompt)
+
+
 class AuditFixture(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
