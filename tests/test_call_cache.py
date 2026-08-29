@@ -246,5 +246,40 @@ class BackfillTests(CacheFixture):
         self.assertTrue(any("already remembered" in row for row in again["skipped"]))
 
 
+class TheAnswerWorthKeepingTests(CacheFixture):
+    """Two attempts of one run can answer the same question differently, both
+    validly. Every later chunk carries the spine in its capsule, so keeping the
+    answer from the attempt that got nowhere strands the one that got furthest —
+    landfall lost fourteen chapter-contract answers to a choice made by directory
+    order."""
+
+    def attempt(self, name: str, task: str, answers: dict[str, tuple[bytes, str]]) -> None:
+        directory = self.project / ".book-forge" / "runs" / "RUN-9999" / "attempts" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "intent.json").write_text(json.dumps({"task": task}))
+        for slug, (envelope, answer) in answers.items():
+            (directory / f"envelope-{slug}.json").write_bytes(envelope)
+            (directory / f"raw-{slug}.txt").write_text(answer)
+
+    def test_the_attempt_that_got_furthest_is_the_one_remembered(self):
+        spine_envelope = b'{"role":"designer","task":{"chunk":{"category":"spine"}}}'
+        self.attempt("ATT-0010", "DESIGN-X", {"spine": (spine_envelope, '{"from":"the short attempt"}')})
+        self.attempt("ATT-0011", "DESIGN-X", {
+            "spine": (spine_envelope, '{"from":"the long attempt"}'),
+            "outline-1-9": (b'{"role":"designer","task":{"chunk":{"category":"outline"}}}', '{"chapter_outline":[]}'),
+            "chapters-1-8": (b'{"role":"designer","task":{"chunk":{"category":"chapters"}}}', '{"chapters":[]}'),
+        })
+        report = self.bf.backfill_call_cache(self.project, run="RUN-9999")
+        cached = self.bf._cached_call(self.project, "DESIGN-X", {"hash": self.bf._sha256_bytes(spine_envelope), "role": "designer"})
+        self.assertEqual(json.loads(cached["text"])["from"], "the long attempt")
+        self.assertTrue(any("ATT-0011" in row and "spine" in row for row in report["remembered"]))
+        self.assertTrue(any("ATT-0010" in row and "already remembered" in row for row in report["skipped"]))
+
+    def test_the_report_says_how_complete_each_attempt_was(self):
+        self.attempt("ATT-0011", "DESIGN-X", {"spine": (b'{"role":"designer"}', "{}")})
+        report = self.bf.backfill_call_cache(self.project, run="RUN-9999")
+        self.assertTrue(any("(1 accepted)" in row for row in report["remembered"]))
+
+
 if __name__ == "__main__":
     unittest.main()

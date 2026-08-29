@@ -3006,7 +3006,7 @@ It covers the two paths that make these runs long: the chorus advisors and the d
 - [x] Test: a changed brief misses the cache
 - [x] Test: a truncated answer is not remembered, so the retry still happens
 - [x] Test: two advisors never share an entry
-- [x] Suite green: 504 passed, 206 subtests (era 491). Reinstall, commit & push
+- [x] Suite green: 506 passed, 206 subtests (era 491). Reinstall, commit & push
 - [ ] Resume landfall's design
 
 **And the run that taught us this can still be recovered.** Its answers are on disk beside the envelopes that produced them, and the hash is the sha256 of exactly those envelope bytes — so the entries the cache would have written can be written now. `runtime backfill-cache` walks a run's attempts, pairs each `envelope-<slug>.json` with its accepted `raw-<slug>.txt`, and remembers the pair under the task the attempt belonged to. A hash that no longer matches simply never hits, so the command cannot serve a wrong answer: the worst it can do is nothing.
@@ -3016,5 +3016,16 @@ It covers the two paths that make these runs long: the chorus advisors and the d
 - [x] `runtime backfill-cache` on the CLI, reporting what it remembered and what it skipped
 - [x] Never backfill a slug with no accepted answer, an empty body, or an entry that already exists
 - [x] Test: a run's answers become cache hits; a truncated slug is skipped; a changed envelope does not hit
+
+**Correction, found by using it — 2026-08-29.** The backfill walked a run's attempts in name order and kept the first accepted answer for each hash, skipping any later one as already remembered. Landfall's `RUN-0028` holds fifteen attempts accumulated over days, and two of them — ATT-0010 with four accepted answers and ATT-0011 with ten — had asked the spine the identical question and been given two different valid answers. The first one won, so the cache served ATT-0010's spine, and because every later chunk carries the spine in its capsule, ATT-0011's fourteen chapter-contract answers became unreachable: their envelopes name a spine the engine no longer produces.
+
+The hash chain did its job — a different spine invalidates everything downstream, so nothing incoherent was assembled — but the choice of which answer to keep was made by directory order, which is no reason at all.
+
+**The rule that has a reason:** when two attempts answered the same question, keep the answer from the attempt that got furthest. Its answer is the one the rest of that attempt was built on, so keeping it recovers a whole chain rather than stranding one. Attempts are walked in descending order of how many accepted answers they hold.
+
+**Tasks (correction):**
+- [x] Attempts are walked most-complete-first, so the answer that carries a chain wins over the answer that carries none
+- [x] The report says which attempt each remembered answer came from and how complete it was
+- [x] Test: two attempts answering the same question, and the one with more accepted answers is the one remembered
 
 **Done when:** Killing a design costs the call it was making, not the run.

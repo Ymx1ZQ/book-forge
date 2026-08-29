@@ -3474,8 +3474,19 @@ def backfill_call_cache(project: Path | str, *, run: str | None = None) -> dict[
     run_ids = [run] if run else sorted(path.name for path in runs_dir.glob("RUN-*") if path.is_dir())
     remembered: list[str] = []
     skipped: list[str] = []
+
+    def accepted_answers(attempt_dir: Path) -> int:
+        return sum(1 for path in attempt_dir.glob("raw-*.txt") if "-attempt" not in path.name and path.stat().st_size > 0)
+
     for run_id in run_ids:
-        for attempt_dir in sorted((runs_dir / run_id).glob("attempts/*")):
+        # Most complete attempt first. Two attempts of the same run can answer the
+        # identical question differently — both valid — and every later chunk
+        # carries the spine in its capsule, so keeping the wrong one strands that
+        # attempt's whole chain. Landfall lost fourteen chapter-contract answers
+        # that way, to an attempt chosen by directory order. The answer worth
+        # keeping is the one the rest of its attempt was built on.
+        attempts = sorted((runs_dir / run_id).glob("attempts/*"), key=lambda path: (-accepted_answers(path), path.name))
+        for attempt_dir in attempts:
             intent_path = attempt_dir / "intent.json"
             if not intent_path.is_file():
                 continue
@@ -3509,7 +3520,7 @@ def backfill_call_cache(project: Path | str, *, run: str | None = None) -> dict[
                     "variant": ROLE_SPECS.get(role, ("all", "high", 5))[1],
                     "tokens": {},
                 })
-                remembered.append(f"{where} -> {task_id}")
+                remembered.append(f"{where} ({accepted_answers(attempt_dir)} accepted) -> {task_id}")
     return {"remembered": remembered, "skipped": skipped, "runs": run_ids}
 
 
