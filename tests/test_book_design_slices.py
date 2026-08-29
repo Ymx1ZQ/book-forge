@@ -69,12 +69,14 @@ class SliceProvider:
                 "entry_state": {"CHR-0001": "isolated"},
                 "arc": ["refusal", "cost", "choice"],
                 "exit_boundary": {"CHR-0001": "committed"},
-                "chapter_outline": [
-                    {"id": f"CH-{index:04d}", "order": index, "title": f"The Ninth Tide {index}", "pov": "CHR-0001", "summary": "She goes down again."}
-                    for index in range(1, self.chapter_count + 1)
-                ],
+                "chapter_count": self.chapter_count,
             })
         first, last = int(chunk["first_order"]), int(chunk["last_order"])
+        if chunk.get("category") == "outline":
+            return self._ok(envelope, {"chapter_outline": [
+                {"id": f"CH-{index:04d}", "order": index, "title": f"The Ninth Tide {index}", "pov": "CHR-0001", "summary": "She goes down again."}
+                for index in range(first, last + 1)
+            ]})
         if last - first + 1 > self.bf.BOOK_DESIGN_SLICE_SIZE:
             return self._truncated(envelope)
         return self._ok(envelope, {"chapters": [
@@ -185,9 +187,21 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         categories = [chunk["category"] for chunk in provider.chunks]
         self.assertEqual(categories[0], "spine")
-        self.assertEqual(categories[1:], ["chapters"] * 5)
+        self.assertEqual(categories[1:], ["outline"] * 4 + ["chapters"] * 5)
         for chunk in provider.chunks[1:]:
-            self.assertLessEqual(int(chunk["last_order"]) - int(chunk["first_order"]) + 1, self.bf.BOOK_DESIGN_SLICE_SIZE)
+            width = int(chunk["last_order"]) - int(chunk["first_order"]) + 1
+            ceiling = self.bf.BOOK_OUTLINE_SLICE_SIZE if chunk["category"] == "outline" else self.bf.BOOK_DESIGN_SLICE_SIZE
+            self.assertLessEqual(width, ceiling)
+
+    def test_the_spine_is_asked_for_a_number_and_never_for_the_chapters(self):
+        """The spine is the one chunk that cannot be halved, so it is the one chunk
+        whose answer must not grow with the book: 15822 bytes cut off mid-sentence,
+        then twice reasoning 31999 and output 0."""
+        provider = SliceProvider(self.bf)
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        spine_capsule = provider.capsules[0]
+        self.assertIn("chapter_count", json.dumps(spine_capsule["required_output"]))
+        self.assertNotIn("chapter_outline", json.dumps(spine_capsule["required_output"]))
 
     def test_every_slice_call_carries_the_spine_and_the_outline(self):
         provider = SliceProvider(self.bf)
@@ -196,30 +210,40 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         self.assertNotIn("spine", spine_capsule)
         for capsule in slice_capsules:
             self.assertEqual(capsule["spine"]["premise"], "A diver must decide whether memory can be owned.")
-            self.assertEqual(len(capsule["chapter_outline"]), CHAPTER_COUNT)
+        for capsule in (row for row in slice_capsules if row["chunk"]["category"] == "chapters"):
+            orders = [row["order"] for row in capsule["chapter_outline"]]
+            first, last = int(capsule["chunk"]["first_order"]), int(capsule["chunk"]["last_order"])
+            self.assertLessEqual(len(orders), self.bf.BOOK_DESIGN_SLICE_SIZE + 2 * self.bf.DESIGN_NEIGHBOURS)
+            self.assertLessEqual(min(orders), first)
+            self.assertGreaterEqual(max(orders), min(last, CHAPTER_COUNT))
 
     def test_every_slice_gets_the_same_spine_and_never_another_slice_s_chapters(self):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         spines = [capsule["spine"] for capsule in provider.capsules[1:]]
-        self.assertEqual(len(spines), 5)
+        self.assertEqual(len(spines), 9)
         for spine in spines:
             self.assertNotIn("chapters", spine)
             self.assertEqual(spine, spines[0])
 
-    def test_a_slice_envelope_grows_only_by_the_digest(self):
-        """The slices carry what came before them, and nothing else may accumulate:
-        the spine used to swallow each slice's chapters and the envelope doubled."""
+    def test_a_chapter_slice_envelope_does_not_grow_as_the_book_is_written(self):
+        """The spine used to swallow each slice's chapters and the envelope doubled.
+        Now the digest and the outline are windows, so the last slice of a book
+        costs what the first one did."""
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
-        fixed = [
-            len(json.dumps({key: value for key, value in capsule.items() if key not in {"written_so_far", "chunk"}}, sort_keys=True))
-            for capsule in provider.capsules[1:]
-        ]
-        self.assertEqual(len(set(fixed)), 1, "everything but the digest must stay constant across slices")
-        digests = [len(json.dumps(capsule["written_so_far"], sort_keys=True)) for capsule in provider.capsules[1:]]
-        self.assertEqual(digests, sorted(digests))
-        self.assertLess(digests[-1], fixed[0], "the digest must stay smaller than the rest of the capsule")
+        slices = [row for row in provider.capsules[1:] if row["chunk"]["category"] == "chapters"]
+        varying = {"written_so_far", "chunk", "chapter_outline"}
+        fixed = [len(json.dumps({k: v for k, v in capsule.items() if k not in varying}, sort_keys=True)) for capsule in slices]
+        self.assertEqual(len(set(fixed)), 1, "everything but the windows must stay constant across slices")
+        # The first slice has nothing written before it; from the second on every
+        # slice carries a full window, and a full window is the same size wherever
+        # in the book it sits.
+        # A window at the end of the book is clipped by the book's end, so the last
+        # slice is a little smaller. What must not happen is the other direction.
+        sizes = [len(json.dumps(capsule, sort_keys=True)) for capsule in slices[1:]]
+        self.assertLess(max(sizes) - min(sizes), max(sizes) // 4, "slices past the first must all cost about the same")
+        self.assertLessEqual(sizes[-1], max(sizes), "the last slice must not be the most expensive one")
 
     def test_the_merged_proposal_still_gathers_every_slice_in_order(self):
         provider = SliceProvider(self.bf)
@@ -227,20 +251,22 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         outline = json.loads((self.project / f"books/{self.book}/outline.yaml").read_text())["chapters"]
         self.assertEqual([row["id"] for row in outline], [f"CH-{index:04d}" for index in range(1, CHAPTER_COUNT + 1)])
 
-    def test_a_slice_sees_every_chapter_written_before_it_and_none_of_its_own(self):
+    def test_a_slice_sees_the_chapters_just_before_it_and_none_of_its_own(self):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
-        slices = provider.capsules[1:]
-        self.assertEqual([len(capsule["written_so_far"]) for capsule in slices], [0, 8, 16, 24, 32])
+        slices = [row for row in provider.capsules[1:] if row["chunk"]["category"] == "chapters"]
+        self.assertEqual([len(capsule["written_so_far"]) for capsule in slices], [0, 4, 4, 4, 4])
         for capsule in slices:
             seen = {row["id"] for row in capsule["written_so_far"]}
             first = int(capsule["chunk"]["first_order"])
             self.assertNotIn(f"CH-{first:04d}", seen)
+            if first > 1:
+                self.assertIn(f"CH-{first - 1:04d}", seen)
 
     def test_the_digest_carries_the_promises_and_never_the_beats(self):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
-        digest = provider.capsules[-1]["written_so_far"]
+        digest = [row for row in provider.capsules if row["chunk"]["category"] == "chapters"][-1]["written_so_far"]
         self.assertTrue(digest)
         for row in digest:
             self.assertEqual(sorted(row), ["id", "order", "plants", "pov", "reveals", "title"])
@@ -256,11 +282,11 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         for capsule in provider.capsules:
             self.assertNotIn("chunking", capsule)
 
-    def test_a_spine_without_an_outline_blocks_instead_of_designing_nothing(self):
+    def test_a_spine_that_names_no_chapters_blocks_instead_of_designing_nothing(self):
         provider = SliceProvider(self.bf, chapter_count=0)
         with self.assertRaises(self.bf.BookForgeError) as caught:
             self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
-        self.assertIn("chapter_outline", str(caught.exception))
+        self.assertIn("chapter count", str(caught.exception))
 
     def test_each_slice_is_accounted_for_separately_in_the_receipt(self):
         provider = SliceProvider(self.bf)
@@ -268,7 +294,10 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         receipts = [json.loads(path.read_text()) for path in (self.project / ".book-forge" / "runs").rglob("execution-receipt.json")]
         chunked = [row["chunk_telemetry"] for row in receipts if row.get("chunk_telemetry")]
         self.assertEqual(len(chunked), 1)
-        self.assertEqual([row["chunk"] for row in chunked[0]], ["spine", "chapters-1-8", "chapters-9-16", "chapters-17-24", "chapters-25-32", "chapters-33-40"])
+        self.assertEqual([row["chunk"] for row in chunked[0]], [
+            "spine", "outline-1-12", "outline-13-24", "outline-25-36", "outline-37-40",
+            "chapters-1-8", "chapters-9-16", "chapters-17-24", "chapters-25-32", "chapters-33-40",
+        ])
 
 
 

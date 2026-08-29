@@ -59,7 +59,7 @@ class RepairProvider:
             # carries it and the rest of the round is clean.
             scope = task["design_scope"]
             rows = scope.get("proposal", {}).get("chapters", [])
-            opening = "pass" not in scope or ("book_digest" in scope and rows and int(rows[0].get("order") or 0) == 1)
+            opening = "pass" not in scope or ("neighbourhood_digest" in scope and rows and int(rows[0].get("order") or 0) == 1)
             if not opening:
                 return self._ok(envelope, {"findings": []}, role)
             findings = self.audits.pop(0) if self.audits else []

@@ -150,6 +150,110 @@ class WithheldOnDiskTests(unittest.TestCase):
         self.assertNotIn("withheld", json.loads(without[f"books/{book}/chapters/CH-0001.json"]))
 
 
+class WithheldIsItsOwnCallTests(unittest.TestCase):
+    """Asking for the withheld list inside the spine is what broke landfall's
+    design: the spine already carried a row per chapter, and the extra list cut
+    the answer off mid-sentence."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.book = self.bf.add_book(self.project, "Landfall")["id"]
+
+    def brief(self, reader_knowledge=None):
+        value = {"schema": 1, "premise": "A warden decides.", "characters": ["Binta"], "plot": ["walk"], "tone": "quiet"}
+        if reader_knowledge:
+            value["reader_knowledge"] = reader_knowledge
+        (self.project / f"books/{self.book}/book-brief.json").write_text(json.dumps(value))
+
+    def design(self):
+        chunks = []
+        withheld_capsules = []
+
+        def provider(role, envelope, attempt_dir):
+            task = envelope["payload"]["task"]
+            payload = {"findings": []}
+            if role == "canon-auditor":
+                if "neighbourhood_digest" not in task["design_scope"]:
+                    payload["open_promises"] = []
+            else:
+                chunk = task.get("chunk") or {}
+                chunks.append(chunk.get("category"))
+                if chunk.get("category") == "spine":
+                    payload = {
+                        "premise": "A warden decides.", "entry_state": {"CHR-0001": "here"},
+                        "arc": ["refusal", "cost", "choice"], "exit_boundary": {"CHR-0001": "gone"},
+                        "chapter_count": 9,
+                    }
+                elif chunk.get("category") == "outline":
+                    payload = {"chapter_outline": [
+                        {"id": f"CH-{i:04d}", "order": i, "title": "The Dawn Warden", "pov": "CHR-0001", "summary": "s"}
+                        for i in range(int(chunk["first_order"]), int(chunk["last_order"]) + 1)
+                    ]}
+                elif chunk.get("category") == "withheld":
+                    withheld_capsules.append(task)
+                    payload = {"withheld": [row(revealed_in="CH-0008")]}
+                else:
+                    payload = {"chapters": [
+                        {
+                            "id": f"CH-{i:04d}", "order": i, "title": "The Dawn Warden", "pov": "CHR-0001",
+                            "beats": ["She counts the light and the ledger is short"], "plants": [], "reveals": [],
+                            "target_words": 900, "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None,
+                        }
+                        for i in range(int(chunk["first_order"]), int(chunk["last_order"]) + 1)
+                    ]}
+            return {
+                "text": json.dumps(payload), "provider": "openrouter",
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": {name: spec[1] for name, spec in self.bf.ROLE_SPECS.items()}.get(role, "high"),
+                "session_id": "ses-1", "tokens": {"input": 100, "output": 200},
+                "cost": 0.001, "latency_ms": 5, "finish": "stop",
+            }
+
+        self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+        return chunks, withheld_capsules
+
+    def test_a_book_that_declares_what_it_hides_is_asked_for_it_in_its_own_call(self):
+        self.brief("The reader is not told this is a colonised world.")
+        chunks, capsules = self.design()
+        self.assertEqual(chunks.count("withheld"), 1)
+        self.assertEqual(chunks[0], "spine")
+        self.assertLess(chunks.index("outline"), chunks.index("withheld"))
+        self.assertLess(chunks.index("withheld"), chunks.index("chapters"))
+        design = (self.project / f"books/{self.book}/design.md").read_text()
+        self.assertIn("## Withheld", design)
+        self.assertIn(TRUTH, design)
+
+    def test_the_call_is_given_somewhere_late_to_put_the_telling(self):
+        self.brief("The reader is not told this is a colonised world.")
+        _, capsules = self.design()
+        candidates = capsules[0]["reveal_candidates"]
+        self.assertTrue(candidates)
+        self.assertGreaterEqual(min(int(row["order"]) for row in candidates), 6)
+        self.assertLessEqual(len(candidates), 12)
+        self.assertEqual(capsules[0]["chapter_count"], 9)
+
+    def test_a_book_that_hides_nothing_is_never_asked(self):
+        self.brief()
+        chunks, capsules = self.design()
+        self.assertNotIn("withheld", chunks)
+        self.assertEqual(capsules, [])
+        self.assertNotIn("## Withheld", (self.project / f"books/{self.book}/design.md").read_text())
+
+    def test_the_chapter_slices_are_told_what_the_book_is_holding_back(self):
+        self.brief("The reader is not told this is a colonised world.")
+        self.design()
+        contract = json.loads((self.project / f"books/{self.book}/chapters/CH-0002.json").read_text())
+        self.assertEqual(contract["withheld"][0]["status"], "withheld")
+        self.assertNotIn("fact", contract["withheld"][0])
+
+
 class WithheldValidationTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()

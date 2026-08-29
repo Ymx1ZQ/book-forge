@@ -3384,6 +3384,22 @@ BOOK_DESIGN_SLICE_SIZE = 8
 # input with reasoning 31999 and no output, and five answered at 7638 with 16816 of
 # reasoning. The first request has to be the size that answers.
 BOOK_AUDIT_SLICE_SIZE = 5
+# One-line outline rows are small, so a slice can hold more of them than a slice
+# of full chapter contracts can.
+BOOK_OUTLINE_SLICE_SIZE = 12
+# How far on either side of its own range a slice sees. The repair has used this
+# rule since it stopped sending the whole book to rewrite one chapter.
+DESIGN_NEIGHBOURS = 4
+AUDIT_NEIGHBOURS = 4
+# A schedule pass reads this many chapters and carries forward what they left
+# open, so a promise made in chapter three is still checked at chapter forty
+# without any one call reading the whole book.
+SCHEDULE_WINDOW_SIZE = 8
+MAX_OPEN_PROMISES = 60
+# What one chunk may add to the envelope on top of the capsule every chunk
+# shares. Measured before the call: over this, the engine splits rather than
+# spending a question that cannot be answered.
+CHUNK_PAYLOAD_TOKEN_BOUND = 6000
 
 UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
     {"category": "kernel"},
@@ -3518,6 +3534,17 @@ def _run_design_chunk(
     capsule = dict(base_capsule)
     capsule["chunk"] = chunk
     slug = _chunk_slug(chunk)
+    # What this chunk adds on top of the capsule every chunk shares. A truncation
+    # discovered by the provider costs three calls and a blocked task; the same
+    # answer measured here costs nothing, so a chunk that is plainly too big is
+    # split before it is asked.
+    payload_tokens = max(0, len(_json_bytes(capsule)) - len(_json_bytes(dict(base_capsule)))) // 4
+    if payload_tokens > CHUNK_PAYLOAD_TOKEN_BOUND and _halve_chunk(chunk):
+        print(
+            f"[designer] {slug} carries {payload_tokens} tokens of its own, over the {CHUNK_PAYLOAD_TOKEN_BOUND} bound; splitting before the call",
+            file=sys.stderr,
+        )
+        raise DesignChunkTruncated(chunk, [])
     envelope = build_envelope(
         root,
         role="designer",
@@ -3538,7 +3565,7 @@ def _run_design_chunk(
             break
         _write_bytes_atomic(attempt_dir / f"raw-{slug}-attempt{attempt + 1}.txt", str(result.get("text", "")).encode())
     if result is None or _is_length_finish(result):
-        if chunk.get("category") == "chapters":
+        if "first_order" in chunk and "last_order" in chunk:
             raise DesignChunkTruncated(chunk, results)
         _block_task_failed_length(root, task_id, claim)
         raise BookForgeError(f"Design {task_id} failed_length on chunk {slug}")
@@ -3568,12 +3595,95 @@ class DesignChunkTruncated(BookForgeError):
 
 
 def _book_design_chunks(chapter_count: int) -> list[dict[str, object]]:
-    """One chunk per slice of chapters, in order."""
+    """One chunk per slice of full chapter contracts, in order."""
     chunks: list[dict[str, object]] = []
     for start in range(1, chapter_count + 1, BOOK_DESIGN_SLICE_SIZE):
         end = min(start + BOOK_DESIGN_SLICE_SIZE - 1, chapter_count)
         chunks.append({"category": "chapters", "part": f"{start}-{end}", "first_order": start, "last_order": end})
     return chunks
+
+
+def _book_outline_chunks(chapter_count: int) -> list[dict[str, object]]:
+    """One chunk per slice of the book's one-line outline."""
+    chunks: list[dict[str, object]] = []
+    for start in range(1, chapter_count + 1, BOOK_OUTLINE_SLICE_SIZE):
+        end = min(start + BOOK_OUTLINE_SLICE_SIZE - 1, chapter_count)
+        chunks.append({"category": "outline", "part": f"{start}-{end}", "first_order": start, "last_order": end})
+    return chunks
+
+
+def _order_window(rows: list[object], first: int, last: int, neighbours: int) -> list[dict[str, object]]:
+    """The rows around a slice's own range, and no more of the book than that."""
+    low, high = first - neighbours, last + neighbours
+    return [row for row in rows if isinstance(row, dict) and low <= int(row.get("order") or 0) <= high]
+
+
+def _chapter_count_of(spine: dict[str, object]) -> int:
+    try:
+        return int(str(spine.get("chapter_count")).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _outline_rows(parsed: object) -> list[dict[str, object]]:
+    """The outline rows out of whatever shape the answer arrived in."""
+    value = parsed
+    if isinstance(value, dict):
+        for key in ("chapter_outline", "outline", "chapters", "rows"):
+            if isinstance(value.get(key), list):
+                value = value[key]
+                break
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def _reveal_candidates(outline: list[dict[str, object]], chapter_count: int) -> list[dict[str, object]]:
+    """The chapters a withholding book may do its telling in.
+
+    Bounded on purpose. The withheld chunk needs somewhere plausible late in the
+    book, not the book: handing it the whole outline would make the one call whose
+    answer is short depend on the book's length again.
+    """
+    first_of_final_third = max(1, (chapter_count * 2) // 3)
+    tail = [row for row in outline if int(row.get("order") or 0) >= first_of_final_third]
+    return tail[:12]
+
+
+def _run_ranged_chunks(
+    chunks: list[dict[str, object]],
+    *,
+    run,
+    capsule_for,
+    collect,
+    results: list[dict[str, object]],
+    telemetry: list[dict[str, object]],
+    on_unhalvable,
+) -> None:
+    """Run a list of ranged chunks, asking for less from any that does not fit.
+
+    The outline and the chapter contracts go through the same loop: both are a
+    range of chapters, both come back truncated sometimes, and in both cases the
+    answer is to ask for half rather than for the same thing again.
+    """
+    pending = list(chunks)
+    while pending:
+        chunk = pending.pop(0)
+        try:
+            parsed, chunk_telemetry, chunk_results = run(capsule_for(chunk), chunk)
+        except DesignChunkTruncated as exc:
+            halves = _halve_chunk(chunk)
+            if not halves:
+                on_unhalvable(chunk)
+            print(
+                f"[designer] {_chunk_slug(chunk)} truncated; splitting into "
+                f"{', '.join(_chunk_slug(half) for half in halves)}",
+                file=sys.stderr,
+            )
+            results.extend(exc.results)
+            pending = halves + pending
+            continue
+        results.extend(chunk_results)
+        telemetry.append(chunk_telemetry)
+        collect(parsed, chunk)
 
 
 def _run_book_design_chunked(
@@ -3585,71 +3695,121 @@ def _run_book_design_chunked(
     *,
     max_output_tokens: int = 12288,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
-    """Design a book in engine-controlled slices: the spine, then the chapters.
+    """Design a book in slices whose size does not follow the book's length.
 
     A whole 40-chapter proposal does not fit in one call. Measured on three
     consecutive attempts, reasoning consumed 27045, 29441 and 31998 tokens of a
-    ceiling near 32000, leaving 4955, 2559 and finally zero tokens of output —
-    24 chapters, then 9, then none. Asking the model to split its own answer into
-    several JSON objects cannot help, because those objects share one output
-    budget. So the engine decides the split: the spine call returns the arc and a
-    one-line outline per chapter, and each following call expands one slice of
-    that outline into full chapter contracts.
+    ceiling near 32000, leaving 4955, 2559 and finally zero tokens of output. So
+    the engine decides the split rather than asking the model to split its own
+    answer, which cannot help: several JSON objects share one output budget.
+
+    The first split was spine-then-chapters, and it left the spine carrying one
+    outline row per chapter — an answer whose size is the book's size. That is
+    what failed on landfall: 15822 bytes cut off mid-sentence, then twice
+    `input 42241, reasoning 31999, output 0`, and the spine is the one chunk
+    `_halve_chunk` cannot rescue because it carries no range to halve. So the
+    spine now returns only what is constant — premise, entry state, arc, exit
+    boundary and how many chapters there are — the outline is sliced like
+    everything else, and what a book withholds is a third chunk asked once the
+    outline exists, so its `revealed_in` names a chapter that is real.
+
+    Every slice reads a window: the outline rows and the digest of the chapters
+    within `DESIGN_NEIGHBOURS` of its own range, never the whole book. What one
+    slice cannot see, the audit's fold over the finished book does.
     """
-    request_hash = _sha256_bytes(_json_bytes({"task": task_id, "chunks": ["spine", "chapters"]}))
+    request_hash = _sha256_bytes(_json_bytes({"task": task_id, "chunks": ["spine", "outline", "withheld", "chapters"]}))
     claim = claim_task(root, task_id, request_hash=request_hash)
     attempt_dir = Path(claim["capsule"]).parent
     results: list[dict[str, object]] = []
     chunk_telemetry: list[dict[str, object]] = []
 
-    spine, telemetry, spine_results = _run_design_chunk(
-        root, task_id, claim, attempt_dir, base_capsule, {"category": "spine"}, imports, runner, max_output_tokens
-    )
+    def run(capsule, chunk):
+        return _run_design_chunk(root, task_id, claim, attempt_dir, capsule, chunk, imports, runner, max_output_tokens)
+
+    def unhalvable(chunk):
+        _block_task_failed_length(root, task_id, claim)
+        raise BookForgeError(f"Design {task_id} failed_length on chunk {_chunk_slug(chunk)}")
+
+    spine, telemetry, spine_results = run(base_capsule, {"category": "spine"})
     spine = _unwrap_chunk(spine, "spine")
     results.extend(spine_results)
     chunk_telemetry.append(telemetry)
-    outline = spine.get("chapter_outline")
-    if not isinstance(outline, list) or not outline:
-        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason="spine returned no chapter_outline")
-        raise BookForgeError("Book design spine returned no chapter_outline")
 
-    merged = {key: value for key, value in spine.items() if key != "chapter_outline"}
+    # A spine that answered with the outline anyway is taken at its word: the rows
+    # are paid for and correct, and asking for them again would cost calls to
+    # arrive at what is already in hand.
+    outline = _outline_rows(spine.get("chapter_outline"))
+    chapter_count = _chapter_count_of(spine) or len(outline)
+    if not chapter_count:
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason="spine returned neither a chapter count nor an outline")
+        raise BookForgeError("Book design spine returned no chapter count")
+    spine_core = {key: value for key, value in spine.items() if key not in {"chapter_outline", "chapter_count"}}
+
+    if not outline:
+        collected: list[dict[str, object]] = []
+        _run_ranged_chunks(
+            _book_outline_chunks(chapter_count),
+            run=run,
+            capsule_for=lambda chunk: {
+                **base_capsule,
+                "spine": spine_core,
+                "chapter_count": chapter_count,
+                "outline_so_far": _order_window(collected, int(chunk["first_order"]), int(chunk["last_order"]), DESIGN_NEIGHBOURS),
+            },
+            collect=lambda parsed, chunk: collected.extend(_outline_rows(parsed)),
+            results=results,
+            telemetry=chunk_telemetry,
+            on_unhalvable=unhalvable,
+        )
+        by_order: dict[int, dict[str, object]] = {}
+        for row in collected:
+            by_order[int(row.get("order") or 0)] = row
+        outline = [by_order[order] for order in sorted(by_order) if order]
+
+    missing = [order for order in range(1, chapter_count + 1) if order not in {int(row.get("order") or 0) for row in outline}]
+    if missing:
+        reason = f"outline is missing chapters {missing[:10]} of {chapter_count}"
+        _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=reason)
+        raise BookForgeError(f"Book design {reason}")
+
+    brief = base_capsule.get("brief") if isinstance(base_capsule.get("brief"), dict) else {}
+    if str(brief.get("reader_knowledge") or "").strip():
+        parsed, telemetry, withheld_results = run(
+            {
+                **base_capsule,
+                "spine": spine_core,
+                "chapter_count": chapter_count,
+                "reveal_candidates": _reveal_candidates(outline, chapter_count),
+            },
+            {"category": "withheld"},
+        )
+        results.extend(withheld_results)
+        chunk_telemetry.append(telemetry)
+        rows = parsed.get("withheld") if isinstance(parsed, dict) else parsed
+        spine_core["withheld"] = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+    merged: dict[str, object] = dict(spine_core)
     # A snapshot, not the accumulator: `_merge_design_chunks` mutates `merged` in
     # place, so sharing it would append each slice's chapters to the spine the next
     # slice receives — and a designer handed thirty-two chapters inside the field
     # meant to hold the book's spine stops writing and tries to re-read its envelope.
     spine_snapshot = json.loads(json.dumps(merged))
-    pending = list(_book_design_chunks(len(outline)))
-    while pending:
-        chunk = pending.pop(0)
-        slice_capsule = {
+    _run_ranged_chunks(
+        _book_design_chunks(chapter_count),
+        run=run,
+        capsule_for=lambda chunk: {
             **base_capsule,
             "spine": spine_snapshot,
-            "chapter_outline": outline,
-            "written_so_far": _design_digest(merged.get("chapters", [])),
-        }
-        try:
-            parsed, telemetry, slice_results = _run_design_chunk(
-                root, task_id, claim, attempt_dir, slice_capsule, chunk, imports, runner, max_output_tokens
-            )
-        except DesignChunkTruncated as exc:
-            halves = _halve_chunk(chunk)
-            if not halves:
-                _block_task_failed_length(root, task_id, claim)
-                raise BookForgeError(f"Design {task_id} failed_length on chunk {_chunk_slug(chunk)}") from exc
-            # A truncation says the answer asked for does not fit, so ask for less
-            # rather than for the same thing again.
-            print(
-                f"[designer] {_chunk_slug(chunk)} truncated; splitting into "
-                f"{', '.join(_chunk_slug(half) for half in halves)}",
-                file=sys.stderr,
-            )
-            results.extend(exc.results)
-            pending = halves + pending
-            continue
-        results.extend(slice_results)
-        chunk_telemetry.append(telemetry)
-        merged = _merge_design_chunks(merged, _unwrap_chunk(parsed, "chapters"))
+            "chapter_outline": _order_window(outline, int(chunk["first_order"]), int(chunk["last_order"]), DESIGN_NEIGHBOURS),
+            "written_so_far": _design_digest(
+                _order_window(merged.get("chapters", []), int(chunk["first_order"]), int(chunk["last_order"]), DESIGN_NEIGHBOURS)
+            ),
+        },
+        collect=lambda parsed, chunk: _merge_design_chunks(merged, _unwrap_chunk(parsed, "chapters")),
+        results=results,
+        telemetry=chunk_telemetry,
+        on_unhalvable=unhalvable,
+    )
     return claim, merged, results, chunk_telemetry
 
 
@@ -3893,7 +4053,7 @@ def _write_book_brief(project: Path | str, book_id: str, brief: str) -> dict[str
     value = json.loads(brief)
     if not isinstance(value, dict):
         raise BookForgeError("book brief must be a JSON object")
-    allowed = {"schema", "premise", "characters", "plot", "tone", "length_notes"}
+    allowed = {"schema", "premise", "characters", "plot", "tone", "length_notes", "reader_knowledge"}
     if not allowed & set(value):
         raise BookForgeError(f"book brief must contain at least one of: {sorted(allowed)}")
     value.setdefault("schema", 1)
@@ -4344,37 +4504,80 @@ def _audit_ledger(chapters: list[object]) -> list[dict[str, object]]:
 
 
 def _book_audit_chunks(chapter_count: int) -> list[dict[str, object]]:
-    """Windows of chapters read in full, then the promises of the whole book."""
+    """Windows of chapters read in full, then the book's promises read as a fold.
+
+    The schedule pass used to be one call over every chapter's plants and reveals.
+    That call's size is the book's size: it halved its way down from forty chapters
+    to about ten, paying two or three empty calls per audit to discover at run time
+    what can be decided here. It is now a walk in fixed windows, each handed what
+    the previous one left open.
+    """
     chunks: list[dict[str, object]] = []
     for start in range(1, chapter_count + 1, BOOK_AUDIT_SLICE_SIZE):
         end = min(start + BOOK_AUDIT_SLICE_SIZE - 1, chapter_count)
         chunks.append({"category": "window", "part": f"{start}-{end}", "first_order": start, "last_order": end})
-    if chapter_count:
-        chunks.append({"category": "schedule", "part": f"1-{chapter_count}", "first_order": 1, "last_order": chapter_count})
+    for start in range(1, chapter_count + 1, SCHEDULE_WINDOW_SIZE):
+        end = min(start + SCHEDULE_WINDOW_SIZE - 1, chapter_count)
+        chunks.append({"category": "schedule", "part": f"{start}-{end}", "first_order": start, "last_order": end})
     return chunks
 
 
-def _audit_chunk_scope(scope: dict[str, object], chunk: dict[str, object]) -> dict[str, object]:
-    """The scope one audit pass reads: its own chapters, and the book around them."""
+def _audit_chunk_scope(
+    scope: dict[str, object],
+    chunk: dict[str, object],
+    open_promises: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """The scope one audit pass reads: its own chapters, and the book near them."""
     proposal = scope.get("proposal") if isinstance(scope.get("proposal"), dict) else {}
     chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
     first, last = int(chunk["first_order"]), int(chunk["last_order"])
     window = [row for row in chapters if first <= int(row.get("order") or 0) <= last]
+    rest = {key: value for key, value in proposal.items() if key != "chapters"}
     sliced = dict(scope)
     if chunk.get("category") == "schedule":
-        sliced["proposal"] = {**{k: v for k, v in proposal.items() if k != "chapters"}, "chapters": _audit_ledger(window)}
+        sliced["proposal"] = {**rest, "chapters": _audit_ledger(window)}
+        sliced["open_promises"] = list(open_promises or [])
         sliced["pass"] = {
-            "reading": "every chapter of the book, but only what each one plants and reveals",
-            "look_for": "a promise revealed before it is planted, planted twice, or answered by a fact that contradicts it",
+            "reading": f"chapters {first} to {last}, only what each one plants and reveals, against the promises still open when chapter {first - 1} ended",
+            "look_for": "a promise on the open list answered here by a fact that contradicts it, revealed here having never been planted, or planted here a second time",
+            "also_return": (
+                "open_promises: every promise still unanswered once chapter "
+                f"{last} has been read — the ones handed to you that are still open, minus any paid here, plus the ones these chapters make. "
+                "Each is {\"id\",\"chapter\",\"promise\",\"expected_in\"}, one sentence for the promise"
+            ),
         }
     else:
-        sliced["proposal"] = {**{k: v for k, v in proposal.items() if k != "chapters"}, "chapters": window}
-        sliced["book_digest"] = _audit_digest(chapters)
+        sliced["proposal"] = {**rest, "chapters": window}
+        sliced["neighbourhood_digest"] = _audit_digest(_order_window(chapters, first, last, AUDIT_NEIGHBOURS))
         sliced["pass"] = {
-            "reading": f"chapters {first} to {last} in full, against the arc and the digest of the whole book",
+            "reading": f"chapters {first} to {last} in full, against the arc and the chapters immediately around them",
             "look_for": "a contradiction inside these chapters, or one of them standing where the arc does not place it",
         }
     return sliced
+
+
+def _carry_open_promises(
+    carried: list[dict[str, object]],
+    value: dict[str, object],
+    slug: str,
+) -> list[dict[str, object]]:
+    """What this schedule window leaves open for the next one.
+
+    The auditor is asked to return the whole open set, not a delta, because a
+    delta makes the engine guess which promise a sentence refers to. If it
+    returns nothing at all the carried set is kept rather than dropped: losing
+    it silently would turn an unpaid promise into a clean book.
+    """
+    rows = value.get("open_promises")
+    if not isinstance(rows, list):
+        return carried
+    kept = [row for row in rows if isinstance(row, dict) and str(row.get("promise") or "").strip()]
+    if len(kept) > MAX_OPEN_PROMISES:
+        raise BookForgeError(
+            f"Audit pass {slug} carries {len(kept)} open promises, over the {MAX_OPEN_PROMISES} a pass may hold. "
+            "The book promises more than it pays, or the pass is restating what it was given"
+        )
+    return kept
 
 
 def _run_book_audit_chunked(
@@ -4392,7 +4595,9 @@ def _run_book_audit_chunked(
     34822 tokens, reasoning 32000, output 0, and the same at 18079 once the payload
     was cut. The same design asked ten chapters at a time answered at 10763 tokens
     with reasoning to spare. The question is not made easier by being asked again,
-    so the engine asks it in pieces.
+    so the engine asks it in pieces — and no piece is sized by the book: the window
+    passes read a neighbourhood rather than the whole digest, and the schedule pass
+    walks the book carrying its open promises forward.
     """
     proposal = scope.get("proposal") if isinstance(scope.get("proposal"), dict) else {}
     chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
@@ -4402,14 +4607,18 @@ def _run_book_audit_chunked(
     results: list[dict[str, object]] = []
     findings: list[dict[str, object]] = []
     envelope: dict[str, object] = {}
+    open_promises: list[dict[str, object]] = []
     pending = list(_book_audit_chunks(len(chapters)))
     while pending:
         chunk = pending.pop(0)
         slug = _chunk_slug(chunk)
+        required: dict[str, object] = {"findings": []}
+        if chunk.get("category") == "schedule":
+            required["open_promises"] = []
         envelope = build_envelope(
             root,
             role="canon-auditor",
-            task_capsule={"design_scope": _audit_chunk_scope(scope, chunk), "required_output": {"findings": []}},
+            task_capsule={"design_scope": _audit_chunk_scope(scope, chunk, open_promises), "required_output": required},
             imports=imports,
             state={},
             tools=[],
@@ -4436,6 +4645,8 @@ def _run_book_audit_chunked(
             continue
         try:
             rows = _validate_audit_output(_bind_audit_evidence(root, scope, value))
+            if chunk.get("category") == "schedule":
+                open_promises = _carry_open_promises(open_promises, value, slug)
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
             raise
@@ -5092,6 +5303,7 @@ def _book_design_base_capsule(
             "obligations": list(obligations.values()),
             "required_output": {
                 "premise": "string",
+                "chapter_count": "how many chapters this book has; a number, decided in the spine and fixed from then on",
                 "withheld": [
                     {
                         "id": "WH-0001",

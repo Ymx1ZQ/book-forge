@@ -2828,3 +2828,70 @@ The whole field is optional. A book that declares no `withheld` list behaves exa
 - [x] Suite green: 459 passed, 33 subtests (era 457, 30). Reinstall, commit & push
 
 **Done when:** A chapter is not sent back for writing the word "earth" about soil.
+
+## The withheld list is its own call — superseded ⛔
+
+**Status: ⛔ Superseded on 2026-08-29 by "A design call is bounded by construction, not by the book". Correct as far as it went, and too narrow: it moved the withheld list out of the spine without touching the chapter outline, which is the part whose size is the book's size.**
+
+**Correction to "A book can withhold its premise".** Putting `withheld` in the spine's required output made the spine too big to answer. Landfall's design failed three times in a row on it, and the telemetry is unambiguous: attempt one returned 15822 bytes cut off in the middle of the `withheld` block — the last thing the model was writing — and attempts two and three returned nothing at all, at `input 42241, reasoning 31999, output 0`. That is the ceiling this project has now hit four times: reasoning plus output do not pass roughly 32000 tokens, and a request large enough to be worth thinking hard about consumes the whole budget thinking.
+
+The spine already asks for the premise, the entry state, the arc, the exit boundary and a one-line row for every one of 27 chapters. It answered that on 2026-08-27 at 13298 bytes. Adding a list of withheld facts to the same answer is what pushed it over, and the spine is the one chunk that cannot be rescued: `_halve_chunk` splits a chunk by its range of chapters, the spine has no range, so a truncated spine goes straight to a blocked task.
+
+**Fix:** the same medicine as the audit and the repair. `withheld` becomes its own chunk, run after the spine and before the chapter slices. It is a small answer, and it is a better-informed one: the spine's chapter outline is in its capsule, so the designer names `revealed_in` against chapters that exist and can place the telling in the final third by counting them. The rows are then part of the spine snapshot every chapter slice receives, so the slices can plant toward the reveal.
+
+The chunk runs only when the book's brief carries a non-empty `reader_knowledge`. A book that withholds nothing pays nothing, and the author's intent is declared in one place rather than inferred.
+
+**Tasks:**
+- [ ] `reader_knowledge` joins the allowed keys of a book brief
+- [ ] `_run_book_design_chunked` runs a `{"category":"withheld"}` chunk after the spine when the brief carries `reader_knowledge`, and folds the rows into the spine snapshot the chapter slices receive
+- [ ] The spine's `required_output` drops `withheld`; the new chunk carries its own
+- [ ] `designer.md`: the third kind of book chunk, and that it is answered against the outline it is given
+- [ ] Test: a brief with `reader_knowledge` produces the extra call and the rows reach both the design and the chapter slices; a brief without it produces neither the call nor the rows
+- [ ] Test: the spine is asked for no withheld list
+- [ ] Suite green. Reinstall, commit & push
+- [ ] Re-run landfall's design
+
+**Done when:** The spine answers at the size it answered before this feature existed.
+
+## A design call is bounded by construction, not by the book 🔄
+
+**Status: 🔄 In progress — opened 2026-08-29**
+
+**Why the previous entry was replaced.** It proposed moving `withheld` out of the spine because the spine had just failed three times. That would have worked today and failed again at a longer book, because the spine's real problem is not the withheld list: the spine's answer contains one row per chapter, so its size is the book's size. Landfall has 27 chapters and that answer came to 13298 bytes on 2026-08-27. At sixty chapters it does not fit whatever else is in it.
+
+**The invariant this project has never written down and has now broken four times:** every model call in the design and audit path has an input and an output bounded by a constant, independent of how many chapters the book has. The engine decides the split — that lesson is already recorded in `_run_book_design_chunked` and was applied to the chapter slices, to the audit windows and to the repair. It was never applied to the five places below, which is why a longer book still breaks.
+
+**Where size still follows the book.**
+
+1. The spine's output carries `chapter_outline`, one row per chapter. This is what failed: a first attempt returning 15822 bytes cut off mid-sentence, then twice `input 42241, reasoning 31999, output 0`. The spine is also the one chunk with no rescue — `_halve_chunk` splits on a range of chapters and the spine carries none, so a truncated spine goes straight to a blocked task.
+2. Every chapter slice receives the whole `chapter_outline` in its capsule.
+3. Every chapter slice receives `written_so_far`, the digest of every chapter earlier slices wrote. By the last slice of a long book that is nearly the whole book.
+4. Every audit window pass receives `book_digest`, the digest of all chapters.
+5. The audit's schedule pass reads every chapter's plants and reveals in one call. It already halves its way down from forty chapters to about ten, paying two or three empty calls per audit to get there: the cost of an unbounded call discovered to be unbounded at run time.
+
+**The shape of the fix.**
+
+The spine returns only what is constant: premise, entry state, arc, exit boundary, and the number of chapters. The outline becomes its own sliced chunk, one call per range, halveable like every other ranged chunk because it carries the same two fields. `withheld` becomes a third chunk run once the outline exists, so the designer names `revealed_in` against chapters that are real and can place the telling in the final third by counting them.
+
+Everything a slice reads becomes a window rather than the whole book. A chapter slice sees the outline rows and the digest for its own range plus a fixed neighbourhood on either side, which is the rule `_repair_neighbourhood` already applies to repairs. The audit's window passes read a neighbourhood digest instead of the whole-book digest.
+
+The audit's schedule pass becomes a fold. It walks the book in fixed windows, each window handed the promises still open when the previous one ended, returning both its findings and the promises it leaves open. A plant in chapter three and its payoff in chapter forty are still checked against each other because the promise travels forward, and no single call reads more than one window. If the open set grows past a cap the engine says so rather than spending a call that will not answer.
+
+**And the part that makes it stay true.** A test builds a synthetic book of two hundred chapters and asserts that every envelope the design and audit paths construct stays under a fixed token bound. Nothing measures this today, which is why the defect was found by a design failing three times against a paid provider rather than by the suite. Alongside it, the engine measures a chunk's envelope before spending the call: over the bound it splits further instead of asking a question that cannot be answered.
+
+**Tasks:**
+- [x] `reader_knowledge` joins the allowed keys of a book brief
+- [x] Spine returns `chapter_count` and no `chapter_outline`; `required_output` follows
+- [x] `{"category":"outline","first_order":N,"last_order":M}` chunk, sliced and halveable, each slice seeing the spine and the outline rows already decided within a fixed neighbourhood
+- [x] `{"category":"withheld"}` chunk after the outline, run only when the brief carries `reader_knowledge`, folded into the spine snapshot the chapter slices receive
+- [x] Chapter slices read an outline window and a `written_so_far` window, not the whole book
+- [x] Audit window passes read a neighbourhood digest, not `book_digest`
+- [x] The audit schedule pass becomes a fold over fixed windows carrying open promises forward, with a cap and a spoken failure when the open set exceeds it
+- [x] The engine measures a chunk's envelope before the call and splits further rather than spending it
+- [x] `designer.md` and `canon-auditor.md`: the new chunks, and that each is answered against the window it is given
+- [x] Test: a 200-chapter book, every design and audit envelope under a fixed bound
+- [x] Test: a 27-chapter book still produces the same chapters, so this is a change of shape and not of content
+- [x] Suite green: 471 passed, 195 subtests (era 459, 33). Reinstall, commit & push
+- [ ] Re-run landfall's design
+
+**Done when:** The number of chapters changes how many calls a design costs, and nothing else about it.
