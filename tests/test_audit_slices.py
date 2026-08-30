@@ -78,7 +78,8 @@ class AuditProvider:
                 "evidence": [{"location": "UNI-0001#kernel"}], "repair_scope": ["BOOK-0001"],
             }]}
             if "neighbourhood_digest" not in scope:
-                answer["open_promises"] = list(scope.get("open_promises") or []) + [
+                answer["paid"] = []
+                answer["added"] = [
                     {"id": f"P-{row['order']:03d}", "chapter": row["id"], "promise": f"the key opens door {row['order']}", "expected_in": "unknown"}
                     for row in rows
                 ]
@@ -202,6 +203,61 @@ class PassScopeTests(unittest.TestCase):
         self.assertIn("design_scope.pass", prompt)
         self.assertIn("neighbourhood_digest", prompt)
         self.assertIn("open_promises", prompt)
+
+
+class TheFoldCarriesADifferenceTests(unittest.TestCase):
+    """Asking for the whole ledger back made a pass's answer grow with the book.
+    Landfall's audit died at schedule-11-11 on `input 6087, reasoning 32000,
+    output 0`, after an attempt that stopped mid-list on its eleventh promise."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.carried = [
+            {"id": "OP-0001", "chapter": "CH-0001", "promise": "the warden owes an answer"},
+            {"id": "OP-0002", "chapter": "CH-0002", "promise": "the door is owed"},
+            {"id": "OP-0003", "chapter": "CH-0003", "promise": "the grave is unnamed"},
+        ]
+
+    def test_a_pass_paying_two_and_making_one_leaves_the_set_two_shorter_and_one_longer(self):
+        kept = self.bf._carry_open_promises(self.carried, {
+            "paid": ["OP-0001", "OP-0003"],
+            "added": [{"id": "OP-0004", "chapter": "CH-0011", "promise": "the candle is owed a name"}],
+        }, "schedule-11-12")
+        self.assertEqual([row["id"] for row in kept], ["OP-0002", "OP-0004"])
+
+    def test_a_paid_id_nobody_carried_is_reported_and_the_pass_still_counts(self):
+        kept = self.bf._carry_open_promises(self.carried, {"paid": ["OP-0002", "OP-9999"], "added": []}, "schedule-11-12")
+        self.assertEqual([row["id"] for row in kept], ["OP-0001", "OP-0003"])
+
+    def test_a_pass_that_says_nothing_about_the_ledger_keeps_it(self):
+        self.assertEqual(self.bf._carry_open_promises(self.carried, {"findings": []}, "schedule-1-2"), self.carried)
+
+    def test_the_answer_of_a_late_window_is_no_larger_than_that_of_an_early_one(self):
+        """The whole point: what a pass writes is the size of what it changed."""
+        early = {"paid": ["OP-0001"], "added": [{"id": "OP-0004", "chapter": "CH-0003", "promise": "one more"}]}
+        carried = list(self.carried)
+        for _ in range(20):
+            carried = self.bf._carry_open_promises(carried, {"paid": [], "added": [
+                {"id": f"OP-{n:04d}", "chapter": "CH-0011", "promise": "another"} for n in range(100, 102)
+            ]}, "schedule-x")
+        late = {"paid": ["OP-0100"], "added": [{"id": "OP-0500", "chapter": "CH-0020", "promise": "one more"}]}
+        self.assertLess(
+            abs(len(json.dumps(late)) - len(json.dumps(early))), 40,
+            "a pass in the middle of the book writes about as much as a pass at its start",
+        )
+        self.assertGreater(len(carried), 20, "the engine, not the pass, is the one holding the ledger")
+
+    def test_an_overlong_ledger_is_trimmed_rather_than_ending_the_audit(self):
+        carried = [{"id": f"OP-{n:04d}", "chapter": "CH-0001", "promise": "owed"} for n in range(self.bf.MAX_OPEN_PROMISES + 10)]
+        kept = self.bf._carry_open_promises(carried, {"paid": [], "added": []}, "schedule-x")
+        self.assertEqual(len(kept), self.bf.MAX_OPEN_PROMISES)
+        self.assertEqual(kept[-1]["id"], carried[-1]["id"], "the most recent promises are the ones kept")
+
+    def test_the_prompt_asks_for_the_difference(self):
+        prompt = (PROMPTS / "canon-auditor.md").read_text()
+        self.assertIn("`paid`", prompt)
+        self.assertIn("`added`", prompt)
+        self.assertIn("never the ledger it was handed", prompt)
 
 
 class PromiseEvidenceTests(unittest.TestCase):

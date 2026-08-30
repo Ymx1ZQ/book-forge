@@ -4781,9 +4781,9 @@ def _audit_chunk_scope(
             "reading": f"chapters {first} to {last}, only what each one plants and reveals, against the promises still open when chapter {first - 1} ended",
             "look_for": "a promise on the open list answered here by a fact that contradicts it, revealed here having never been planted, or planted here a second time",
             "also_return": (
-                "open_promises: every promise still unanswered once chapter "
-                f"{last} has been read — the ones handed to you that are still open, minus any paid here, plus the ones these chapters make. "
-                "Each is {\"id\",\"chapter\",\"promise\",\"expected_in\"}, one sentence for the promise"
+                "paid: the ids from open_promises that these chapters answer, as a list of id strings and nothing else. "
+                "added: the promises these chapters make, each {\"id\",\"chapter\",\"promise\",\"expected_in\"} with one sentence for the promise. "
+                "Return only what changed here — never the whole ledger back"
             ),
         }
     else:
@@ -4803,20 +4803,45 @@ def _carry_open_promises(
 ) -> list[dict[str, object]]:
     """What this schedule window leaves open for the next one.
 
-    The auditor is asked to return the whole open set, not a delta, because a
-    delta makes the engine guess which promise a sentence refers to. If it
-    returns nothing at all the carried set is kept rather than dropped: losing
-    it silently would turn an unpaid promise into a clean book.
+    The pass returns the difference — the ids it saw answered and the promises
+    these chapters make — and the engine applies it. It used to be asked for the
+    whole open set on the grounds that a difference would make the engine guess
+    which promise a sentence meant. Promises carry ids, so it guesses nothing;
+    and the whole set made the answer grow with the book, which is what killed
+    landfall's audit at `schedule-11-11`: input 6087 tokens, reasoning 32000,
+    output nothing, after an attempt that stopped mid-list on its eleventh
+    promise. A window's answer is now the size of what that window changed.
+
+    A pass that returns neither key keeps the carried set rather than dropping
+    it: losing it silently would turn an unpaid promise into a clean book.
     """
-    rows = value.get("open_promises")
-    if not isinstance(rows, list):
-        return carried
-    kept = [row for row in rows if isinstance(row, dict) and str(row.get("promise") or "").strip()]
-    if len(kept) > MAX_OPEN_PROMISES:
-        raise BookForgeError(
-            f"Audit pass {slug} carries {len(kept)} open promises, over the {MAX_OPEN_PROMISES} a pass may hold. "
-            "The book promises more than it pays, or the pass is restating what it was given"
+    paid = value.get("paid")
+    added = value.get("added")
+    if not isinstance(paid, list) and not isinstance(added, list):
+        # An older shape, or a pass that said nothing about the ledger.
+        rows = value.get("open_promises")
+        if not isinstance(rows, list):
+            return carried
+        return [row for row in rows if isinstance(row, dict) and str(row.get("promise") or "").strip()][:MAX_OPEN_PROMISES]
+    settled = {str(row) for row in paid if str(row).strip()} if isinstance(paid, list) else set()
+    unplaceable = sorted(settled - {str(row.get("id")) for row in carried if isinstance(row, dict)})
+    if unplaceable:
+        # A mistyped id costs that promise's bookkeeping, never the audit.
+        print(
+            f"[canon-auditor] {slug} reports paying {', '.join(unplaceable)}, which nothing carried; ignored",
+            file=sys.stderr,
         )
+    kept = [row for row in carried if isinstance(row, dict) and str(row.get("id")) not in settled]
+    for row in added if isinstance(added, list) else []:
+        if isinstance(row, dict) and str(row.get("promise") or "").strip():
+            kept.append(row)
+    if len(kept) > MAX_OPEN_PROMISES:
+        print(
+            f"[canon-auditor] {slug} leaves {len(kept)} promises open, over the {MAX_OPEN_PROMISES} a pass may hold; "
+            "carrying the most recent",
+            file=sys.stderr,
+        )
+        kept = kept[-MAX_OPEN_PROMISES:]
     return kept
 
 
@@ -4855,7 +4880,8 @@ def _run_book_audit_chunked(
         slug = _chunk_slug(chunk)
         required: dict[str, object] = {"findings": []}
         if chunk.get("category") == "schedule":
-            required["open_promises"] = []
+            required["paid"] = []
+            required["added"] = []
         sliced_scope = _audit_chunk_scope(scope, chunk, open_promises)
         envelope = build_envelope(
             root,

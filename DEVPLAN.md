@@ -3115,3 +3115,31 @@ The safety property is unchanged — no blocking finding stands on evidence that
 So the audit finishes, writes its verdict on every pass that did resolve, and then halts: the record's state is `needs_review`, and `AdvanceHalted` stops the driver rather than sending it round the retry loop, because asking the same auditor the same question returns the same citation. And only a clean verdict now counts as a finished job — a record that needs review reopens the audit on the next `advance`, on both the book and the universe path, instead of being returned as if it were done.
 
 **Done when:** An auditor's typo costs its own finding and a person's attention, not thirty paid calls.
+
+## The fold's answer must not grow with the book either 🔄
+
+**Status: 🔄 In progress — opened 2026-08-30**
+
+**Correction to the schedule fold, and to the invariant I wrote the same day.** The fold asks each pass to return the whole set of promises still open. So the size of the answer grows with how much the book has promised: by chapter eleven the pass must restate thirty or forty promises verbatim before it reaches anything of its own. Landfall's audit died there — `schedule-11-11`, three attempts, then the reduced pass, then blocked.
+
+The telemetry leaves no room for another reading: `input 6087, output 0, reasoning 32000, reason length`. Six thousand tokens of input. It is not the context. The attempt before it wrote 2339 bytes and stopped mid-list, enumerating `OP-0001` through `OP-0011` one at a time.
+
+"A design call is bounded by construction" promised an input **and an output** bounded by a constant. The fold was written the same day and breaks it on the output side.
+
+**And the reasoning that led there was wrong.** The prompt says: return the whole set every time and not the difference, because a difference makes the engine guess which promise a sentence refers to. Promises carry ids. A difference applies by exact match on an id, which is not a guess — it is the only part of this that never was one.
+
+**Fix.** A schedule pass returns `paid` — the ids it saw answered — and `added` — the promises these chapters make. The engine reconstructs the open set: carried, minus paid, plus added. The answer is then the size of what one window changes, two or three rows, whatever the book's length. The full set still travels inward, where there is room.
+
+A paid id that matches nothing carried is reported and ignored rather than failing the pass: the auditor mistyping an id must cost that promise's bookkeeping, not the audit — the same lesson as the citations.
+
+**Tasks:**
+- [x] The schedule pass's `required_output` is `findings`, `paid`, `added`
+- [x] `_carry_open_promises` applies the difference by id and reports an id it cannot place
+- [x] `canon-auditor.md`: return what was paid and what was made, never the whole ledger
+- [x] Test: a pass paying two and making one leaves the set two shorter and one longer
+- [x] Test: a paid id nobody carried is reported, and the pass still counts
+- [x] Test: the answer of the twentieth window is no larger than the answer of the second
+- [x] Suite green: 521 passed, 341 subtests (era 515). Reinstall, commit & push
+- [ ] Re-run landfall's audit
+
+**Done when:** A pass in the middle of a long book answers as briefly as a pass at its start.
