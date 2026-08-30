@@ -3449,7 +3449,13 @@ def _cached_call(root: Path, task_id: str, envelope: dict[str, object]) -> dict[
     return {**result, "cost": 0.0, "cached": True}
 
 
-def _remember_call(root: Path, task_id: str, envelope: dict[str, object], result: dict[str, object]) -> None:
+def _remember_call(
+    root: Path,
+    task_id: str,
+    envelope: dict[str, object],
+    result: dict[str, object],
+    chunk: dict[str, object] | None = None,
+) -> None:
     """Remember an answer that was accepted, and only that.
 
     A truncation or an empty body must stay a failure: remembering one would
@@ -3463,6 +3469,9 @@ def _remember_call(root: Path, task_id: str, envelope: dict[str, object], result
         "schema": 1,
         "hash": str(envelope["hash"]),
         "role": str(envelope.get("role", "")),
+        # Which pass this was, so a repair can forget the passes it moved rather
+        # than every pass the audit ever made.
+        "chunk": {key: chunk.get(key) for key in ("category", "first_order", "last_order")} if isinstance(chunk, dict) else None,
         "remembered_at": time.time(),
         "result": {key: value for key, value in result.items() if key != "cached"},
     })
@@ -3532,24 +3541,49 @@ def backfill_call_cache(project: Path | str, *, run: str | None = None) -> dict[
     return {"remembered": remembered, "skipped": skipped, "runs": run_ids}
 
 
-def _forget_task_calls(root: Path, task_id: str) -> int:
+def _forget_task_calls(root: Path, task_id: str, *, touching: list[int] | None = None) -> int:
     """Forget what a task was told, because what it will be asked has changed.
 
     The audit's passes are remembered so that a hung call or a kill costs the call
     and not the run. That is only sound while the proposal stands still: a repair
     rewrites chapters, and the auditor is never shown a chapter's beats, so its
     question can come out byte-identical and a remembered verdict would be handed
-    straight back — the repair loop would spin without making a call. So the repair
-    forgets first, and then genuinely asks again.
+    straight back — the repair loop would spin without making a call.
+
+    `touching` names the chapter orders a repair rewrote, and then only the passes
+    those orders can reach are forgotten: a window whose range, widened by the
+    neighbourhood it reads, contains one of them, and every fold from the earliest
+    of them onward, because a fold carries its promises forward. A window on
+    chapters twenty-one and twenty-two asks a question a change at chapter eight
+    cannot reach. Without `touching`, everything goes — forgetting the whole audit
+    is still what an audit-wide change deserves.
     """
     directory = root / ".book-forge" / "call-cache" / str(task_id)
     if not directory.is_dir():
         return 0
+    changed = sorted(int(order) for order in (touching or []))
     forgotten = 0
     for entry in directory.glob("*.json"):
+        if changed and not _pass_is_reached_by(entry, changed):
+            continue
         entry.unlink()
         forgotten += 1
     return forgotten
+
+
+def _pass_is_reached_by(entry: Path, changed: list[int]) -> bool:
+    """Whether a remembered pass would answer differently now."""
+    try:
+        chunk = _read_json(entry).get("chunk")
+    except (OSError, ValueError):
+        return True
+    if not isinstance(chunk, dict) or chunk.get("first_order") is None or chunk.get("last_order") is None:
+        # Recorded before this was tracked, so it cannot be judged and goes.
+        return True
+    first, last = int(chunk["first_order"]), int(chunk["last_order"])
+    if str(chunk.get("category")) == "schedule":
+        return last >= changed[0]
+    return any(first - AUDIT_NEIGHBOURS <= order <= last + AUDIT_NEIGHBOURS for order in changed)
 
 
 def _caching_runner(root: Path, task_id: str, runner):
@@ -5002,7 +5036,7 @@ def _run_book_audit_chunked(
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
             raise
-        _remember_call(root, task_id, envelope, result)
+        _remember_call(root, task_id, envelope, result, chunk)
         for row in bound.get("unverifiable", []):
             row["id"] = f"A-{slug}-{row.get('id', '000')}"
             row["pass"] = slug
@@ -6125,9 +6159,18 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         # task is genuinely due again — and what it was told is stale with it, or the
         # remembered verdict would answer a question the repair has just moved.
         _reopen_task(root, f"AUDIT-{book_id}")
-        forgotten = _forget_task_calls(root, f"AUDIT-{book_id}")
+        touched = sorted(
+            int(row.get("order") or 0)
+            for row in proposal.get("chapters", [])
+            if str(row.get("id")) in rewritten
+        )
+        forgotten = _forget_task_calls(root, f"AUDIT-{book_id}", touching=touched)
         if forgotten:
-            print(f"[designer] repair round {round_number}: forgot {forgotten} remembered audit passes", file=sys.stderr)
+            print(
+                f"[designer] repair round {round_number}: forgot {forgotten} audit passes that chapters "
+                f"{', '.join(str(order) for order in touched)} can reach",
+                file=sys.stderr,
+            )
         audit = _design_audit_record(
             root,
             f"AUDIT-{book_id}",

@@ -319,5 +319,57 @@ class TheAuditRemembersTests(CacheFixture):
         self.assertEqual(self.bf._forget_task_calls(self.project, "AUDIT-NOTHING"), 0)
 
 
+class ARepairForgetsWhatItMovedTests(CacheFixture):
+    """Forgetting every pass made a repair round cost a three-hour re-audit. A
+    window on chapters twenty-one and twenty-two asks a question a change at
+    chapter eight cannot reach."""
+
+    def remember(self, task, digest, chunk):
+        self.bf._remember_call(
+            self.project, task, {"hash": digest, "role": "canon-auditor"},
+            {"text": '{"findings":[]}', "finish": "stop"}, chunk,
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.task = "AUDIT-BOOK-0001"
+        self.remember(self.task, "w-1-2", {"category": "window", "first_order": 1, "last_order": 2})
+        self.remember(self.task, "w-7-8", {"category": "window", "first_order": 7, "last_order": 8})
+        self.remember(self.task, "w-21-22", {"category": "window", "first_order": 21, "last_order": 22})
+        self.remember(self.task, "s-1-8", {"category": "schedule", "first_order": 1, "last_order": 8})
+        self.remember(self.task, "s-17-24", {"category": "schedule", "first_order": 17, "last_order": 24})
+
+    def still_remembered(self):
+        return {
+            self.bf._read_json(path)["hash"]
+            for path in (self.project / ".book-forge" / "call-cache" / self.task).glob("*.json")
+        }
+
+    def test_repairing_chapter_eight_keeps_the_far_window_and_drops_the_folds_after_it(self):
+        self.bf._forget_task_calls(self.project, self.task, touching=[8])
+        kept = self.still_remembered()
+        self.assertIn("w-21-22", kept, "a window twelve chapters away is untouched")
+        self.assertNotIn("w-7-8", kept, "the window holding the repaired chapter goes")
+        self.assertNotIn("s-1-8", kept, "a fold covering it goes")
+        self.assertNotIn("s-17-24", kept, "every fold after it goes, because promises travel forward")
+
+    def test_a_window_within_the_neighbourhood_is_forgotten_too(self):
+        self.bf._forget_task_calls(self.project, self.task, touching=[5])
+        self.assertNotIn("w-7-8", self.still_remembered(), "the neighbourhood it reads has moved")
+
+    def test_a_fold_before_the_change_survives(self):
+        self.bf._forget_task_calls(self.project, self.task, touching=[20])
+        self.assertIn("s-1-8", self.still_remembered())
+
+    def test_forgetting_with_no_orders_still_forgets_everything(self):
+        self.bf._forget_task_calls(self.project, self.task)
+        self.assertEqual(self.still_remembered(), set())
+
+    def test_an_entry_recorded_before_this_cannot_be_judged_and_goes(self):
+        self.remember(self.task, "old", None)
+        self.bf._forget_task_calls(self.project, self.task, touching=[26])
+        self.assertNotIn("old", self.still_remembered())
+
+
 if __name__ == "__main__":
     unittest.main()

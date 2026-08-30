@@ -3242,3 +3242,28 @@ Earlier today the same shape arrived as evidence that would not resolve, and aga
 - [ ] Re-audit landfall
 
 **Done when:** No single row a model writes can cost more than itself.
+
+## A repair forgets the passes it moved, not the whole audit ✅
+
+**Status: ✅ Done — 2026-08-30**
+
+**Too blunt, by my own hand this morning.** When a repair changes the proposal the engine forgets every remembered audit pass, so the re-audit runs all thirty from the first window: two and a half to three hours per repair round, and landfall has two rounds available.
+
+The reason for forgetting is sound and narrow: a remembered verdict would answer a question the repair has moved. But a repair touches four chapters. A window on chapters twenty-one and twenty-two asks a question a change at chapter eight cannot reach — its scope is its own chapters and the digest of its neighbours, and neither has moved.
+
+**What a repair actually invalidates.** A window pass whose range, widened by `AUDIT_NEIGHBOURS`, contains a repaired chapter. And every schedule fold from the earliest repaired chapter onward, because a fold carries its open promises forward: change what chapter eight promises and every fold after it is answering with a different ledger. Nothing else.
+
+**Fix.** A remembered call records which chunk produced it. `_forget_task_calls` takes the orders that changed and forgets only the passes those orders can reach; an entry from before this, with no chunk recorded, is forgotten because it cannot be judged.
+
+**Tasks:**
+- [x] A remembered call records its chunk: the category and the range it covered
+- [x] `_forget_task_calls` takes the changed orders and forgets only what they reach
+- [x] A window is forgotten when its range widened by the neighbourhood contains a changed chapter
+- [x] Every fold from the earliest changed chapter onward is forgotten
+- [x] An entry with no chunk recorded is forgotten, since it cannot be judged
+- [x] The repair passes the orders it rewrote
+- [x] Test: repairing chapter eight forgets the folds after it and the windows around it, and keeps a window at chapter twenty-two
+- [x] Test: forgetting with no orders given still forgets everything, as the audit-wide call does
+- [x] Suite green: 542 passed, 346 subtests (era 537). Reinstall, commit & push
+
+**Done when:** A repair round costs a re-audit of what it changed.
