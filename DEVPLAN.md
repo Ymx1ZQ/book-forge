@@ -3166,3 +3166,28 @@ But that reason only bites **when the design has changed**. Between a hung call 
 - [ ] Re-run landfall's audit
 
 **Done when:** A hung call costs a call.
+
+## A window in the middle of the book is not bound by its opening 🔄
+
+**Status: 🔄 In progress — opened 2026-08-30**
+
+**Landfall's first completed audit blocked on four findings, and three of them are the engine's fault.** `_audit_chunk_scope` gives every pass the proposal minus its chapters — which carries `entry_state` and `exit_boundary` — and the prompt never says what those are. So a window reading chapters nine and ten was handed the book's opening state and read it as its own: *"the entry state the window opens from states that the Lost Candle is still cold in the Counting nave and that Binta does not yet know the Heart exists"*, against chapters where the company is already on the road carrying both. That is not a contradiction. That is the book proceeding.
+
+The same reading produced the finding against chapter nineteen — *"the entry_state places Binta before her first sighting, so no trial record exists"* — and the schedule pass on chapter ten. Only the fourth finding, that chapter nineteen executes the relay severance the arc places at twenty-three, stands on its own, and even it leans part of its argument on the same mistake.
+
+**This is a defect of the slicing, and the slicing is mine.** As one call over the whole book the entry state legitimately bound chapter one and the auditor could see that chapters two onward had moved past it. Sliced, a window at chapter ten sees an opening with no way to know it is an opening.
+
+**Fix.** `entry_state` travels only to the pass whose range contains the first chapter, `exit_boundary` only to the pass whose range contains the last. A pass in the middle is given neither, because neither bounds it. And the prompt says what they are where they do appear: the state the book begins in, and the state it is meant to reach — not the edges of this window.
+
+**Tasks:**
+- [x] `_audit_chunk_scope` sends `entry_state` only to the pass covering chapter one and `exit_boundary` only to the pass covering the last chapter
+- [x] `canon-auditor.md` says what each is, and that a window between them is bounded by neither
+- [x] Test: a middle window's scope carries neither; the first carries the entry state; the last carries the exit boundary
+- [x] Test: a book short enough to fit one window carries both
+- [x] Test: the schedule fold follows the same rule
+- [x] Suite green: 529 passed, 341 subtests (era 525). Reinstall, commit & push
+- [ ] Re-audit landfall and read the findings that survive
+
+**Measured while fixing it.** The canon-auditor's role prompt is now 1951 tokens, and it rides in every audit call — thirty-odd of them per book. It has grown through today's corrections, each of which earned its line, and a budget test that had been sized with headroom now sits 51 tokens over. Nobody is measuring that growth; the same "measure, don't guess" that applies to slice widths applies to what every call is made to carry.
+
+**Done when:** No pass is asked to reconcile a chapter with a state the book has already left.

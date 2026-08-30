@@ -188,6 +188,41 @@ class PassScopeTests(unittest.TestCase):
         self.assertNotIn("neighbourhood_digest", sliced)
         self.assertIn("also_return", sliced["pass"])
 
+    def test_only_the_edges_of_the_book_carry_its_edges(self):
+        """A window on chapters nine and ten reported that the Candle was still in
+        the Counting nave and Binta did not yet know the Heart existed — the book's
+        first page, quoted against its tenth chapter as a contradiction."""
+        scope = {**self.scope, "proposal": {**self.scope["proposal"], "entry_state": {"a": 1}, "exit_boundary": {"z": 1}}}
+        first = self.bf._audit_chunk_scope(scope, {"category": "window", "part": "1-2", "first_order": 1, "last_order": 2})
+        middle = self.bf._audit_chunk_scope(scope, {"category": "window", "part": "11-12", "first_order": 11, "last_order": 12})
+        last = self.bf._audit_chunk_scope(scope, {"category": "window", "part": "39-40", "first_order": 39, "last_order": 40})
+        self.assertIn("entry_state", first["proposal"])
+        self.assertNotIn("exit_boundary", first["proposal"])
+        self.assertNotIn("entry_state", middle["proposal"])
+        self.assertNotIn("exit_boundary", middle["proposal"])
+        self.assertIn("exit_boundary", last["proposal"])
+        self.assertNotIn("entry_state", last["proposal"])
+
+    def test_a_book_that_fits_one_window_carries_both(self):
+        short = {"scope": "book", "book": "BOOK-0001", "proposal": {
+            "premise": "p", "arc": ["a"], "entry_state": {"a": 1}, "exit_boundary": {"z": 1},
+            "chapters": [chapter(1), chapter(2)],
+        }}
+        sliced = self.bf._audit_chunk_scope(short, {"category": "window", "part": "1-2", "first_order": 1, "last_order": 2})
+        self.assertIn("entry_state", sliced["proposal"])
+        self.assertIn("exit_boundary", sliced["proposal"])
+
+    def test_the_schedule_fold_follows_the_same_rule(self):
+        scope = {**self.scope, "proposal": {**self.scope["proposal"], "entry_state": {"a": 1}, "exit_boundary": {"z": 1}}}
+        middle = self.bf._audit_chunk_scope(scope, {"category": "schedule", "part": "9-16", "first_order": 9, "last_order": 16}, [])
+        opening = self.bf._audit_chunk_scope(scope, {"category": "schedule", "part": "1-8", "first_order": 1, "last_order": 8}, [])
+        self.assertNotIn("entry_state", middle["proposal"])
+        self.assertIn("entry_state", opening["proposal"])
+
+    def test_the_prompt_says_what_the_edges_are(self):
+        prompt = (PROMPTS / "canon-auditor.md").read_text()
+        self.assertIn("bounded by neither", prompt)
+
     def test_the_spine_travels_with_every_pass(self):
         for chunk in self.bf._book_audit_chunks(40):
             sliced = self.bf._audit_chunk_scope(self.scope, chunk)

@@ -111,9 +111,12 @@ class AuditBudgetTests(unittest.TestCase):
         self.assertEqual(self.bf._envelope_input_budget(self.project, "canon-auditor"), 20000)
         # 19.8k capsule with 20000 budget should pass (if we pick 18000-20000)
         # Try small size that fits 20000 but exceeds old 16k conceptually
-        # Use 30000 size which yields ~18257 -> should pass with 20000
+        # Sized to leave room for the role prompt, which is part of the envelope and
+        # has grown: the auditor's is 1951 tokens, and at 30000 this fixture came to
+        # 20051 against a 20000 budget — the knob still worked, the fixture had just
+        # stopped fitting.
         try:
-            env = self._estimate_for_size(30000)
+            env = self._estimate_for_size(24000)
             self.assertEqual(env["input_budget"], 20000)
             self.assertLessEqual(env["estimated_input_tokens"], 20000)
         except self.bf.ContextOverflowError:

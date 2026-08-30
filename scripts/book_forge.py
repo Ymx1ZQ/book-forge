@@ -4792,7 +4792,23 @@ def _audit_chunk_scope(
     chapters = [row for row in proposal.get("chapters", []) if isinstance(row, dict)]
     first, last = int(chunk["first_order"]), int(chunk["last_order"])
     window = [row for row in chapters if first <= int(row.get("order") or 0) <= last]
-    rest = {key: value for key, value in proposal.items() if key != "chapters"}
+    # The book's opening and its intended end bound the chapters at the book's
+    # edges, and nothing else. Handed to a pass in the middle they read as its own
+    # boundaries: a window on chapters nine and ten reported that the Candle was
+    # "still cold in the Counting nave" and that Binta "does not yet know the Heart
+    # exists" — the book's first page, quoted against its tenth chapter as a
+    # contradiction. Three of landfall's four blocking findings were that mistake.
+    orders = [int(row.get("order") or 0) for row in chapters] or [0]
+    edges = set()
+    if first <= min(orders) <= last:
+        edges.add("entry_state")
+    if first <= max(orders) <= last:
+        edges.add("exit_boundary")
+    rest = {
+        key: value
+        for key, value in proposal.items()
+        if key != "chapters" and (key not in {"entry_state", "exit_boundary"} or key in edges)
+    }
     sliced = dict(scope)
     if chunk.get("category") == "schedule":
         sliced["proposal"] = {**rest, "chapters": _audit_ledger(window)}
