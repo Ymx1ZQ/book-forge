@@ -3532,6 +3532,26 @@ def backfill_call_cache(project: Path | str, *, run: str | None = None) -> dict[
     return {"remembered": remembered, "skipped": skipped, "runs": run_ids}
 
 
+def _forget_task_calls(root: Path, task_id: str) -> int:
+    """Forget what a task was told, because what it will be asked has changed.
+
+    The audit's passes are remembered so that a hung call or a kill costs the call
+    and not the run. That is only sound while the proposal stands still: a repair
+    rewrites chapters, and the auditor is never shown a chapter's beats, so its
+    question can come out byte-identical and a remembered verdict would be handed
+    straight back — the repair loop would spin without making a call. So the repair
+    forgets first, and then genuinely asks again.
+    """
+    directory = root / ".book-forge" / "call-cache" / str(task_id)
+    if not directory.is_dir():
+        return 0
+    forgotten = 0
+    for entry in directory.glob("*.json"):
+        entry.unlink()
+        forgotten += 1
+    return forgotten
+
+
 def _caching_runner(root: Path, task_id: str, runner):
     """A runner that answers from the cache, and remembers what parses.
 
@@ -4893,13 +4913,18 @@ def _run_book_audit_chunked(
             max_output_tokens=max_output_tokens,
         )
         _write_bytes_atomic(attempt_dir / f"envelope-{slug}.json", envelope["bytes"])
-        # Deliberately not cached. The auditor is never shown a chapter's beats, so
-        # a repair that rewrites only beats leaves its question byte-identical and a
-        # remembered verdict would be served back unchanged, looping the repair to
-        # exhaustion without a single call. And an audit is a judgment rather than a
-        # content: remembering one would make a spurious blocking finding permanent,
-        # with no retry able to overturn it.
-        result = runner("canon-auditor", envelope, attempt_dir)
+        # Remembered, because five audits of this book died five different ways and
+        # every retry re-ran all of it: roughly eight hours of provider time for a
+        # verdict that never landed. Between a hung call and its retry the proposal
+        # is identical, so replaying a paid answer is the same verdict to the same
+        # question. What makes that sound is that a repair forgets first — see
+        # `_forget_task_calls` — since a repair is the one moment the question moves
+        # while the auditor's view of it does not.
+        result = _cached_call(root, task_id, envelope)
+        if result is not None:
+            print(f"[canon-auditor] {slug} answered from a call this project already paid for", file=sys.stderr)
+        else:
+            result = runner("canon-auditor", envelope, attempt_dir)
         results.append(result)
         mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
         _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
@@ -4961,6 +4986,7 @@ def _run_book_audit_chunked(
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
             raise
+        _remember_call(root, task_id, envelope, result)
         for row in bound.get("unverifiable", []):
             row["id"] = f"A-{slug}-{row.get('id', '000')}"
             row["pass"] = slug
@@ -6053,8 +6079,12 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
             raise BookForgeError(f"Repaired design has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
         _write_book_design_outputs(root, book_id, proposal)
         # The proposal changed, so the audit that judged the old one is stale and the
-        # task is genuinely due again.
+        # task is genuinely due again — and what it was told is stale with it, or the
+        # remembered verdict would answer a question the repair has just moved.
         _reopen_task(root, f"AUDIT-{book_id}")
+        forgotten = _forget_task_calls(root, f"AUDIT-{book_id}")
+        if forgotten:
+            print(f"[designer] repair round {round_number}: forgot {forgotten} remembered audit passes", file=sys.stderr)
         audit = _design_audit_record(
             root,
             f"AUDIT-{book_id}",

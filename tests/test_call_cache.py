@@ -281,5 +281,43 @@ class TheAnswerWorthKeepingTests(CacheFixture):
         self.assertTrue(any("(1 accepted)" in row for row in report["remembered"]))
 
 
+class TheAuditRemembersTests(CacheFixture):
+    """Five audits of one book died five different ways, and every retry re-ran all
+    of it: roughly eight hours of provider time for a verdict that never landed."""
+
+    def audit_calls(self, provider):
+        return [slug for slug in provider.calls if slug == "canon-auditor"]
+
+    def test_an_audit_interrupted_halfway_asks_only_for_what_is_missing(self):
+        first = CountingProvider(self.bf)
+        self.design(first)
+        self.assertTrue(self.audit_calls(first))
+        self.reopen()
+        second = CountingProvider(self.bf)
+        self.design(second)
+        self.assertEqual(self.audit_calls(second), [], "a paid pass is not paid again")
+
+    def test_forgetting_a_task_makes_it_ask_again(self):
+        first = CountingProvider(self.bf)
+        self.design(first)
+        forgotten = self.bf._forget_task_calls(self.project, f"AUDIT-{self.book}")
+        self.assertGreater(forgotten, 0)
+        self.reopen()
+        second = CountingProvider(self.bf)
+        self.design(second)
+        self.assertTrue(self.audit_calls(second), "a forgotten pass is asked again")
+
+    def test_forgetting_one_task_leaves_the_other_alone(self):
+        self.design(CountingProvider(self.bf))
+        self.bf._forget_task_calls(self.project, f"AUDIT-{self.book}")
+        self.reopen()
+        second = CountingProvider(self.bf)
+        self.design(second)
+        self.assertEqual(second.designer_calls(), [], "the design's own passes are untouched")
+
+    def test_forgetting_a_task_nobody_remembered_is_harmless(self):
+        self.assertEqual(self.bf._forget_task_calls(self.project, "AUDIT-NOTHING"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

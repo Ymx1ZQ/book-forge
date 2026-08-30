@@ -3143,3 +3143,26 @@ A paid id that matches nothing carried is reported and ignored rather than faili
 - [ ] Re-run landfall's audit
 
 **Done when:** A pass in the middle of a long book answers as briefly as a pass at its start.
+
+## The audit remembers too, and forgets when the design changes 🔄
+
+**Status: 🔄 In progress — opened 2026-08-30**
+
+**Reversing a decision made yesterday, for a reason that turned out to be narrower than the rule I drew from it.** The audit was deliberately kept out of the call cache. The reason was real: the auditor is never shown a chapter's beats, so a repair that rewrites only beats leaves its question byte-identical, and a remembered verdict would come straight back — the repair loop ran to exhaustion without making a single call, and the suite caught it.
+
+But that reason only bites **when the design has changed**. Between a hung call and its retry the proposal is identical byte for byte, and replaying the answers already paid for is not a stale verdict: it is the same verdict to the same question.
+
+**What it has cost.** Landfall's audit has now been run five times. Each died differently — a window that could not be halved, a promise id the engine had handed out, a mistyped block prefix, a fold answer that grew with the book, and finally a call that hung for 900 seconds — and each fix let the next run get further, the last reaching twenty-eight passes and eleven folds. But every retry re-ran the whole audit from the first window, because nothing was remembered. Roughly eight hours of provider time to get one verdict that still has not landed.
+
+**Fix.** The audit's passes read and write the call cache like the design's chunks do. And `_repair_blocked_design` clears the audit cache for that book before it re-audits a proposal it has changed, which is the one moment the old objection applies. A crash, a timeout or a kill then costs the call that was in flight; a repair costs a real re-audit.
+
+**Tasks:**
+- [x] The audit passes read and write the call cache
+- [x] A repair that changes the proposal clears that book's audit cache before re-auditing
+- [x] Test: an audit interrupted halfway resumes and calls only for what is missing
+- [x] Test: a repair round re-asks rather than replaying the verdict it just failed on — `test_design_repair` proves it by passing at all: its fixture answers blocking then clean, so a replayed verdict would leave the design blocked
+- [x] Test: the repair loop still terminates when the auditor keeps blocking
+- [x] Suite green: 525 passed, 341 subtests (era 521). Reinstall, commit & push
+- [ ] Re-run landfall's audit
+
+**Done when:** A hung call costs a call.
