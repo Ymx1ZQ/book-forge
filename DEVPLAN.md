@@ -3191,3 +3191,24 @@ The same reading produced the finding against chapter nineteen — *"the entry_s
 **Measured while fixing it.** The canon-auditor's role prompt is now 1951 tokens, and it rides in every audit call — thirty-odd of them per book. It has grown through today's corrections, each of which earned its line, and a budget test that had been sized with headroom now sits 51 tokens over. Nobody is measuring that growth; the same "measure, don't guess" that applies to slice widths applies to what every call is made to carry.
 
 **Done when:** No pass is asked to reconcile a chapter with a state the book has already left.
+
+## A verdict is stale when the question that produced it changed 🔄
+
+**Status: 🔄 In progress — opened 2026-08-30**
+
+**Found immediately after fixing the window scoping.** A design whose audit already blocked skips the audit and repairs against the verdict on disk — deliberately, because rediscovering a known list costs thirty calls. But landfall's stored verdict was built by an auditor that had just been corrected: three of its four findings came from a pass reading the book's opening as its own boundary, and the fix changed both the scope and the prompt. The engine went to repair against them anyway, because a record on disk has no memory of what produced it.
+
+The call cache already solves this shape for calls: an answer is keyed by the hash of the envelope that produced it, so a changed prompt or a changed capsule simply misses. A verdict has no such key.
+
+**Fix.** The audit record carries the hash of the auditor prompt it was produced under. The resume path repairs against a stored verdict only when that hash still matches what the engine would ask today; otherwise the verdict is stale and the audit runs again. A prompt correction then invalidates its own conclusions instead of having them repaired against.
+
+**Tasks:**
+- [x] The audit record stores the hash of the canon-auditor prompt it was produced under
+- [x] The resume path re-audits rather than repairing when that hash no longer matches
+- [x] A record with no hash — every one written before this — counts as stale
+- [x] Test: a stored blocking verdict is repaired against when the prompt is unchanged
+- [x] Test: the same verdict is re-audited once the prompt changes
+- [x] Suite green: 533 passed, 341 subtests (era 529). Reinstall, commit & push
+- [ ] Re-audit landfall
+
+**Done when:** Correcting the auditor cannot leave its old conclusions standing.

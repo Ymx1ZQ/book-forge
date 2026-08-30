@@ -5022,6 +5022,23 @@ def _run_book_audit_chunked(
     return claim, findings, results, envelope, unverifiable
 
 
+def _auditor_question_hash() -> str:
+    """What the auditor is asked, as one hash.
+
+    A verdict on disk has no memory of what produced it, so a design whose audit
+    already blocked repaired against findings written by an auditor that had just
+    been corrected — three of landfall's four came from a pass reading the book's
+    opening as its own boundary, and the fix that removed that reading left the
+    conclusions standing. The call cache solves this shape for calls by keying on
+    the envelope; a verdict needs the same key.
+    """
+    prompt = Path(__file__).resolve().parents[1] / "assets" / "prompts" / "canon-auditor.md"
+    try:
+        return _sha256_bytes(prompt.read_bytes())
+    except OSError:
+        return ""
+
+
 def _design_audit_record(
     root: Path,
     task_id: str,
@@ -5077,6 +5094,9 @@ def _design_audit_record(
         ),
         "findings": findings,
         "unverifiable": unverifiable,
+        # What was asked, so that correcting the auditor invalidates its own
+        # conclusions rather than leaving them to be repaired against.
+        "question": _auditor_question_hash(),
     }
     _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
     if record["state"] == "blocked" and raise_on_blocked:
@@ -5757,6 +5777,13 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         proposal = _book_proposal_from_artifacts(root, book_id)
         base_capsule, imports = _book_design_base_capsule(root, book_id)
         stored = _read_json(root / "books" / book_id / "design-audit.json") if (root / "books" / book_id / "design-audit.json").is_file() else {}
+        if stored and stored.get("question") != _auditor_question_hash():
+            # The auditor has changed since this verdict was written, so its findings
+            # answer a question the engine no longer asks. A record from before this
+            # was recorded at all has no question and is stale by the same rule.
+            print("[canon-auditor] the stored verdict was written under a different auditor; auditing again", file=sys.stderr)
+            _reopen_task(root, f"AUDIT-{book_id}")
+            stored = {}
         # A blocking verdict already on disk is the list to repair against. Auditing
         # first spends eleven calls to rediscover it, and the auditor does not name
         # the same chapters twice running, so the round would aim at a target that

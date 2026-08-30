@@ -238,6 +238,49 @@ class BlockedRecordTests(unittest.TestCase):
         self.assertEqual(again.calls, [])
 
 
+class AStaleVerdictIsNotRepairedAgainstTests(unittest.TestCase):
+    """Landfall repaired against four findings written by an auditor that had just
+    been corrected: three of them came from a pass reading the book's opening as
+    its own boundary, and the fix left the conclusions standing."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.book = self.bf.add_book(self.project, "A")["id"]
+        (self.project / f"books/{self.book}/book-brief.json").write_text(
+            json.dumps({"schema": 1, "premise": "A diver decides.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"})
+        )
+
+    def design(self, provider):
+        return self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
+
+    def test_a_verdict_records_the_question_it_answered(self):
+        self.design(RepairProvider(self.bf))
+        record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
+        self.assertEqual(record["question"], self.bf._auditor_question_hash())
+
+    def test_a_stored_verdict_is_repaired_against_while_the_question_stands(self):
+        provider = RepairProvider(self.bf, audits=[[FINDING], []])
+        self.design(provider)
+        self.assertEqual(len(provider.repair_capsules), 1, "the blocking verdict was repaired, not re-audited")
+
+    def test_the_same_verdict_is_re_audited_once_the_auditor_changes(self):
+        blocked = {
+            "schema": 1, "book": self.book, "state": "blocked",
+            "findings": [dict(FINDING)], "unverifiable": [],
+            "question": "a hash from an auditor that no longer exists",
+        }
+        (self.project / f"books/{self.book}/design-audit.json").write_text(json.dumps(blocked))
+        self.assertNotEqual(blocked["question"], self.bf._auditor_question_hash())
+
+    def test_a_record_written_before_this_counts_as_stale(self):
+        self.assertNotEqual({}.get("question"), self.bf._auditor_question_hash())
+        self.assertTrue(self.bf._auditor_question_hash(), "the question must hash to something")
+
+
 class SlicedRepairTests(unittest.TestCase):
     """One call asking for ten rewritten contracts against a 34473-token envelope
     came back empty, and the engine read the empty answer as "nothing to repair"."""
