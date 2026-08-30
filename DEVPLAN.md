@@ -3212,3 +3212,33 @@ The call cache already solves this shape for calls: an answer is keyed by the ha
 - [ ] Re-audit landfall
 
 **Done when:** Correcting the auditor cannot leave its old conclusions standing.
+
+## What the engine cannot use is set aside, wherever it arrives 🔄
+
+**Status: 🔄 In progress — opened 2026-08-30**
+
+**The same defect, corrected three times today in three places, and it is time to correct the class.** An audit of thirty-three completed passes died on this row:
+
+```
+{"id": "F-001", "severity": "note", "issue": "A-0026 ... is not contradicted here; it is answered.", "evidence": [...]}
+```
+
+It has an id, a severity, an issue and evidence. It is missing `repair_scope`, and its text says nothing is wrong. A non-finding, announcing that the book is fine, killed the run — three times, because the driver retried it.
+
+Earlier today the same shape arrived as evidence that would not resolve, and again as a promise id the engine itself had handed out. Each was fixed where it bit. `_validate_audit_output` still raises on a finding whose fields are incomplete, so the next unexpected shape ends the next audit.
+
+**The principle, applied at the boundary rather than at each bite.** Anything a model returns that the engine cannot use is set aside and recorded; the run continues; a person is asked at the end. The safety property is already built and stays: a set-aside row forces `needs_review`, which halts the driver and puts the record in front of someone. Nothing passes silently; nothing costs thirty paid calls either.
+
+**Fix.** `_validate_audit_output` returns the findings it can use and the rows it cannot, instead of raising on the first incomplete one. The unusable rows join the ones whose evidence could not be looked up, in the same `unverifiable` list, each carrying why it was set aside. A response that is not a findings list at all still raises, because that is not a bad row — it is not an answer.
+
+**Tasks:**
+- [x] `_validate_audit_output` sets aside a finding with missing or malformed fields instead of raising
+- [x] Each set-aside row records why: the fields it lacked, or the citations that did not resolve
+- [x] A response with no findings list at all still fails the pass
+- [x] Test: a pass with one good and one incomplete finding keeps the good one and sets the other aside
+- [x] Test: the audit reaches its verdict with a malformed row in the middle, and the verdict is `needs_review`
+- [x] Test: a response that is not an object still fails
+- [x] Suite green: 537 passed, 346 subtests (era 533, 341). Reinstall, commit & push
+- [ ] Re-audit landfall
+
+**Done when:** No single row a model writes can cost more than itself.

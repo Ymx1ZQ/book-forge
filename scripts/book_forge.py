@@ -8458,19 +8458,60 @@ def generate_audit_jobs(
     return sorted(jobs, key=lambda job: str(job["id"]))
 
 
+AUDIT_FINDING_FIELDS = ("id", "severity", "issue", "evidence", "repair_scope")
+
+
 def _validate_audit_output(value: dict[str, object]) -> list[dict[str, object]]:
+    """The findings the engine can use, with the rest set aside in `value`.
+
+    A row it cannot use is not fatal. An audit of thirty-three completed passes
+    died on a finding that had an id, a severity, an issue and evidence, lacked
+    only `repair_scope`, and whose text said nothing was wrong — and the driver
+    retried it twice more. The same shape arrived earlier as evidence that would
+    not resolve and as a promise id the engine had handed out, each fixed where
+    it bit. Set aside and recorded, the run reaches its verdict and a person is
+    asked at the end: `unverifiable` is not empty, so the state is `needs_review`
+    and nothing passes silently.
+
+    A response that is not a findings list at all still raises. That is not a bad
+    row; it is not an answer.
+    """
     findings = value.get("findings")
     if not isinstance(findings, list):
         raise BookForgeError("Audit output has no findings list")
+    usable: list[dict[str, object]] = []
     for finding in findings:
-        if not isinstance(finding, dict) or not {"id", "severity", "issue", "evidence", "repair_scope"} <= finding.keys():
-            raise BookForgeError("Audit finding is missing required fields")
-        if finding["severity"] not in {"blocking", "warning", "note"} or not isinstance(finding["evidence"], list) or not finding["evidence"]:
-            raise BookForgeError("Audit finding has invalid severity or no evidence")
-        for evidence in finding["evidence"]:
-            if not isinstance(evidence, dict) or not evidence.get("location") or not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("hash", ""))):
-                raise BookForgeError("Audit evidence requires a stable location and SHA-256")
-    return findings
+        if not isinstance(finding, dict):
+            _set_aside(value, {"row": finding}, "the row is not an object")
+            continue
+        missing = [field for field in AUDIT_FINDING_FIELDS if field not in finding]
+        if missing:
+            _set_aside(value, finding, f"missing {', '.join(missing)}")
+            continue
+        if finding["severity"] not in {"blocking", "warning", "note"}:
+            _set_aside(value, finding, f"severity {finding['severity']!r} is not one the engine knows")
+            continue
+        if not isinstance(finding["evidence"], list) or not finding["evidence"]:
+            _set_aside(value, finding, "no evidence")
+            continue
+        bad = [
+            evidence for evidence in finding["evidence"]
+            if not isinstance(evidence, dict) or not evidence.get("location")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("hash", "")))
+        ]
+        if bad:
+            _set_aside(value, finding, "evidence without a stable location and SHA-256")
+            continue
+        usable.append(finding)
+    return usable
+
+
+def _set_aside(value: dict[str, object], finding: object, why: str) -> None:
+    """Keep a row the engine cannot use, and say why, so a person can read it."""
+    rows = value.setdefault("unverifiable", [])
+    if isinstance(rows, list):
+        row = dict(finding) if isinstance(finding, dict) else {"row": finding}
+        rows.append({**row, "set_aside": why})
 
 
 def audit_continuity(

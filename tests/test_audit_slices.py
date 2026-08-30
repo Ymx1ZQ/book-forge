@@ -295,6 +295,56 @@ class TheFoldCarriesADifferenceTests(unittest.TestCase):
         self.assertIn("never the ledger it was handed", prompt)
 
 
+class ARowTheEngineCannotUseTests(unittest.TestCase):
+    """An audit of thirty-three completed passes died on a finding that had an id,
+    a severity, an issue and evidence, lacked only `repair_scope`, and whose text
+    said nothing was wrong."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def good(self):
+        return {
+            "id": "F-001", "severity": "note", "issue": "Seeded.", "repair_scope": ["BOOK-0001"],
+            "evidence": [{"location": "UNI-0001#kernel", "hash": "a" * 64}],
+        }
+
+    def test_an_incomplete_finding_is_set_aside_and_the_good_one_stands(self):
+        incomplete = {k: v for k, v in self.good().items() if k != "repair_scope"}
+        incomplete["id"] = "F-002"
+        value = {"findings": [self.good(), incomplete]}
+        usable = self.bf._validate_audit_output(value)
+        self.assertEqual([row["id"] for row in usable], ["F-001"])
+        self.assertEqual(value["unverifiable"][0]["id"], "F-002")
+        self.assertIn("repair_scope", value["unverifiable"][0]["set_aside"])
+
+    def test_each_shape_the_engine_cannot_use_says_why(self):
+        cases = {
+            "missing id": {k: v for k, v in self.good().items() if k != "id"},
+            "unknown severity": {**self.good(), "severity": "catastrophic"},
+            "no evidence": {**self.good(), "evidence": []},
+            "evidence without a hash": {**self.good(), "evidence": [{"location": "UNI-0001#kernel"}]},
+            "not an object": "a sentence where a finding should be",
+        }
+        for label, row in cases.items():
+            with self.subTest(case=label):
+                value = {"findings": [row]}
+                self.assertEqual(self.bf._validate_audit_output(value), [])
+                self.assertTrue(value["unverifiable"][0]["set_aside"])
+
+    def test_a_response_that_is_not_an_answer_still_fails(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._validate_audit_output({"findings": "nope"})
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._validate_audit_output({})
+
+    def test_a_set_aside_row_keeps_what_the_auditor_wrote(self):
+        incomplete = {k: v for k, v in self.good().items() if k != "repair_scope"}
+        value = {"findings": [incomplete]}
+        self.bf._validate_audit_output(value)
+        self.assertEqual(value["unverifiable"][0]["issue"], "Seeded.")
+
+
 class PromiseEvidenceTests(unittest.TestCase):
     """The fold gave the auditor an id and then refused it for using it: landfall's
     audit died on `OP-0014` after seventeen passes."""
