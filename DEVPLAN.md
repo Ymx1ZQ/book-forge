@@ -3418,9 +3418,9 @@ So the rescue covers the rarer failure and not the common one. Landfall's first 
 
 **Done when:** No single pass can end an audit.
 
-## The writer's model is chosen from three drafts of the same chapter 🔄
+## The writer's model is chosen from three drafts of the same chapter ✅
 
-**Status: 🔄 In progress — 2026-08-31**
+**Status: ✅ Done — 2026-09-01**
 
 Landfall's design is closed and not one chapter is written, so the model that writes the prose can still be changed for nothing. Today it cannot be changed on its own: `_write_agents` writes `model: {MODEL}` into every role file in `ROLE_SPECS`, so the writer is DeepSeek v4 Flash because the canon-auditor is. `variant` is the only knob that a role owns — the writer runs at `low`, the judge at `max`.
 
@@ -3452,7 +3452,15 @@ Three things block a per-role model. `_write_agents` has no source for it. `reco
 - [x] The spine bound test compares two briefs of equal length, so one character of brief no longer decides a token
 - [x] Suite green: 590 passed, 354 subtests (era 573). Reinstall, commit & push
 - [x] `margherita` runtime regenerated from its own config, its writer left on DeepSeek at `low`; `opencode.json` came out byte-identical
-- [ ] Run it on landfall CH-0001 with `deepseek-v4-flash-0731`, `glm-5.3-flash` and `qwen3.8-flash`
-- [ ] Set `roles.writer` — model and variant both — to the model the user picks, and record the choice here
+- [x] Run it on landfall CH-0001 with `deepseek-v4-flash-0731`, `glm-5.3-flash` and `qwen3.8-flash`: three drafts, three of three usable
+- [x] Set `roles.writer` — model and variant both — to the model the user picks, and record the choice here
+
+**Measured on CH-0001, 2000 words, all three at `high`.** The completion budget is reasoning and output together against a ceiling near 32000, and that is where the three separated: `deepseek-v4-flash` spent 25383 reasoning plus 3698 output, 29081 of about 32000, leaving 2900 on a chapter of median length in a book whose longest asks 2600 words. `glm-5.3-flash` spent 12035 and `qwen3.8-flash` 12817. Two designs of this same project have already died on that ceiling, so a writer that arrives within three thousand tokens of it on an average chapter is a run that ends on the long ones.
+
+The other measurements. Words against a 2000 target: deepseek 1982, glm 1702, qwen 2036. Cost for the chapter: $0.0060, $0.0038, $0.0079, which over the book's 54600 words is $0.17, $0.12 and $0.21 — no model is chosen or refused on price here. Proper nouns invented against canon: deepseek none, glm one ship, qwen one ship and a speaking character who does not exist, which is an obligation the canon audit would open rather than a prop.
+
+**Chosen: `glm-5.3-flash` at `high`,** written into landfall's `book-forge.yaml`. Its known cost is the word count: 1702 against 2000, and at that rate the book comes out around eight thousand words short of its design. The writer's validation band is 70-140% of target, so it cannot drift further than that, and the shortfall is visible per chapter.
+
+**Left open, deliberately.** The reviser writes prose too and is still pinned to DeepSeek. Both roles read the same style preset, so the register is nominally shared, but a chapter written by one model and repaired by another is two hands on the same paragraph. Pinning `roles.reviser` to the writer's model is one line, and it was not taken without asking.
 
 **Done when:** `roles.writer.model` decides who writes the book, and CH-0001 exists three times so that decision can be made by reading.
