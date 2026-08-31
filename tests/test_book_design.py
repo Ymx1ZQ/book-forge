@@ -263,7 +263,10 @@ class BookDesignTests(unittest.TestCase):
         self.assertEqual(evidence[4]["hash"], self.bf._file_hash(design_md))
         self.assertEqual(evidence[5]["hash"], self.bf._file_hash(chapter))
 
-    def test_foreign_book_scoped_evidence_still_fails_closed(self):
+    def test_foreign_book_scoped_evidence_is_set_aside_and_never_becomes_a_finding(self):
+        """Evidence in another book's artifacts is not evidence about this one. It
+        used to end the run and ask a person; it is now recorded and the design
+        goes on, which is the same refusal without the stop."""
         book = self.bf.add_book(self.project, "Closed")["id"]
         self.brief(book)
         provider = DesignProvider(
@@ -276,41 +279,35 @@ class BookDesignTests(unittest.TestCase):
                 "repair_scope": [book],
             }]},
         )
-        with self.assertRaises(self.bf.BookForgeError):
-            self.bf.execute_book_design(self.project, book, provider=provider)
+        record = self.bf.execute_book_design(self.project, book, provider=provider)
+        self.assertEqual(record["state"], "design_clean")
+        self.assertEqual(record["findings"], [])
+        self.assertTrue(record["unverifiable"], "the row is kept, with what it cited")
+        self.assertTrue(all(row["id"].endswith("F-0001") for row in record["unverifiable"]))
+        self.assertIn("BOOK-0009#proposal/turns/TURN-0001", record["unverifiable"][0]["unresolved"])
 
     def test_resumes_book_audit_alone_when_design_already_promoted(self):
+        """A stored verdict written under a different auditor is thrown away and
+        asked again. The design is already promoted, so only the audit runs."""
         book = self.bf.add_book(self.project, "Resumed")["id"]
         self.brief(book)
-        bad = DesignProvider(
-            proposal(),
-            audit={"findings": [{
-                "id": "F-0001",
-                "severity": "note",
-                "issue": "Seeded note.",
-                "evidence": [{"location": "nowhere/not-a-file.md"}],
-                "repair_scope": [book],
-            }]},
-        )
-        with self.assertRaises(self.bf.BookForgeError):
-            self.bf.execute_book_design(self.project, book, provider=bad)
-        plan = self.bf._load_plan(self.project)
-        design_task = next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{book}")
-        self.assertEqual(design_task["state"], "succeeded")
+        first = DesignProvider(proposal())
+        self.assertEqual(self.bf.execute_book_design(self.project, book, provider=first)["state"], "design_clean")
+        self.assertIn("designer", first.calls)
 
-        # The audit no longer blocks: it finishes, records what it could not look
-        # up, and halts for a person. Nothing is waiting on a decision, so asking
-        # again is the whole of the resume.
-        record = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
-        self.assertEqual(record["state"], "needs_review")
-        self.assertTrue(record["unverifiable"])
+        (self.project / f"books/{book}/design-audit.json").write_text(json.dumps({
+            **json.loads((self.project / f"books/{book}/design-audit.json").read_text()),
+            "question": "written-under-a-different-auditor",
+        }))
+        # Forgotten, or the audit is answered from the calls this project already
+        # paid for and the resume makes no call at all.
+        self.bf._forget_task_calls(self.project, f"AUDIT-{book}")
         rerun = DesignProvider(proposal(), audit={"findings": []})
         result = self.bf.execute_book_design(self.project, book, provider=rerun)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(rerun.calls, ["canon-auditor"] * 3)
-        audit = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
-        self.assertEqual(audit["findings"], [])
-
+        self.assertEqual(set(rerun.calls), {"canon-auditor"}, "the design is not run again")
+        plan = self.bf._load_plan(self.project)
+        self.assertEqual(next(row for row in plan["tasks"] if row["id"] == f"DESIGN-{book}")["state"], "succeeded")
 
     def test_missing_author_brief_fails_closed_before_any_provider_call(self):
         book = self.bf.add_book(self.project, "NoBrief")["id"]
@@ -509,3 +506,75 @@ class DesignAsksForTitlesTests(unittest.TestCase):
         self.assertIn("otherwise invent one: two to six words", writer_prompt)
         self.assertIn("never a chapter number or numeral prefix", writer_prompt)
 
+
+
+class ASetAsideRowIsANoteNotAStopTests(unittest.TestCase):
+    """A verdict of `needs_review` stopped a finished audit to ask a person, and
+    the driver could not leave it: the gate that clears a design accepts only
+    `design_clean`, so the design stage was re-dispatched to be audited into the
+    same state again."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["chorus"] = {"enabled": False, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def book(self, title="A"):
+        book = self.bf.add_book(self.project, title)["id"]
+        (self.project / f"books/{book}/book-brief.json").write_text(json.dumps(
+            {"schema": 1, "premise": "A diver must decide.", "characters": ["Mara"], "plot": ["dive"], "tone": "quiet"}
+        ))
+        return book
+
+    def run_with(self, findings, title="A"):
+        book = self.book(title)
+        record = self.bf.execute_book_design(
+            self.project, book, provider=DesignProvider(proposal(), audit={"findings": findings})
+        )
+        return book, record
+
+    def unbindable(self, severity="note"):
+        return {
+            "id": "F-0001", "severity": severity, "issue": "Seeded.",
+            "evidence": [{"location": "nowhere/not-a-file.md"}], "repair_scope": ["BOOK-0001"],
+        }
+
+    def test_a_row_the_engine_cannot_bind_leaves_the_verdict_clean_and_does_not_raise(self):
+        _, record = self.run_with([self.unbindable()])
+        self.assertEqual(record["state"], "design_clean")
+        self.assertTrue(record["unverifiable"], "the row is kept, with what it cited")
+        self.assertTrue(all(row["id"].endswith("F-0001") for row in record["unverifiable"]))
+        self.assertIn("nowhere/not-a-file.md", record["unverifiable"][0]["unresolved"])
+
+    def test_a_blocking_finding_beside_a_set_aside_row_still_blocks(self):
+        """The verdict is taken on the findings the engine could bind, and a
+        blocking one among them is still blocking."""
+        book = self.book("B")
+        blocking = {
+            "id": "F-0002", "severity": "blocking", "issue": "The arc has no cost.",
+            "evidence": [{"location": "UNI-0001#kernel"}], "repair_scope": [book],
+        }
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.execute_book_design(
+                self.project, book,
+                provider=DesignProvider(proposal(), audit={"findings": [self.unbindable(), blocking]}),
+            )
+        record = json.loads((self.project / f"books/{book}/design-audit.json").read_text())
+        self.assertEqual(record["state"], "blocked")
+        self.assertTrue(record["unverifiable"], "the set-aside row is recorded beside the blocking one")
+
+    def test_a_design_whose_audit_set_a_row_aside_is_a_finished_design(self):
+        """What the driver reads: an audit that asked nobody anything is done."""
+        book, _ = self.run_with([self.unbindable()], title="C")
+        self.assertFalse(self.bf._advance_needs_design(self.project, book))
+
+    def test_no_path_writes_a_verdict_the_gate_cannot_clear(self):
+        for index, findings in enumerate(([], [self.unbindable()], [self.unbindable(severity="warning")])):
+            with self.subTest(findings=findings):
+                _, record = self.run_with(findings, title=f"D{index}")
+                self.assertEqual(record["state"], "design_clean")

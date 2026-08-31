@@ -140,7 +140,10 @@ class UniverseDesignTests(unittest.TestCase):
         self.assertEqual(evidence[0]["location"], "proposal.places.PLC-0001")
         self.assertEqual(evidence[1]["hash"], self.bf._file_hash(eras))
 
-    def test_unresolvable_audit_evidence_blocks_the_design(self):
+    def test_unresolvable_audit_evidence_is_set_aside_and_never_becomes_a_finding(self):
+        """Evidence nobody can look up is not evidence. It used to end the run and
+        ask a person; it is now recorded and the design goes on, which is the same
+        refusal without the stop."""
         provider = DesignProvider(
             clean_proposal(),
             audit={"findings": [{
@@ -151,36 +154,29 @@ class UniverseDesignTests(unittest.TestCase):
                 "repair_scope": ["PLC-0001"],
             }]},
         )
-        with self.assertRaises(self.bf.BookForgeError):
-            self.bf.execute_universe_design(self.project, provider=provider)
+        record = self.bf.execute_universe_design(self.project, provider=provider)
+        self.assertEqual(record["state"], "design_clean")
+        self.assertEqual(record["findings"], [])
+        self.assertEqual([row["id"] for row in record["unverifiable"]], ["F-0001"])
+        self.assertIn("nowhere/not-a-file.md", record["unverifiable"][0]["unresolved"])
 
     def test_resumes_audit_alone_when_design_already_promoted(self):
-        bad = DesignProvider(
-            clean_proposal(),
-            audit={"findings": [{
-                "id": "F-0001",
-                "severity": "note",
-                "issue": "Seeded note.",
-                "evidence": [{"location": "nowhere/not-a-file.md"}],
-                "repair_scope": ["PLC-0001"],
-            }]},
-        )
-        with self.assertRaises(self.bf.BookForgeError):
-            self.bf.execute_universe_design(self.project, provider=bad)
+        """A stored verdict written under a different auditor is thrown away and
+        asked again. The design is already promoted, so only the audit runs."""
+        first = DesignProvider(clean_proposal(), audit={"findings": []})
+        self.assertEqual(self.bf.execute_universe_design(self.project, provider=first)["state"], "design_clean")
         plan = self.bf._load_plan(self.project)
-        design_task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-UNI-0001")
-        self.assertEqual(design_task["state"], "succeeded")
+        self.assertEqual(next(row for row in plan["tasks"] if row["id"] == "DESIGN-UNI-0001")["state"], "succeeded")
 
-        # The audit no longer blocks: it finishes, records what it could not look
-        # up, and halts for a person. Nothing is waiting on a decision, so asking
-        # again is the whole of the resume.
-        record = json.loads((self.project / "universe/design-audit.json").read_text())
-        self.assertEqual(record["state"], "needs_review")
-        self.assertTrue(record["unverifiable"])
+        path = self.project / "universe/design-audit.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "question": "written-under-a-different-auditor"}))
+        # Forgotten, or the audit is answered from the calls this project already
+        # paid for and the resume makes no call at all.
+        self.bf._forget_task_calls(self.project, "AUDIT-UNI-0001")
         rerun = DesignProvider(clean_proposal(), audit={"findings": []})
         result = self.bf.execute_universe_design(self.project, provider=rerun)
         self.assertEqual(result["state"], "design_clean")
-        self.assertEqual(rerun.calls, ["canon-auditor"])
+        self.assertEqual(rerun.calls, ["canon-auditor"], "the design is not run again")
 
 
     def test_promotes_designer_row_keys_into_summary_blocks(self):

@@ -295,6 +295,57 @@ class TheFoldCarriesADifferenceTests(unittest.TestCase):
         self.assertIn("never the ledger it was handed", prompt)
 
 
+class APromiseFallsDueInAChapterTheBookHasTests(unittest.TestCase):
+    """Thirty-nine of landfall's fifty-nine promises named CH-0030, CH-0033,
+    CH-0035 or CH-0040 in a twenty-six chapter book. The auditor then reasoned
+    soundly from a false premise and blocked six chapters on the last repair
+    round available."""
+
+    def setUp(self):
+        self.bf = load_module()
+        self.book = {f"CH-{n:04d}" for n in range(1, 27)}
+
+    def test_a_promise_expecting_a_chapter_the_book_does_not_have_is_dropped(self):
+        kept = self.bf._carry_open_promises([], {"paid": [], "added": [
+            {"id": "PROM-0041", "chapter": "CH-0011", "promise": "the snow death is owed", "expected_in": "CH-0040"},
+            {"id": "PROM-0042", "chapter": "CH-0011", "promise": "the line in blood is owed", "expected_in": "CH-0020"},
+        ]}, "schedule-9-16", self.book)
+        self.assertEqual([row["id"] for row in kept], ["PROM-0042"])
+
+    def test_a_promise_with_no_expected_chapter_is_kept(self):
+        """A promise the book has not yet placed is a real thing, and a value that
+        is not a chapter id at all is read as unspecified rather than as a phantom."""
+        for value in ({}, {"expected_in": ""}, {"expected_in": None}, {"expected_in": "unknown"}, {"expected_in": "the finale"}):
+            with self.subTest(value=value):
+                kept = self.bf._carry_open_promises([], {"paid": [], "added": [
+                    {"id": "PROM-0001", "chapter": "CH-0004", "promise": "the grave is unnamed", **value},
+                ]}, "schedule-1-8", self.book)
+                self.assertEqual([row["id"] for row in kept], ["PROM-0001"])
+
+    def test_a_promise_made_in_a_chapter_the_book_does_not_have_is_dropped(self):
+        kept = self.bf._carry_open_promises([], {"paid": [], "added": [
+            {"id": "PROM-0050", "chapter": "CH-0033", "promise": "owed", "expected_in": "CH-0020"},
+        ]}, "schedule-17-24", self.book)
+        self.assertEqual(kept, [])
+
+    def test_without_the_book_ids_every_promise_is_kept(self):
+        """The check is on what the engine knows; it never invents a bound."""
+        kept = self.bf._carry_open_promises([], {"paid": [], "added": [
+            {"id": "PROM-0041", "chapter": "CH-0011", "promise": "owed", "expected_in": "CH-0040"},
+        ]}, "schedule-9-16")
+        self.assertEqual([row["id"] for row in kept], ["PROM-0041"])
+
+    def test_a_carried_promise_is_never_re_examined(self):
+        """Only what a pass adds is checked; the ledger has already been through."""
+        carried = [{"id": "OP-0001", "chapter": "CH-0002", "promise": "owed", "expected_in": "CH-0040"}]
+        kept = self.bf._carry_open_promises(carried, {"paid": [], "added": []}, "schedule-9-16", self.book)
+        self.assertEqual([row["id"] for row in kept], ["OP-0001"])
+
+    def test_the_prompt_says_where_a_promise_may_fall_due(self):
+        prompt = (PROMPTS / "canon-auditor.md").read_text()
+        self.assertIn("falls due in a chapter of this book or in none", prompt)
+
+
 class ARowTheEngineCannotUseTests(unittest.TestCase):
     """An audit of thirty-three completed passes died on a finding that had an id,
     a severity, an issue and evidence, lacked only `repair_scope`, and whose text

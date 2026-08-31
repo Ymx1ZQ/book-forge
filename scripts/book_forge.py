@@ -3404,6 +3404,8 @@ AUDIT_NEIGHBOURS = 4
 # without any one call reading the whole book.
 SCHEDULE_WINDOW_SIZE = 8
 MAX_OPEN_PROMISES = 60
+# What a promise looks like when it names the chapter it falls due in.
+CHAPTER_REFERENCE = re.compile(r"CH-\d+", re.IGNORECASE)
 # What one chunk may add to the envelope on top of the capsule every chunk
 # shares. Measured before the call: over this, the engine splits rather than
 # spending a question that cannot be answered.
@@ -4382,6 +4384,7 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
             findings.append({"code": "chapter.title-from-beat", "severity": "warning", "chapter": chapter.get("id"), "title": chapter.get("title")})
     index = rebuild_indexes(root)
     known_blocks = set(index["blocks"])
+    known_characters = {value.split("#", 1)[0] for value in known_blocks if value.startswith("CHR-")}
     for chapter in chapters:
         imports = [str(value) for value in chapter.get("imports", []) if isinstance(value, str)]
         unknown = sorted(value for value in imports if value not in known_blocks)
@@ -4391,7 +4394,15 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
         # A chapter is only checkable by what it carries: the writer, the technical
         # editor and the reviser all build their envelope from this list, so a chapter
         # that imports nothing is written and judged with no world in front of it.
-        missing = [value for value in (f"{pov}#summary", f"{pov}#voice") if pov and value in known_blocks and value not in imports]
+        # Asked of the character, not of the block. It used to be asked only for a
+        # block already in the index, so the requirement disappeared exactly when
+        # the block was missing: landfall reached six chapters whose POV had no
+        # voice in canon at all, and nothing said so. A POV who is not in canon at
+        # all is a different hole, and `chapter.import-unknown` is where it lands.
+        missing = [
+            value for value in (f"{pov}#summary", f"{pov}#voice")
+            if pov in known_characters and value not in imports
+        ]
         if missing:
             findings.append({"code": "chapter.import-pov", "severity": "blocking", "chapter": chapter.get("id"), "missing": missing})
         if any(value.startswith("PLC-") for value in known_blocks) and not any(value.startswith("PLC-") for value in imports):
@@ -4853,6 +4864,7 @@ def _audit_chunk_scope(
             "also_return": (
                 "paid: the ids from open_promises that these chapters answer, as a list of id strings and nothing else. "
                 "added: the promises these chapters make, each {\"id\",\"chapter\",\"promise\",\"expected_in\"} with one sentence for the promise. "
+                "expected_in is a chapter id from this book or empty — never a chapter number you expect the book to reach. "
                 "Return only what changed here — never the whole ledger back"
             ),
         }
@@ -4870,6 +4882,7 @@ def _carry_open_promises(
     carried: list[dict[str, object]],
     value: dict[str, object],
     slug: str,
+    chapter_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """What this schedule window leaves open for the next one.
 
@@ -4884,6 +4897,18 @@ def _carry_open_promises(
 
     A pass that returns neither key keeps the carried set rather than dropping
     it: losing it silently would turn an unpaid promise into a clean book.
+
+    A promise is dropped when it falls due in a chapter the book does not have.
+    Thirty-nine of landfall's fifty-nine promises named CH-0030, CH-0033, CH-0035
+    or CH-0040 in a twenty-six chapter book, and the auditor then reasoned soundly
+    from a false premise — promised at forty, paid at twenty-three, so it fires
+    early — and blocked six chapters on the last repair round available. The
+    engine knows which chapters exist; a promise that names another one is a row
+    it cannot use. An unspecified `expected_in` is kept: a promise the book has
+    not yet placed is a real thing, and only a named chapter is checked — a value
+    that is not a chapter id at all, "unknown" or "the finale", is read as
+    unspecified rather than as a phantom, since what did the damage was a
+    well-formed id for a chapter that is not there.
     """
     paid = value.get("paid")
     added = value.get("added")
@@ -4903,8 +4928,24 @@ def _carry_open_promises(
         )
     kept = [row for row in carried if isinstance(row, dict) and str(row.get("id")) not in settled]
     for row in added if isinstance(added, list) else []:
-        if isinstance(row, dict) and str(row.get("promise") or "").strip():
-            kept.append(row)
+        if not (isinstance(row, dict) and str(row.get("promise") or "").strip()):
+            continue
+        phantom = sorted(
+            {
+                str(row[key]).strip()
+                for key in ("chapter", "expected_in")
+                if CHAPTER_REFERENCE.fullmatch(str(row.get(key) or "").strip())
+                and str(row[key]).strip() not in chapter_ids
+            }
+        ) if chapter_ids else []
+        if phantom:
+            print(
+                f"[canon-auditor] {slug} sets aside {row.get('id') or 'a promise'}: it falls due in "
+                f"{', '.join(phantom)}, which this book does not have",
+                file=sys.stderr,
+            )
+            continue
+        kept.append(row)
     if len(kept) > MAX_OPEN_PROMISES:
         print(
             f"[canon-auditor] {slug} leaves {len(kept)} promises open, over the {MAX_OPEN_PROMISES} a pass may hold; "
@@ -4913,6 +4954,160 @@ def _carry_open_promises(
         )
         kept = kept[-MAX_OPEN_PROMISES:]
     return kept
+
+
+DESIGN_VOICE_SLICE_SIZE = 4
+
+
+def _canon_block_text(path: Path, block: str) -> str | None:
+    """The body of one `bf:block` in a canon file, or None if it is not there."""
+    if not path.is_file():
+        return None
+    text = path.read_text()
+    match = re.search(rf"<!--\s*bf:block\s+{re.escape(block)}\s*-->\n([\s\S]*?)(?=\n<!--\s*bf:block|\Z)", text)
+    return match.group(1).strip() if match else None
+
+
+def _with_canon_block(text: str, block: str, body: str) -> str:
+    """A canon file with one block added, or replaced where it already stands.
+
+    Returned rather than written: the file is an output of the task that produced
+    it, so it is staged and promoted like every other, and a call that fails after
+    the write leaves nothing half-changed on disk.
+    """
+    marker = re.compile(rf"<!--\s*bf:block\s+{re.escape(block)}\s*-->\n[\s\S]*?(?=\n<!--\s*bf:block|\Z)")
+    replacement = f"<!-- bf:block {block} -->\n{body.strip()}\n"
+    return marker.sub(replacement, text) if marker.search(text) else f"{text.rstrip()}\n\n{replacement}"
+
+
+def _missing_pov_voices(root: Path, proposal: dict[str, object]) -> list[dict[str, object]]:
+    """The POV characters this book takes whose canon has no voice.
+
+    Landfall carried ten characters and one voice block. Three of its four points
+    of view — Weyr, Ren, Flint — had none, so six chapters were about to be
+    written with the character's summary and nothing about how they sound. The
+    guard that should have caught it is the reason it passed: `validate` asks a
+    chapter to import its POV's `#summary` and `#voice`, but only for a block
+    that is in the index, so the requirement disappears exactly when the block is
+    missing. A character canon does not describe at all is a different hole and
+    stays with validation — there is no file here to write into.
+    """
+    index = rebuild_indexes(root)
+    known = set(index["blocks"])
+    taken: dict[str, list[str]] = {}
+    for chapter in proposal.get("chapters", []) if isinstance(proposal.get("chapters"), list) else []:
+        if not isinstance(chapter, dict):
+            continue
+        pov = str(chapter.get("pov") or "").strip()
+        if pov and f"{pov}#summary" in known and f"{pov}#voice" not in known:
+            taken.setdefault(pov, []).append(str(chapter.get("id") or ""))
+    rows: list[dict[str, object]] = []
+    for pov, chapters in sorted(taken.items()):
+        path = root / "universe" / "canon" / "characters" / f"{pov}.md"
+        name = next((line[2:].strip() for line in path.read_text().splitlines() if line.startswith("# ")), pov)
+        rows.append({
+            "id": pov,
+            "name": name,
+            "summary": _canon_block_text(path, "summary") or "",
+            "chapters": sorted(chapters),
+        })
+    return rows
+
+
+def _fill_missing_pov_voices(
+    root: Path,
+    book_id: str,
+    proposal: dict[str, object],
+    runner,
+) -> list[str]:
+    """Write the voice of every POV character the canon does not describe.
+
+    A book cannot ask its designer for a block that does not exist — the ids it
+    may import are the ones in the index — so the hole is filled after the design
+    and before it is validated. The cast bounds the call, and the call is sliced,
+    so this is the size of the points of view a book has and not of the book.
+    """
+    missing = _missing_pov_voices(root, proposal)
+    if not missing:
+        return []
+    # The book's prose style belongs in a question about how someone sounds, but a
+    # project need not have one yet.
+    style = [value for value in ("STYLE-0001#prose",) if value in set(rebuild_indexes(root)["blocks"])]
+    task_id = f"VOICES-{book_id}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, "designer", priority=35, outputs=[
+            f"universe/canon/characters/{row['id']}.md" for row in missing
+        ])
+    elif next(task["state"] for task in plan["tasks"] if task["id"] == task_id) == "succeeded":
+        _reopen_task(root, task_id)
+    written: list[str] = []
+    outputs: dict[str, str | bytes] = {}
+    for start in range(0, len(missing), DESIGN_VOICE_SLICE_SIZE):
+        chunk = missing[start:start + DESIGN_VOICE_SLICE_SIZE]
+        capsule = {
+            "task": "voice",
+            "characters": [
+                {"id": row["id"], "name": row["name"], "summary": row["summary"], "pov_of": row["chapters"]}
+                for row in chunk
+            ],
+            "required_output": {
+                "voices": [
+                    {
+                        "id": "CHR-0000",
+                        "voice": "One paragraph: the register this character narrates in, the rhythm of their sentences, "
+                                 "what they notice first in a room, what they never say aloud, and one sample line in "
+                                 "their own words. Written to be read by whoever writes their chapters.",
+                    }
+                ]
+            },
+        }
+        envelope = build_envelope(
+            root,
+            role="designer",
+            task_capsule=capsule,
+            imports=[f"{row['id']}#summary" for row in chunk] + style,
+            state={},
+            tools=[],
+            max_output_tokens=2048,
+        )
+        claim, result = _run_design_role(root, task_id, "designer", envelope, runner)
+        try:
+            value = _parse_contract_json(str(result["text"]))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
+            raise
+        voices = {
+            str(row.get("id")): str(row.get("voice") or "").strip()
+            for row in (value.get("voices") or [])
+            if isinstance(row, dict) and str(row.get("voice") or "").strip()
+        }
+        for row in chunk:
+            body = voices.get(str(row["id"]))
+            if not body:
+                # One voice the designer skipped costs that character its block,
+                # never the book's design: validation names it as a hole.
+                print(f"[designer] no voice returned for {row['id']}; it stays missing", file=sys.stderr)
+                continue
+            path = root / "universe" / "canon" / "characters" / f"{row['id']}.md"
+            outputs[f"universe/canon/characters/{row['id']}.md"] = _with_canon_block(path.read_text(), "voice", body)
+            written.append(str(row["id"]))
+        _complete_model_task(root, task_id, claim, outputs, result, envelope)
+        if start + DESIGN_VOICE_SLICE_SIZE < len(missing):
+            _reopen_task(root, task_id)
+    if written:
+        rebuild_indexes(root)
+        for chapter in proposal.get("chapters", []) if isinstance(proposal.get("chapters"), list) else []:
+            pov = str(chapter.get("pov") or "").strip()
+            if pov in written:
+                imports = [str(value) for value in chapter.get("imports", []) if isinstance(value, str)]
+                if f"{pov}#voice" not in imports:
+                    chapter["imports"] = sorted({*imports, f"{pov}#voice"})
+        print(
+            f"[designer] wrote the missing voice of {', '.join(written)}, and gave it to the chapters they narrate",
+            file=sys.stderr,
+        )
+    return written
 
 
 def _run_book_audit_chunked(
@@ -4944,6 +5139,9 @@ def _run_book_audit_chunked(
     unverifiable: list[dict[str, object]] = []
     envelope: dict[str, object] = {}
     open_promises: list[dict[str, object]] = []
+    # The chapters this book actually has, so a promise falling due outside them
+    # is set aside rather than reasoned with.
+    chapter_ids = {str(row.get("id")).strip() for row in chapters if str(row.get("id") or "").strip()}
     pending = list(_book_audit_chunks(len(chapters)))
     while pending:
         chunk = pending.pop(0)
@@ -5032,7 +5230,7 @@ def _run_book_audit_chunked(
             bound = _bind_audit_evidence(root, scope, value, _promise_chapters(open_promises, value.get("open_promises")))
             rows = _validate_audit_output(bound)
             if chunk.get("category") == "schedule":
-                open_promises = _carry_open_promises(open_promises, value, slug)
+                open_promises = _carry_open_promises(open_promises, value, slug, chapter_ids)
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {exc}")
             raise
@@ -5113,17 +5311,22 @@ def _design_audit_record(
         except BookForgeError as exc:
             _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=str(exc))
             raise
+    if unverifiable:
+        # A citation nobody can look up is recorded and the run goes on. It used to
+        # be a third verdict, `needs_review`, which asked a person — and which the
+        # driver could not leave, since the gate that clears a design accepts only
+        # `design_clean`, so the design stage was re-dispatched to be audited into
+        # the same state again. The rows are on disk with the citations that did
+        # not resolve; the verdict is taken on the findings the engine could bind.
+        print(
+            f"[canon-auditor] {len(unverifiable)} finding(s) set aside, cited nothing that resolves: "
+            f"{', '.join(str(row.get('id')) for row in unverifiable)}. Recorded in {output_path}",
+            file=sys.stderr,
+        )
     record = {
         "schema": 1,
-        # A citation nobody can look up does not pass silently, whatever its
-        # severity: it means the audit is confused or the artifacts have moved, and
-        # either way a person has to look. But the audit finishes first — one
-        # mistyped prefix used to destroy twenty-five completed passes and burn a
-        # retry, and now the verdict on everything else is written before anyone is
-        # asked anything.
         "state": (
             "blocked" if any(row["severity"] == "blocking" for row in findings)
-            else "needs_review" if unverifiable
             else "design_clean"
         ),
         "findings": findings,
@@ -5135,14 +5338,6 @@ def _design_audit_record(
     _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
     if record["state"] == "blocked" and raise_on_blocked:
         raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(findings, sort_keys=True)}")
-    if record["state"] == "needs_review" and raise_on_blocked:
-        # Halted, not failed: retrying asks the same auditor the same question and
-        # gets the same citation. Every pass that did resolve is already on disk.
-        raise AdvanceHalted(
-            f"The audit finished and {len(unverifiable)} finding(s) cite a location nobody can look up: "
-            f"{json.dumps(unverifiable, sort_keys=True)}. The verdict on every other pass is in {output_path}. "
-            "A person decides whether the finding is real and what it should have cited"
-        )
     return record
 
 
@@ -5569,12 +5764,14 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
     if refresh:
         _reset_universe_design_tasks(root)
     elif all(task["state"] == "succeeded" for task in tasks):
-        # Only a clean verdict is a finished job. One that needs review has findings
-        # nobody could look up, and returning it here left the universe with no way
-        # forward that did not involve reopening a task by hand.
+        # Only a clean verdict is a finished job, and only while it answers the
+        # question the auditor asks today: correcting the auditor has to invalidate
+        # its own conclusions rather than leave them to be built on.
         record = _read_json(root / "universe" / "design-audit.json")
-        if record.get("state") == "design_clean":
+        if record.get("state") == "design_clean" and record.get("question") == _auditor_question_hash():
             return {**record, "calls": 0}
+        if record.get("state") == "design_clean":
+            print("[canon-auditor] the stored verdict was written under a different auditor; auditing again", file=sys.stderr)
         _reopen_task(root, "AUDIT-UNI-0001")
     plan = _load_plan(root)
     design_task = next(task for task in plan["tasks"] if task["id"] == "DESIGN-UNI-0001")
@@ -5799,16 +5996,26 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         # reached again. Reopening the audit costs a re-audit, which is what the
         # caller asked for by invoking the design at all.
         # Only a clean verdict is a finished job. A blocked one has a repair to run,
-        # and one that needs review has findings nobody could look up — returning
-        # either here left the book with no way forward that did not involve
-        # reopening a task by hand.
-        if record.get("state") == "design_clean":
+        # and returning it here left the book with no way forward that did not
+        # involve reopening a task by hand.
+        #
+        # And clean is not enough on its own: the verdict has to answer the
+        # question the auditor asks today. The check for that lives further down,
+        # behind this return, so it was reachable only by a verdict that was not
+        # clean — which is every case where it does not matter.
+        if record.get("state") == "design_clean" and record.get("question") == _auditor_question_hash():
             return {**record, "calls": 0}
+        if record.get("state") == "design_clean":
+            print("[canon-auditor] the stored verdict was written under a different auditor; auditing again", file=sys.stderr)
         _reopen_task(root, f"AUDIT-{book_id}")
     plan = _load_plan(root)
     design_task = next(task for task in plan["tasks"] if task["id"] == f"DESIGN-{book_id}")
     if design_task["state"] == "succeeded":
         proposal = _book_proposal_from_artifacts(root, book_id)
+        if _fill_missing_pov_voices(root, book_id, proposal, runner):
+            # The contracts are already on disk here, so the imports the fill just
+            # added have to be written back before anything reads them again.
+            _write_book_design_outputs(root, book_id, proposal)
         base_capsule, imports = _book_design_base_capsule(root, book_id)
         stored = _read_json(root / "books" / book_id / "design-audit.json") if (root / "books" / book_id / "design-audit.json").is_file() else {}
         if stored and stored.get("question") != _auditor_question_hash():
@@ -5900,6 +6107,10 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
     _log_step(5, 7, "validate", "→")
     try:
         proposal = merged
+        # The designer may only import ids that are in the index, so a POV whose
+        # voice was never written cannot be imported by the book that needs it.
+        # The hole is filled here, before the guard that now requires it.
+        _fill_missing_pov_voices(root, book_id, proposal, runner)
         findings = validate_book_design(root, book_id, proposal)
         if any(row["severity"] == "blocking" for row in findings):
             _log_step(5, 7, "validate", "✗")
@@ -5928,17 +6139,6 @@ def execute_book_design(project: Path | str, book_id: str, *, provider=None, cho
         _log_step(7, 7, "audit", "✗")
         raise BookForgeError(
             f"Independent design audit found blocking issues: {json.dumps(audit['findings'], sort_keys=True)}"
-        )
-    if audit.get("unverifiable"):
-        # A citation nobody can look up does not pass silently, whatever its
-        # severity. Halted rather than failed: asking the same auditor the same
-        # question returns the same citation, and every pass that did resolve is
-        # already recorded.
-        _log_step(7, 7, "audit", "✗")
-        raise AdvanceHalted(
-            f"The audit finished and {len(audit['unverifiable'])} finding(s) cite a location nobody can look up: "
-            f"{json.dumps(audit['unverifiable'], sort_keys=True)}. The verdict on every other pass is in "
-            f"books/{book_id}/design-audit.json. A person decides whether the finding is real and what it should have cited"
         )
     _log_step(7, 7, "audit", "✓")
     # M2: post-design ensemble — re-read book product (arc + chapters per-chapter beats/POV)
@@ -8512,9 +8712,9 @@ def _validate_audit_output(value: dict[str, object]) -> list[dict[str, object]]:
     only `repair_scope`, and whose text said nothing was wrong — and the driver
     retried it twice more. The same shape arrived earlier as evidence that would
     not resolve and as a promise id the engine had handed out, each fixed where
-    it bit. Set aside and recorded, the run reaches its verdict and a person is
-    asked at the end: `unverifiable` is not empty, so the state is `needs_review`
-    and nothing passes silently.
+    it bit. Set aside and recorded, the run reaches its verdict on the rows the
+    engine could bind, and the ones it could not are written to `unverifiable`
+    on the same record with the citations that did not resolve.
 
     A response that is not a findings list at all still raises. That is not a bad
     row; it is not an answer.

@@ -3267,3 +3267,81 @@ The reason for forgetting is sound and narrow: a remembered verdict would answer
 - [x] Suite green: 542 passed, 346 subtests (era 537). Reinstall, commit & push
 
 **Done when:** A repair round costs a re-audit of what it changed.
+
+## A promise cannot fall due in a chapter the book does not have ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**The fourth of the same family tonight, and the widest.** Landfall's second audit blocked on findings like *"PROM-0043 promised that the line he will write last is in blood would land at CH-0040"* and *"PROM-0041 promised Flint's snow-death at CH-0040"*. The book has twenty-six chapters. CH-0040 does not exist.
+
+Counted across the fold answers: **thirty-nine of fifty-nine promises — 66% of the ledger — name an `expected_in` that is not a chapter of this book**: fourteen at CH-0030, thirteen at CH-0035, eleven at CH-0040, one at CH-0033. The auditor then reasons soundly from false premises — a promise due at forty, paid at twenty-three, fires early — and blocks. Six chapters were about to be rewritten to satisfy it, on the last repair round available.
+
+The engine accepts whatever a pass writes into `added` and carries it forward, though it knows exactly which chapters exist. Same shape as the evidence that would not resolve, the promise id nobody carried, and the finding missing a field: something arrives that the engine cannot use, and instead of setting it aside the engine reasons with it.
+
+**Fix.** A promise whose `chapter` or `expected_in` names a chapter this book does not have is set aside, with why, and never carried. `expected_in` is allowed to be unspecified — a promise the book has not yet placed is a real thing — but it may not name a chapter that is not there. The prompt says so: the chapter ids are in the window you were given, and a promise falls due in one of them or in none.
+
+**Tasks:**
+- [x] `_carry_open_promises` takes the book's chapter ids and drops an added promise naming one that does not exist
+- [x] A dropped promise is reported on stderr with its id and the chapter it named
+- [x] `expected_in` may be empty or unspecified; only a named chapter is checked
+- [x] `canon-auditor.md`: a promise falls due in a chapter of this book or in none
+- [x] Test: a promise expecting CH-0040 in a twenty-six chapter book is dropped, one expecting CH-0020 is kept
+- [x] Test: a promise with no expected_in is kept
+- [x] Test: a promise whose own chapter does not exist is dropped
+- [x] Suite green: 564 passed, 354 subtests (era 542, 346). Reinstall, commit & push
+- [~] Re-audit landfall from the repaired design
+
+**Done when:** No finding rests on a chapter the book does not have.
+
+## A set-aside row is a note in the report, not a stop ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**The rule the user set tonight:** the pipeline decides everything itself and asks nobody. A verdict of `needs_review` does the opposite — it stops a finished audit and hands a person a row the engine already knows it cannot use.
+
+It is also a state the driver cannot leave. `_book_design_is_incomplete` clears the design only on `design_clean`, so `needs_review` re-dispatches the design stage, which re-audits, which sets the same row aside again: the run either halts on `AdvanceHalted` or circles. The third state buys nothing that the `unverifiable` list on the same record does not already carry.
+
+**Fix.** The verdict is `blocked` or `design_clean`, decided on the findings the engine could bind. A row it could not bind is recorded in `unverifiable`, printed with why, and the run continues. Nothing is lost — every set-aside row is on disk, with the citations that did not resolve, for anyone who wants to read them.
+
+**Tasks:**
+- [x] `_design_audit_record` drops `needs_review`: the state is `blocked` or `design_clean`
+- [x] Neither `_design_audit_record` nor `run_book_design` raises `AdvanceHalted` on set-aside rows
+- [x] The set-aside rows are reported on stderr as a group before the run continues
+- [x] Test: an audit with one unbindable row and no blocking finding returns `design_clean` and does not raise
+- [x] Test: an audit with one unbindable row and one blocking finding returns `blocked`
+- [x] Test: the set-aside rows survive on the record in both cases
+
+Found while writing the tests, and fixed here: a stored verdict was checked against the auditor that wrote it only when it was *not* clean. The check sits behind an early return that fires first, so a clean verdict written under a different auditor was handed straight back — the case where the check is the whole point. Both the book path and the universe path had it.
+
+- [x] The early return takes a clean verdict only when it answers the question the auditor asks today, on both paths
+- [x] Test: a verdict whose question has changed is audited again, and only the audit runs
+
+**Done when:** No audit outcome waits for a person.
+
+## A block the pipeline requires is written, not skipped ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**Measured on landfall.** Ten characters in canon, one `#voice` block among them — CHR-0001's. Three of the four points of view have none: Weyr, Ren, Flint. Six chapter contracts name a POV whose voice does not exist, so six chapters would be written with the character's summary and no voice at all.
+
+The guard that should have caught it is the reason it passed. `validate` asks that a chapter import its POV's `#summary` and `#voice` — but only `if value in known_blocks`. A block that was never written is not in the index, so the requirement disappears exactly when the block is missing. The check is on the import, and the hole is in the canon.
+
+The universe designer is asked for `voice` in the characters chunk and returned it once in ten. Nothing rejected the other nine, because tier word counts are enforced across the joined blocks and a long summary pays for a missing voice.
+
+**Fix.** Before the design audit, the engine lists the blocks the pipeline requires and canon does not have — today, the `#voice` of every character a chapter takes as its POV — and asks the designer for exactly those, in one bounded call over the POV cast, sliced if the cast is large. The blocks are appended to the canon files, the index is rebuilt, and the chapters that lacked the import get it. Then the guard is unconditional: a POV whose `#voice` is still missing is blocking.
+
+**Tasks:**
+- [x] `_missing_pov_voices` lists, per book, the `#voice` blocks its POV characters lack
+- [x] A bounded `voices` design call asks the designer for exactly those, at most `DESIGN_VOICE_SLICE_SIZE` characters per call
+- [x] The returned voice is appended to the character's canon file as a `bf:block voice`
+- [x] The index is rebuilt and every chapter with that POV gains the import
+- [x] `validate` asks the character, not the block: a POV in canon owes `#summary` and `#voice` whether or not the block was ever written
+- [x] The call is remembered in the call cache like every other design chunk
+- [x] Test: a book with two POVs missing a voice gets both written, and the chapters gain the imports
+- [x] Test: a book whose voices all exist makes no call
+- [x] Test: `validate` blocks on a POV with no voice block in canon
+- [x] Test: the cast is sliced when it exceeds the slice size
+- [x] Suite green: 564 passed, 354 subtests (era 542, 346). Reinstall, commit & push
+- [~] Landfall: the missing voices written, the chapters re-imported
+
+**Done when:** No chapter is written against a character the canon does not describe.
