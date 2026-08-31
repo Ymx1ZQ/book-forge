@@ -98,7 +98,11 @@ class BookLengthTests(unittest.TestCase):
         book = bf.add_book(project, "A")["id"]
         (project / f"books/{book}/book-brief.json").write_text(json.dumps({
             "schema": 1, "premise": "A diver must decide.", "characters": ["Mara"],
-            "plot": ["dive"], "tone": "quiet", "length_notes": f"{chapter_count} chapters",
+            # Zero-padded so the two briefs are byte-identical in length: the spine
+            # test asserts the call does not grow with the book, and a brief that is
+            # one character longer for a longer book is the book leaking in by the
+            # back door. Padding removes the confound instead of widening the assert.
+            "plot": ["dive"], "tone": "quiet", "length_notes": f"{chapter_count:03d} chapters",
         }))
         provider = RecordingProvider(bf, chapter_count)
         result = bf.execute_book_design(project, book, provider=provider, no_chorus=True, no_post_chorus=True)

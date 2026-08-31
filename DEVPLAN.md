@@ -3417,3 +3417,42 @@ So the rescue covers the rarer failure and not the common one. Landfall's first 
 - [x] Suite green: 573 passed, 354 subtests (era 570). Reinstall, commit & push
 
 **Done when:** No single pass can end an audit.
+
+## The writer's model is chosen from three drafts of the same chapter 🔄
+
+**Status: 🔄 In progress — 2026-08-31**
+
+Landfall's design is closed and not one chapter is written, so the model that writes the prose can still be changed for nothing. Today it cannot be changed on its own: `_write_agents` writes `model: {MODEL}` into every role file in `ROLE_SPECS`, so the writer is DeepSeek v4 Flash because the canon-auditor is. `variant` is the only knob that a role owns — the writer runs at `low`, the judge at `max`.
+
+Three things block a per-role model. `_write_agents` has no source for it. `record_execution` verifies the provider receipt against `expected_models = {MODEL, ...}` for any role in `ROLE_SPECS`, so a receipt from another model is refused as a broken pin. And the envelope does not name the model that will answer it, so the same chapter contract asked of two models hashes to one cache key and the second model would be handed the first's draft.
+
+**Fairness of the comparison.** `qwen3.8-flash` is the one model in the catalog whose reasoning effort is not steerable: its ladder is `{"high": "high"}` and nothing else. `high` is therefore the only step the three candidates share, and the bake-off pins all of them to it — otherwise the measurement compares three efforts as much as three models. The chosen writer keeps `high` for the book, since that is the setting the drafts were read at.
+
+**No promotion.** The route writes three drafts and stops. Which prose convinces is the user's judgement and the only decision in this pipeline that is theirs by design; the engine's job is to put the three side by side, not to pick.
+
+**Tasks:**
+- [x] One resolver reads `roles.<role>.model` and `roles.<role>.variant` from `book-forge.yaml`, falling back to `MODEL` and the `ROLE_SPECS` variant
+- [x] `_write_agents` pins the overridden role's agent file to the resolved model and variant, leaving every other role where it was
+- [x] `_expected_pin` and `record_execution` verify against the resolved pin, and still refuse a receipt from a model nobody asked for
+- [x] A variant the target model does not offer is refused when the config is read, naming the ladder it does offer
+- [x] `_opencode_config` lists the resolved writer model in the generated provider catalog even when it is not a chorus model
+- [x] The envelope carries the resolved model and variant, so one capsule asked of two models is two cache entries
+- [x] Test: an overridden writer writes its agent file pinned to that model, and the other eight roles are untouched
+- [x] Test: a receipt from the overridden model is accepted and one from `MODEL` is refused
+- [x] Test: the same contract drafted by two models leaves two cache entries, and neither is served to the other
+- [x] Test: a variant outside the target's ladder is refused with that ladder in the message
+- [x] `draft-bakeoff <book> <chapter> --models a,b,c` drafts one chapter under each model into `books/<book>/work/<chapter>/bakeoff/<slug>/`
+- [x] Every candidate is given the same capsule, the same brief and `high` effort
+- [x] Each draft passes `validate_writer_output` before it is written; a candidate that fails is recorded and the others still land
+- [x] `bakeoff.json` records model, variant, word count, cost and wall time for each candidate
+- [x] The route never writes `work/<chapter>/draft.md` and never closes the chapter
+- [x] Test: three fake providers leave three drafts, one index and no promotion
+- [x] Test: one candidate returning unusable prose is recorded while the other two land
+- [x] The bake-off makes every plan write on the way back, on one thread: three threads racing on `plan.json` killed the third candidate with two already paid for
+- [x] The spine bound test compares two briefs of equal length, so one character of brief no longer decides a token
+- [x] Suite green: 590 passed, 354 subtests (era 573). Reinstall, commit & push
+- [x] `margherita` runtime regenerated from its own config, its writer left on DeepSeek at `low`; `opencode.json` came out byte-identical
+- [ ] Run it on landfall CH-0001 with `deepseek-v4-flash-0731`, `glm-5.3-flash` and `qwen3.8-flash`
+- [ ] Set `roles.writer` — model and variant both — to the model the user picks, and record the choice here
+
+**Done when:** `roles.writer.model` decides who writes the book, and CH-0001 exists three times so that decision can be made by reading.

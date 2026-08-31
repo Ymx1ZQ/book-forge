@@ -62,7 +62,12 @@ class RuntimeSyncTests(unittest.TestCase):
         self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
 
         agents = self.project / ".opencode" / "agents"
-        expected_agents = set(self.bf.ROLE_SPECS) | {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
+        expected_agents = (
+            set(self.bf.ROLE_SPECS)
+            | {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
+            | {self.bf._writer_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
+            | {self.bf.CHORUS_SYNTHESIZER_AGENT}
+        )
         self.assertEqual({path.stem for path in agents.glob("*.md")}, expected_agents)
         for name, (_, variant, _) in self.bf.ROLE_SPECS.items():
             self.assertIn(f"variant: {variant}", (agents / f"{name}.md").read_text())

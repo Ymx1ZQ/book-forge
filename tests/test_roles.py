@@ -58,7 +58,12 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertTrue(set(expected) <= set(files), f"missing primary roles: {set(expected) - set(files)}")
         expected_chorus = {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
         self.assertTrue(expected_chorus <= set(files), f"missing chorus agents: {expected_chorus - set(files)}")
-        self.assertEqual(set(files), set(expected) | expected_chorus)
+        # A writer agent per catalogue model: the bake-off needs several pins live
+        # at once, and the set stays exact so a stray agent is still a failure.
+        expected_writers = {self.bf._writer_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {
+            self.bf._writer_candidate_name("openrouter/x-ai/grok-4.6")
+        }
+        self.assertEqual(set(files), set(expected) | expected_chorus | expected_writers)
         for name, (mode, variant) in expected.items():
             body = files[name]
             self.assertIn(f"mode: {mode}", body)

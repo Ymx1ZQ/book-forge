@@ -33,6 +33,7 @@ reference before acting:
 | `translate` | `references/translate.md` |
 | `chorus` | `references/chorus.md` |
 | `export` | `references/export.md` |
+| `bakeoff` | `references/bakeoff.md` |
 
 For a multi-command request, finish and checkpoint one command before loading
 the next route. Do not read the development plan, unrelated references, whole

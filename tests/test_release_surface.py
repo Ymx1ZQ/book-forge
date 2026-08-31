@@ -19,7 +19,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
     def test_skill_is_a_thin_one_level_router_with_every_public_route(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertLess(len(skill.splitlines()), 300)
-        routes = {"init", "catalog", "design", "run", "lifecycle", "audit", "translate", "export", "chorus"}
+        routes = {"init", "catalog", "design", "run", "lifecycle", "audit", "translate", "export", "chorus", "bakeoff"}
         for route in routes:
             reference = ROOT / "references" / f"{route}.md"
             self.assertTrue(reference.is_file(), route)
@@ -31,7 +31,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
         subcommands = next(action for action in parser._actions if action.dest == "command").choices
         self.assertEqual(
             set(subcommands),
-            {"init", "runtime", "migrate", "continuity", "add-book", "relate", "collection", "design", "run", "pause", "resume", "status", "reset", "advance", "artifacts", "translate", "audit", "chorus", "export"},
+            {"init", "runtime", "migrate", "continuity", "add-book", "relate", "collection", "design", "run", "pause", "resume", "status", "reset", "advance", "artifacts", "translate", "audit", "chorus", "export", "bakeoff"},
         )
 
     def test_fresh_project_has_agent_config_but_no_claude_or_project_shell_dependency(self):

@@ -202,20 +202,94 @@ CHORUS_ADVISOR_SPECS: dict[str, tuple[str, str, int]] = {
 CHORUS_SYNTHESIZER_AGENT = "chorus-synthesizer"
 # Reverse map advisor agent name -> model id, for resolved-pin verification.
 CHORUS_ADVISOR_MODELS: dict[str, str] = {_chorus_advisor_name(m): m for m in CHORUS_MODEL_CONFIGS}
+# One writer agent per catalogue model. Drafting a chapter with several models at
+# once needs several pins live in the same project, which a single `writer` agent
+# cannot hold; these are that agent once per model, sharing its prompt, its budget
+# and the project register, one pin apart.
+def _writer_candidate_name(model: str) -> str:
+    return f"writer-{_chorus_slug(model)}"
 
 
-def _expected_pin(role: str) -> tuple[str, str]:
-    """Expected (model_id, variant) of the resolved agent for a role, mirroring _write_agents."""
-    if role in ROLE_SPECS:
-        return MODEL_ID, ROLE_SPECS[role][1]
+# Every model in the catalogue offers `high`, and it is the only step `qwen3.8-flash`
+# offers at all. Pinning the candidates to it compares three models rather than
+# three efforts, and the winner is kept at the effort its draft was read at.
+BAKEOFF_VARIANT = "high"
+WRITER_CANDIDATE_MODELS: dict[str, str] = {_writer_candidate_name(m): m for m in CHORUS_MODEL_CONFIGS}
+
+
+def _project_config(root: Path) -> dict[str, object]:
+    """The project's book-forge.yaml, or an empty config where there is none yet."""
+    try:
+        return _read_json(root / "book-forge.yaml")
+    except (OSError, ValueError):
+        return {}
+
+
+def _role_overrides(config: dict[str, object] | None) -> dict[str, dict[str, object]]:
+    roles = (config or {}).get("roles")
+    if not isinstance(roles, dict):
+        return {}
+    return {str(name): value for name, value in roles.items() if isinstance(value, dict)}
+
+
+def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
+    """The (model, variant) a role runs under, as a full `openrouter/...` path.
+
+    One constant used to answer for every role, so the writer was DeepSeek because
+    the canon-auditor was, and the only way to change the prose model was to move
+    the whole pipeline onto it. A project names its exception under `roles.<role>`
+    in book-forge.yaml and nothing else moves.
+    """
+    if role in WRITER_CANDIDATE_MODELS:
+        return WRITER_CANDIDATE_MODELS[role], BAKEOFF_VARIANT
     if role == CHORUS_SYNTHESIZER_AGENT:
         cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
         variant = str(cfg.get("default_effort", "max")) if isinstance(cfg, dict) else "max"
-        return CHORUS_SYNTHESIZER.split("/", 1)[1], variant
-    model = CHORUS_ADVISOR_MODELS.get(role)
-    if model is None:
+        return CHORUS_SYNTHESIZER, variant
+    if role in CHORUS_ADVISOR_MODELS:
+        return CHORUS_ADVISOR_MODELS[role], CHORUS_ADVISOR_SPECS[role][1]
+    if role.startswith("advisor-"):
+        # A project may name a chorus model the catalogue never heard of. It gets an
+        # agent, a generic lens and the default ladder, and it must keep them: the
+        # pin it runs under is the one its own project declared.
+        for model in _chorus_models_from_config(config or {}):
+            if _chorus_advisor_name(model) == role:
+                cfg = CHORUS_MODEL_CONFIGS.get(model, {})
+                return model, str(cfg.get("default_effort", DEFAULT_EFFORT))
+    if role not in ROLE_SPECS:
         raise BookForgeError(f"Role cannot run headlessly: {role}")
-    return model.split("/", 1)[1], CHORUS_ADVISOR_SPECS[role][1]
+    model, variant = MODEL, ROLE_SPECS[role][1]
+    override = _role_overrides(config).get(role)
+    if not override:
+        return model, variant
+    requested_model = str(override.get("model") or "").strip()
+    if requested_model:
+        if requested_model not in CHORUS_MODEL_CONFIGS:
+            raise BookForgeError(
+                f"roles.{role}.model names a model the catalogue does not configure: {requested_model}. "
+                f"Known: {', '.join(sorted(CHORUS_MODEL_CONFIGS))}"
+            )
+        model = requested_model
+    ladder = CHORUS_MODEL_CONFIGS[model].get("variants") or {}
+    requested_variant = str(override.get("variant") or "").strip()
+    if requested_variant:
+        if requested_variant not in ladder:
+            raise BookForgeError(
+                f"roles.{role}.variant {requested_variant} is not a step {model} offers: "
+                f"{', '.join(sorted(ladder))}"
+            )
+        variant = requested_variant
+    elif variant not in ladder:
+        # The role's own effort is not on the new model's ladder, and a step it does
+        # not have cannot be asked for. Its declared operating point stands in.
+        variant = str(CHORUS_MODEL_CONFIGS[model].get("default_effort", DEFAULT_EFFORT))
+    return model, variant
+
+
+def _expected_pin(role: str, config: dict[str, object] | None = None) -> tuple[str, str]:
+    """Expected (model_id, variant) of the resolved agent for a role, mirroring _write_agents."""
+    model, variant = _role_pin(config, role)
+    return model.split("/", 1)[1], variant
 
 
 class BookForgeError(RuntimeError):
@@ -338,9 +412,16 @@ def _block_record(block: str) -> dict[str, str]:
     return {"block": block, "hash": hashlib.sha256(block.encode()).hexdigest()}
 
 
-def _opencode_config(chorus_models: list[str] | None = None) -> dict[str, object]:
+def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> dict[str, object]:
     """Build opencode.json with primary model + chorus catalog + style review models (even if not in chorus.models)."""
     models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    # A role pinned to a model outside the chorus would resolve against a catalogue
+    # that never heard of it, and the agent would die on its first call.
+    models = list(models)
+    for role_name in ROLE_SPECS:
+        pinned = _role_pin(config, role_name)[0]
+        if pinned not in models:
+            models.append(pinned)
     # Ensure primary MODEL is included even if caller filters.
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
@@ -585,7 +666,7 @@ def _parse_chorus_csv(csv: str | None) -> list[str] | None:
     return out
 
 
-def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
+def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> None:
     # Ensure style review models have advisors even if not in chorus.models
     if chorus_models is not None:
         extended = list(chorus_models)
@@ -597,7 +678,8 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
         chorus_models = extended
     agents = stage / ".opencode" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
-    for name, (mode, variant, steps) in ROLE_SPECS.items():
+    for name, (mode, _variant, steps) in ROLE_SPECS.items():
+        model, variant = _role_pin(config, name)
         if name == "book-forge-orchestrator":
             permissions = (
                 'permission:\n  "*": deny\n  skill:\n    "*": deny\n    book-forge: allow\n'
@@ -619,7 +701,7 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
         body = (
             "---\n"
             f"description: Book Forge {name} role.\n"
-            f"mode: {mode}\nmodel: {MODEL}\nvariant: {variant}\nsteps: {steps}\n"
+            f"mode: {mode}\nmodel: {model}\nvariant: {variant}\nsteps: {steps}\n"
             f"{permissions}---\n\n{instruction}\n"
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
@@ -659,7 +741,27 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None) -> None:
             "You have no tools and must not assume context outside the supplied envelope.\n"
         ).encode("utf-8"),
     )
-    allowed = set(ROLE_SPECS) | {_chorus_advisor_name(m) for m in models} | {CHORUS_SYNTHESIZER_AGENT}
+    # One writer per candidate model, so a bake-off has every pin it needs live at once.
+    writer_mode, _writer_variant, writer_steps = ROLE_SPECS["writer"]
+    for mid in models:
+        _write_bytes_atomic(
+            agents / f"{_writer_candidate_name(mid)}.md",
+            (
+                "---\n"
+                f"description: Book Forge writer role, pinned to {mid}.\n"
+                f"mode: {writer_mode}\nmodel: {mid}\nvariant: {BAKEOFF_VARIANT}\nsteps: {writer_steps}\n"
+                'permission:\n  "*": deny\n'
+                "---\n\n"
+                "You are the Book Forge writer role. Return only the task's requested output contract. "
+                "You have no tools and must not assume context outside the supplied envelope.\n"
+            ).encode("utf-8"),
+        )
+    allowed = (
+        set(ROLE_SPECS)
+        | {_chorus_advisor_name(m) for m in models}
+        | {_writer_candidate_name(m) for m in models}
+        | {CHORUS_SYNTHESIZER_AGENT}
+    )
     for stale in agents.glob("*.md"):
         if stale.stem not in allowed:
             stale.unlink()
@@ -776,8 +878,8 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "style": {"preset": _style, "directives": []},
     }
     _write_json(stage / "book-forge.yaml", config)
-    _write_json(stage / "opencode.json", _opencode_config(_cm))
-    _write_agents(stage, _cm)
+    _write_json(stage / "opencode.json", _opencode_config(_cm, config))
+    _write_agents(stage, _cm, config)
     _write_json(
         stage / "universe" / "universe.yaml",
         {
@@ -880,15 +982,15 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
     root = _project_root(project)
     config = _read_json(root / "book-forge.yaml")
     chorus_models = _chorus_models_from_config(config)
-    _write_json(root / "opencode.json", _opencode_config(chorus_models))
-    _write_agents(root, chorus_models)
+    _write_json(root / "opencode.json", _opencode_config(chorus_models, config))
+    _write_agents(root, chorus_models, config)
     return {
         "synced": True,
         "project": str(root),
         "model": MODEL,
         "default_effort": DEFAULT_EFFORT,
         "variants": VARIANT_EFFORTS,
-        "roles": {name: spec[1] for name, spec in ROLE_SPECS.items()},
+        "roles": {name: dict(zip(("model", "variant"), _role_pin(config, name))) for name in ROLE_SPECS},
         "chorus_models": chorus_models,
         "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
     }
@@ -1414,7 +1516,9 @@ def add_task(
 ) -> dict[str, object]:
     root = _project_root(project)
     plan = _load_plan(root)
-    if (role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS) or role in {"book-forge-orchestrator", "book-forge-smoke"}:
+    if (
+        role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role not in WRITER_CANDIDATE_MODELS
+    ) or role in {"book-forge-orchestrator", "book-forge-smoke"}:
         raise BookForgeError(f"Invalid worker role: {role}")
     if any(task["id"] == task_id for task in plan["tasks"]):
         raise BookForgeError(f"Duplicate task: {task_id}")
@@ -1648,12 +1752,8 @@ def record_execution(
     receipt = {"schema": 1, "attempt": attempt_id, "task": attempt["task"], "fence": fence, "output_hash": output_hash, "outcome": "observed"}
     if telemetry:
         role = str(attempt["role"])
-        if role in ROLE_SPECS:
-            expected_variant = ROLE_SPECS[role][1]
-            expected_models = {MODEL, MODEL.split("/", 1)[1]}
-        else:
-            expected_variant = CHORUS_ADVISOR_SPECS[role][1]
-            expected_models = {CHORUS_ADVISOR_MODELS[role], CHORUS_ADVISOR_MODELS[role].split("/", 1)[1]}
+        expected_model, expected_variant = _role_pin(_project_config(root), role)
+        expected_models = {expected_model, expected_model.split("/", 1)[1]}
         observed_model = str(telemetry.get("model"))
         if telemetry.get("provider") != "openrouter" or observed_model not in expected_models:
             raise BookForgeError("Provider receipt does not match the pinned OpenRouter model")
@@ -2012,17 +2112,19 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
         # A chorus advisor and the style-review models run their own pinned model by
         # design; measuring them against the primary pin turned every style review into
         # a violation. Each is checked against its own pin instead.
-        pinned = {MODEL, MODEL.split("/", 1)[1]}
-        if role.startswith("advisor-") or role == CHORUS_SYNTHESIZER_AGENT:
-            try:
-                own = _expected_pin(role)[0]
-                pinned = {own, f"openrouter/{own}"}
-            except BookForgeError:
-                pinned = set()
+        try:
+            own = _expected_pin(role, _project_config(root))[0]
+            pinned = {own, f"openrouter/{own}"}
+        except BookForgeError:
+            pinned = set()
         if receipt.get("provider") != "openrouter" or (pinned and str(receipt.get("model")) not in pinned):
             violations.append({"code": "model_pin", "task": task_id, "role": role, "detail": "provider or model differs from the role's OpenRouter pin"})
-        if expected and receipt.get("variant") != expected[1]:
-            violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected[1]}, found {receipt.get('variant')}"})
+        try:
+            expected_variant = _expected_pin(role, _project_config(root))[1]
+        except BookForgeError:
+            expected_variant = None
+        if expected_variant and receipt.get("variant") != expected_variant:
+            violations.append({"code": "variant_pin", "task": task_id, "detail": f"expected {expected_variant}, found {receipt.get('variant')}"})
         estimated = int(receipt.get("estimated_input_tokens", 0) or 0)
         provider_input = int((receipt.get("tokens") or {}).get("input", 0) or 0)
         chunk_telemetry = receipt.get("chunk_telemetry") or []
@@ -2966,6 +3068,9 @@ ROLE_BUDGETS = {
 for _adv in list(CHORUS_ADVISOR_SPECS):
     ROLE_BUDGETS[_adv] = (16000, 3000)
 ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
+# A writer candidate is the writer: same envelope, same allowance, another pin.
+for _cand in WRITER_CANDIDATE_MODELS:
+    ROLE_BUDGETS[_cand] = ROLE_BUDGETS["writer"]
 
 
 def _enforce_budgets(root: Path) -> bool:
@@ -2982,14 +3087,14 @@ def _enforce_budgets(root: Path) -> bool:
     return bool(ctx.get("enforce_budgets", False)) if isinstance(ctx, dict) else False
 
 
-def _model_input_window(role: str, max_output_tokens: int) -> int:
+def _model_input_window(role: str, max_output_tokens: int, model: str = MODEL) -> int:
     """What the pinned model can actually accept, less its own answer.
 
     A quarter of the window is the hard wall: far above any real envelope, so it
     never stops a book, and low enough that a runaway accumulation still trips it
     instead of buying a million-token call.
     """
-    limits = CHORUS_MODEL_CONFIGS.get(MODEL, {}).get("limit") or {}
+    limits = CHORUS_MODEL_CONFIGS.get(model, {}).get("limit") or {}
     context_window = int(limits.get("context") or 0)
     if context_window <= 0:
         return ROLE_BUDGETS[role][0] * 8
@@ -3086,10 +3191,26 @@ def build_envelope(
     root = _project_root(project)
     if role not in ROLE_BUDGETS:
         raise BookForgeError(f"Role has no envelope budget: {role}")
-    default_input, output_budget = ROLE_BUDGETS[role]
+    config = _project_config(root)
+    try:
+        pinned_model, pinned_variant = _role_pin(config, role)
+    except BookForgeError:
+        # An advisory role the project never declared has no pin to resolve. The
+        # envelope still gets built and the call still runs; what it records is the
+        # engine default, which is what it recorded for every role before pins were
+        # per-role. A role that must account for itself is checked at the receipt.
+        pinned_model, pinned_variant = MODEL, DEFAULT_EFFORT
+    # A writer candidate is the writer with another pin: it reads the same prompt,
+    # is held to the same register, and is measured against the same budget. Asking
+    # it under its own name would give it a smaller envelope than the role it is
+    # standing in for, and the comparison would be of two envelopes.
+    base_role = "writer" if role in WRITER_CANDIDATE_MODELS else role
+    if prompt_role is None and role in WRITER_CANDIDATE_MODELS:
+        prompt_role = "writer"
+    default_input, output_budget = ROLE_BUDGETS[base_role]
     budget = default_input if input_budget is None else input_budget
     if input_budget is None:
-        budget = _envelope_input_budget(root, role)
+        budget = _envelope_input_budget(root, base_role)
     if max_output_tokens <= 0 or max_output_tokens > output_budget:
         raise BookForgeError(f"Output allowance {max_output_tokens} exceeds {role} budget {output_budget}")
     # The style review keeps each reviewer's model pin but not its chorus lens: the
@@ -3120,7 +3241,8 @@ def build_envelope(
             context.append({"id": block_id, "hash": index["blocks"][block_id]["hash"], "content": _block_content(root, block_id, index)})
     payload = {
         "schema": 1,
-        "model": MODEL,
+        "model": pinned_model,
+        "variant": pinned_variant,
         "role": role,
         "role_prompt": role_prompt,
         "task": clean_task,
@@ -3150,7 +3272,7 @@ def build_envelope(
         ],
         key=lambda row: (-int(row["estimated_tokens"]), str(row["name"])),
     )
-    hard_ceiling = budget if (input_budget is not None or _enforce_budgets(root)) else _model_input_window(role, max_output_tokens)
+    hard_ceiling = budget if (input_budget is not None or _enforce_budgets(root)) else _model_input_window(base_role, max_output_tokens, pinned_model)
     if estimate > hard_ceiling:
         raise ContextOverflowError(estimate, hard_ceiling, contributors)
     if estimate > budget:
@@ -6861,7 +6983,12 @@ def _wire_bytes(payload: object) -> bytes:
 
 def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
     # Chorus advisors are allowed despite not being in ROLE_SPECS.
-    if role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role != CHORUS_SYNTHESIZER_AGENT:
+    if (
+        role not in ROLE_SPECS
+        and role not in CHORUS_ADVISOR_SPECS
+        and role not in WRITER_CANDIDATE_MODELS
+        and role != CHORUS_SYNTHESIZER_AGENT
+    ):
         raise BookForgeError(f"Role cannot run headlessly: {role}")
     if role in ROLE_SPECS and ROLE_SPECS[role][0] not in {"all", "primary"}:
         raise BookForgeError(f"Role cannot run headlessly: {role}")
@@ -6880,7 +7007,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         raise BookForgeError(f"OpenCode could not resolve agent {role}: {resolved_result.stderr.strip()}")
     resolved = json.loads(resolved_result.stdout)
     resolved_model = resolved.get("model", {})
-    expected_model_id, expected_variant = _expected_pin(role)
+    expected_model_id, expected_variant = _expected_pin(role, _project_config(root))
     if (
         resolved.get("name") != role
         or resolved_model.get("providerID") != "openrouter"
@@ -7131,6 +7258,179 @@ def draft_chapter(
         promote_task(root, claim["attempt"], claim["fence"])
         return {"state": "drafted", "book": book_id, "chapter": chapter_id, "calls": call_number, "receipt": receipt}
     raise BookForgeError("Unreachable draft workflow state")
+
+
+def _resolve_catalogue_model(name: str) -> str:
+    """A catalogue model from what a person would type for it."""
+    if name in CHORUS_MODEL_CONFIGS:
+        return name
+    for candidate in CHORUS_MODEL_CONFIGS:
+        if name in {candidate.split("/", 1)[1], candidate.split("/")[-1], _chorus_slug(candidate)}:
+            return candidate
+    raise BookForgeError(
+        f"Not a catalogue model: {name}. Known: {', '.join(sorted(CHORUS_MODEL_CONFIGS))}"
+    )
+
+
+def draft_bakeoff(
+    project: Path | str,
+    book_id: str,
+    chapter_id: str,
+    models: list[str],
+    *,
+    provider=None,
+) -> dict[str, object]:
+    """Draft one chapter under several models and promote none of them.
+
+    Which prose convinces is the one judgement in this pipeline that belongs to a
+    person, so this route stops at three drafts on disk. Every candidate is handed
+    the identical capsule at the identical effort, and what each one cost is
+    recorded beside its draft, because a model that reads better and costs four
+    times as much is a different decision from one that only reads better.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    if contract.get("book") != book_id or contract.get("id") != chapter_id:
+        raise BookForgeError("Chapter contract identity mismatch")
+    resolved: list[str] = []
+    for name in models:
+        model = _resolve_catalogue_model(str(name).strip())
+        if model not in resolved:
+            resolved.append(model)
+    if len(resolved) < 2:
+        raise BookForgeError("A bake-off compares at least two models")
+    config = _project_config(root)
+    # The candidates must be resolvable before they are claimed: a model outside the
+    # project's chorus has no agent and no catalogue entry, and would die at the probe
+    # with a claim already taken. Regenerating the runtime over the union is the same
+    # operation `runtime sync` performs, so the state stays reproducible from config.
+    catalogue = list(_chorus_models_from_config(config))
+    union = catalogue + [model for model in resolved if model not in catalogue]
+    _write_json(root / "opencode.json", _opencode_config(union, config))
+    _write_agents(root, union, config)
+
+    prefix = f"books/{book_id}/work/{chapter_id}/bakeoff"
+    claims = []
+    for model in resolved:
+        slug = _chorus_slug(model)
+        role = _writer_candidate_name(model)
+        task_id = f"BAKE-{slug}-{book_id}-{chapter_id}"
+        outputs = [f"{prefix}/{slug}/draft.md", f"{prefix}/{slug}/beat-map.json", f"{prefix}/{slug}/consequences.json"]
+        plan = _load_plan(root)
+        if not any(task["id"] == task_id for task in plan["tasks"]):
+            add_task(root, task_id, role, priority=40, outputs=outputs)
+        envelope = build_envelope(
+            root,
+            role=role,
+            prompt_role="writer",
+            task_capsule=dict(contract),
+            imports=list(contract.get("imports", [])),
+            state={
+                "book_state": _read_json(root / "books" / book_id / "state.yaml"),
+                "previous_chapter_tail": "",
+            },
+            tools=[],
+            max_output_tokens=min(6000, max(1000, int(contract["target_words"]) * 2)),
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        claims.append((model, slug, role, task_id, outputs, envelope, claim, Path(claim["capsule"]).parent))
+
+    def _ask(entry):
+        """The provider call and nothing else.
+
+        The plan is one file behind one hash, and three threads writing it raced:
+        each read a plan the next had already replaced, and the third died on a
+        hash mismatch with two drafts paid for. Every mutation is made on the way
+        back, in order, where the bookkeeping is single-file again.
+        """
+        _model, _slug, role, _task_id, _outputs, envelope, _claim, attempt_dir = entry
+        _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+        started = time.monotonic()
+        try:
+            return {"result": runner(role, envelope, attempt_dir), "seconds": round(time.monotonic() - started, 1)}
+        except BookForgeError as exc:
+            return {"error": str(exc), "seconds": round(time.monotonic() - started, 1)}
+
+    with ThreadPoolExecutor(max_workers=len(claims)) as executor:
+        answers = list(executor.map(_ask, claims))
+
+    outcomes = []
+    for entry, answer in zip(claims, answers):
+        model, slug = entry[0], entry[1]
+        claim = entry[6]
+        if "error" in answer:
+            outcomes.append({"model": model, "slug": slug, "state": "no_answer", "detail": answer["error"], "seconds": answer["seconds"]})
+            continue
+        result = answer["result"]
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        try:
+            parsed = validate_writer_output(contract, str(result["text"]))
+        except BookForgeError as exc:
+            # A candidate that will not produce a usable chapter is a result about
+            # that candidate, not a reason to throw away the drafts that landed.
+            outcomes.append({"model": model, "slug": slug, "state": "unusable", "detail": str(exc), "seconds": answer["seconds"], "result": result})
+            continue
+        outcomes.append({"model": model, "slug": slug, "state": "drafted", "parsed": parsed, "result": result, "seconds": answer["seconds"]})
+
+    candidates = []
+    for entry, outcome in zip(claims, outcomes):
+        model, slug, role, task_id, outputs, envelope, claim, _attempt_dir = entry
+        row = {
+            "model": model,
+            "variant": BAKEOFF_VARIANT,
+            "slug": slug,
+            "task": task_id,
+            "state": outcome["state"],
+            "seconds": outcome["seconds"],
+        }
+        if outcome["state"] != "drafted":
+            row["detail"] = outcome.get("detail", "")
+            _set_attempt_failure(root, claim["attempt"], block=False, reason=str(row["detail"]))
+            candidates.append(row)
+            print(f"[bakeoff] {slug} produced no usable draft: {row['detail']}", file=sys.stderr)
+            continue
+        parsed, result = outcome["parsed"], outcome["result"]
+        prose = str(parsed["prose_markdown"]).rstrip() + "\n"
+        manifest = stage_outputs(root, claim["attempt"], {
+            outputs[0]: prose,
+            outputs[1]: _json_bytes({"schema": 1, "chapter": chapter_id, "beats": parsed["beat_map"]}),
+            outputs[2]: _json_bytes({"schema": 1, "chapter": chapter_id, "consequences": parsed["consequences"]}),
+        })
+        record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=_provider_telemetry(result, envelope),
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+        row.update({
+            "draft": outputs[0],
+            "words": len(prose.split()),
+            "target_words": int(contract["target_words"]),
+            "cost": result.get("cost"),
+            "tokens": result.get("tokens"),
+        })
+        candidates.append(row)
+
+    index = {
+        "schema": 1,
+        "book": book_id,
+        "chapter": chapter_id,
+        "title": contract.get("title"),
+        "variant": BAKEOFF_VARIANT,
+        "promoted": None,
+        "candidates": sorted(candidates, key=lambda row: str(row["slug"])),
+    }
+    _write_json(root / prefix / "bakeoff.json", index)
+    drafted = [row for row in candidates if row["state"] == "drafted"]
+    print(
+        f"[bakeoff] {len(drafted)}/{len(candidates)} drafts of {chapter_id} in {prefix}/. "
+        "Nothing was promoted and the chapter is not closed.",
+        file=sys.stderr,
+    )
+    return index
 
 
 ADVANCE_STAGES = ("design", "chapters", "translate", "export")
@@ -9730,6 +10030,10 @@ def build_parser() -> argparse.ArgumentParser:
     advance.add_argument("--book", required=True)
     advance.add_argument("--locale", action="append", default=[], help="Translate into this locale; repeatable")
     advance.add_argument("--until", choices=ADVANCE_STAGES, default="export")
+    bakeoff = commands.add_parser("bakeoff")
+    bakeoff.add_argument("book")
+    bakeoff.add_argument("chapter")
+    bakeoff.add_argument("--models", required=True, help="Comma-separated models to draft this chapter with; nothing is promoted")
     export = commands.add_parser("export")
     export.add_argument("book")
     export.add_argument("--lang", required=True)
@@ -9860,6 +10164,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
         elif args.command == "advance":
             print(json.dumps(advance_book(args.project, args.book, locales=args.locale, until=args.until), sort_keys=True))
+        elif args.command == "bakeoff":
+            print(json.dumps(draft_bakeoff(args.project, args.book, args.chapter, [m.strip() for m in args.models.split(",") if m.strip()]), sort_keys=True))
         elif args.command == "export":
             results = {}
             if args.format in {"epub", "all"}:
