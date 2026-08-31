@@ -2482,14 +2482,28 @@ def resume_run(
         choice = choices[task_id]
         if choice not in {"retry", "abandon"}:
             raise BookForgeError(f"Invalid unknown resolution for {task_id}: {choice}")
-        attempt = _attempt(plan, str(task["attempt"]))
+        # The task may carry no attempt: lease recovery marks a task
+        # outcome_unknown from its attempt's side, and `_set_attempt_failure` pops
+        # the pointer, so the two together produce a task in the one state that
+        # requires a resolution and no attempt to resolve. Landfall reached it, and
+        # `resume` died on `KeyError: 'attempt'` — the recovery command crashing on
+        # the state its own recovery writes. The most recent attempt of the task is
+        # the one the resolution is about.
+        attempt = None
+        if task.get("attempt"):
+            attempt = _attempt(plan, str(task["attempt"]))
+        else:
+            owned = [row for row in plan["attempts"] if str(row.get("task")) == task_id]
+            attempt = owned[-1] if owned else None
         if choice == "retry":
-            attempt["state"] = "orphaned"
-            attempt["resolution"] = "retry"
+            if attempt is not None:
+                attempt["state"] = "orphaned"
+                attempt["resolution"] = "retry"
             task["state"] = "pending"
             task.pop("attempt", None)
         else:
-            attempt["resolution"] = "abandon"
+            if attempt is not None:
+                attempt["resolution"] = "abandon"
             _block_descendants(plan, task_id)
     retryable_blocked: dict[str, dict[str, object]] = {}
     for task in plan["tasks"]:

@@ -175,6 +175,28 @@ class DeadDriverResumeTests(unittest.TestCase):
         task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-BOOK-0001")
         self.assertEqual(task["state"], "pending")
 
+    def test_resume_clears_a_task_left_unknown_with_no_attempt_pointer(self):
+        """Lease recovery marks a task outcome_unknown from the attempt's side, and
+        `_set_attempt_failure` pops the pointer. Together they produce a task in the
+        one state that requires a resolution and no attempt to resolve, and `resume`
+        died on `KeyError: 'attempt'` — the recovery command crashing on the state
+        its own recovery writes. Landfall's audit reached it."""
+        self._stale_accepted_attempt(lease=1.0)
+        plan = self.bf._load_plan(self.root)
+        task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-BOOK-0001")
+        task["state"] = "outcome_unknown"
+        task.pop("attempt", None)
+        self.bf._save_plan(self.root, plan)
+
+        self.bf.resume_run(self.project, resolutions={"DESIGN-BOOK-0001": "retry"})
+
+        plan = self.bf._load_plan(self.root)
+        task = next(row for row in plan["tasks"] if row["id"] == "DESIGN-BOOK-0001")
+        self.assertEqual(task["state"], "pending")
+        attempt = next(row for row in plan["attempts"] if row["id"] == "ATT-9001")
+        self.assertEqual(attempt["state"], "orphaned", "the attempt it belonged to is still resolved")
+        self.assertEqual(attempt["resolution"], "retry")
+
     def test_a_run_with_a_live_lease_still_refuses(self):
         self._stale_accepted_attempt(lease=2 ** 40)
         with self.assertRaises(self.bf.BookForgeError) as caught:

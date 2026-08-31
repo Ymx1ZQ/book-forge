@@ -3374,3 +3374,21 @@ The audit already knows what to do with a pass that gives no answer: halve it, a
 The repair loop got the same treatment: a quiet call there becomes an empty answer and the halving already in place handles it.
 
 **Done when:** A provider that goes quiet costs the pass it was asked, not the run.
+
+## `resume` crashed on the state its own recovery writes ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**Found on landfall, one command after the fix above.** The audit died mid-run with six windows answered, and `resume --resolve-unknown AUDIT-BOOK-0001:retry` — the command the halt message itself names — ended in `KeyError: 'attempt'`.
+
+Two paths write the state and neither writes the other's field. Lease recovery walks the attempts and marks the task `outcome_unknown` from the attempt's side; `_set_attempt_failure` pops the task's `attempt` pointer. Together they leave a task in the one state that demands an explicit resolution, with nothing to resolve it against — and the only way out was editing `plan.json` by hand.
+
+**Fix.** The resolution is about the task's most recent attempt, and it is found that way when the pointer is gone. An `outcome_unknown` task with no attempt at all still resolves: the state is what needs clearing, and the attempt is the bookkeeping.
+
+**Tasks:**
+- [x] `resume_run` falls back to the task's most recent attempt when the pointer is missing
+- [x] A task with no attempt at all still resolves to `pending` on retry
+- [x] Test: a task left `outcome_unknown` with no pointer resumes, and its attempt is still marked
+- [x] Suite green: 570 passed, 354 subtests (era 569). Reinstall, commit & push
+
+**Done when:** No recovery needs a hand-edited plan.
