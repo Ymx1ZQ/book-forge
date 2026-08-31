@@ -237,6 +237,16 @@ class ProviderOutcomeUnknown(BookForgeError):
         super().__init__(message)
 
 
+class ProviderProducedNothing(BookForgeError):
+    """The call passed its clock with nothing accepted on the wire.
+
+    Nothing was accepted, so nothing was paid for and the question can simply be
+    asked again — unlike `ProviderOutcomeUnknown`, where a session id means a
+    retry may pay twice and a person decides. Landfall's re-audit ended on this,
+    six windows in, over a call that cost nothing and could have been re-asked.
+    """
+
+
 def _write_json(path: Path, value: object) -> None:
     _write_bytes_atomic(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
 
@@ -3780,7 +3790,14 @@ def _run_design_chunk(
             return remembered, envelope
         answer = None
         for attempt in range(3):
-            answer = runner("designer", envelope, attempt_dir)
+            try:
+                answer = runner("designer", envelope, attempt_dir)
+            except ProviderProducedNothing as timeout:
+                # Nothing accepted, nothing paid for. A call that goes quiet is the
+                # same event as an answer that came back empty, and the caller below
+                # already splits, then asks for less, on exactly that.
+                print(f"[designer] {slug}{suffix}: {timeout}", file=sys.stderr)
+                return None, envelope
             results.append(answer)
             mark_provider_accepted(root, str(claim["attempt"]), str(answer["session_id"]))
             if answer["finish"] != "length":
@@ -5169,14 +5186,26 @@ def _run_book_audit_chunked(
         # `_forget_task_calls` — since a repair is the one moment the question moves
         # while the auditor's view of it does not.
         result = _cached_call(root, task_id, envelope)
+        silent: BookForgeError | None = None
         if result is not None:
             print(f"[canon-auditor] {slug} answered from a call this project already paid for", file=sys.stderr)
         else:
-            result = runner("canon-auditor", envelope, attempt_dir)
-        results.append(result)
-        mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
-        _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
+            try:
+                result = runner("canon-auditor", envelope, attempt_dir)
+            except ProviderProducedNothing as timeout:
+                # Nothing was accepted, so nothing was paid for and this is a pass
+                # that gave no answer — which the rescue below already knows how to
+                # handle. It used to end the run: landfall's re-audit died here with
+                # six windows already answered.
+                print(f"[canon-auditor] {slug}: {timeout}", file=sys.stderr)
+                silent = timeout
+        if silent is None:
+            results.append(result)
+            mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+            _write_bytes_atomic(attempt_dir / f"raw-{slug}.txt", str(result.get("text", "")).encode())
         try:
+            if silent is not None:
+                raise silent
             value = _parse_contract_json(str(result["text"]))
         except BookForgeError as exc:
             halves = _halve_chunk(chunk)
@@ -5217,12 +5246,30 @@ def _run_book_audit_chunked(
                 max_output_tokens=max_output_tokens,
             )
             _write_bytes_atomic(attempt_dir / f"envelope-{slug}-alone.json", envelope["bytes"])
-            result = runner("canon-auditor", envelope, attempt_dir)
-            results.append(result)
-            mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
-            _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
             try:
+                result = runner("canon-auditor", envelope, attempt_dir)
+                results.append(result)
+                mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+                _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
                 value = _parse_contract_json(str(result["text"]))
+            except ProviderProducedNothing as alone_exc:
+                # Asked twice and silent twice, with nothing accepted either time.
+                # The window goes unread and is recorded as unread; ending the run
+                # here would throw away every pass that did answer, and asking a
+                # person is what this whole line of work removes.
+                print(
+                    f"[canon-auditor] {slug} was asked twice and answered neither time; "
+                    "the window is set aside unread",
+                    file=sys.stderr,
+                )
+                unverifiable.append({
+                    "id": f"A-{slug}-unread",
+                    "pass": slug,
+                    "severity": "note",
+                    "issue": f"This pass was asked twice and produced no answer: {alone_exc}",
+                    "unresolved": [slug],
+                })
+                continue
             except BookForgeError as alone_exc:
                 _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {alone_exc}")
                 raise
@@ -6300,9 +6347,16 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
                 root, role="designer", task_capsule=capsule, imports=imports, state={}, tools=[], max_output_tokens=12288
             )
             _write_bytes_atomic(round_dir / f"envelope-repair-{slug}.json", repair_envelope["bytes"])
-            repaired = runner("designer", repair_envelope, round_dir)
+            try:
+                repaired = runner("designer", repair_envelope, round_dir)
+            except ProviderProducedNothing as timeout:
+                # Nothing accepted, nothing paid for: the same event as an answer
+                # that will not parse, and the halving below is what handles it.
+                print(f"[designer] repair {slug}: {timeout}", file=sys.stderr)
+                repaired = {"text": ""}
+            else:
+                advisors.append({"role": "designer", "slice": slug, **_chorus_telemetry(repaired, repair_envelope)})
             _write_bytes_atomic(round_dir / f"raw-repair-{slug}.txt", str(repaired.get("text", "")).encode())
-            advisors.append({"role": "designer", "slice": slug, **_chorus_telemetry(repaired, repair_envelope)})
             try:
                 value = _parse_chunked_contract(str(repaired.get("text", "")), max_bytes=12288 * 4)
                 rows = {str(row["id"]): row for row in value.get("chapters", []) if isinstance(row, dict) and row.get("id")}
@@ -6862,7 +6916,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         session_id = _session_id_in(exc.stdout)
         if session_id:
             raise ProviderOutcomeUnknown(session_id, str(exc)) from exc
-        raise BookForgeError(str(exc)) from exc
+        raise ProviderProducedNothing(str(exc)) from exc
     _write_bytes_atomic(attempt_dir / "provider-events.jsonl", result.stdout.encode())
     events = []
     for line in result.stdout.splitlines():

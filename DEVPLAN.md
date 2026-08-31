@@ -3345,3 +3345,32 @@ The universe designer is asked for `voice` in the characters chunk and returned 
 - [~] Landfall: the missing voices written, the chapters re-imported
 
 **Done when:** No chapter is written against a character the canon does not describe.
+
+## A call that never answers is a pass to re-ask, not a run to end ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**Measured on landfall's re-audit, twenty minutes in.** Six windows answered, and the seventh died on `OpenCode call for canon-auditor produced no result in 900s`. The run ended there; nothing was written; the six answers survive only in the call cache.
+
+The message is the one that matters. `run_opencode_role` reports a timeout two ways: with a session id on the wire it is `ProviderOutcomeUnknown` — the provider accepted the call, a retry may pay twice, and that is a person's judgement. With nothing on the wire it is a plain `BookForgeError`, which means nothing was accepted and nothing was paid for. Landfall got the second, and the engine ended a seventeen-pass run over a call it could simply have asked again.
+
+The audit already knows what to do with a pass that gives no answer: halve it, and if it cannot be halved, ask about the chapter alone. A call that timed out with nothing accepted **is** a pass that gave no answer. It should reach that rescue instead of the exit.
+
+**Fix.** A timeout with nothing accepted raises its own type, and the loops that already rescue an unparseable answer rescue it too. A pass that produces nothing even when asked alone is set aside — recorded with the window it could not read — and the audit goes on to the next one, since the alternative is asking a person, which is what this whole line of work removes.
+
+**Tasks:**
+- [x] `ProviderProducedNothing` is raised where a timeout carried no session id
+- [x] `ProviderOutcomeUnknown` is untouched: an accepted call still stops for a person
+- [x] The audit loop routes it into the halve-then-ask-alone rescue it already has
+- [x] A pass that produces nothing when asked alone is set aside, naming the chapters it could not read
+- [x] The design chunk loop routes it into its own splitting rescue the same way
+- [x] Test: a runner that times out once on a window and answers the halves reaches a verdict
+- [x] Test: a runner that always times out on one window sets that window aside and audits the rest
+- [x] Test: a timeout carrying a session id still raises `ProviderOutcomeUnknown`
+- [x] Test: a design chunk that times out is split rather than ending the design
+- [x] Suite green: 569 passed, 354 subtests (era 564). Reinstall, commit & push
+- [~] Re-audit landfall
+
+The repair loop got the same treatment: a quiet call there becomes an empty answer and the halving already in place handles it.
+
+**Done when:** A provider that goes quiet costs the pass it was asked, not the run.
