@@ -5266,27 +5266,33 @@ def _run_book_audit_chunked(
                 mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
                 _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
                 value = _parse_contract_json(str(result["text"]))
-            except ProviderProducedNothing as alone_exc:
-                # Asked twice and silent twice, with nothing accepted either time.
-                # The window goes unread and is recorded as unread; ending the run
-                # here would throw away every pass that did answer, and asking a
-                # person is what this whole line of work removes.
+            except BookForgeError as alone_exc:
+                # The last resort has no next resort. Whatever comes back from it —
+                # nothing, or something that will not parse — the window is recorded
+                # as unread and the audit moves on. Ending here puts every pass that
+                # did answer on the floor and asks a person, which is the thing this
+                # whole line of work removes. The rescue used to cover only a silent
+                # provider, and this model's common failure is the other one: an
+                # answer that arrives with its whole budget spent on reasoning.
+                silent_provider = isinstance(alone_exc, ProviderProducedNothing)
                 print(
-                    f"[canon-auditor] {slug} was asked twice and answered neither time; "
-                    "the window is set aside unread",
+                    f"[canon-auditor] {slug} was asked twice and "
+                    + ("answered neither time" if silent_provider else "its second answer could not be read")
+                    + "; the window is set aside unread",
                     file=sys.stderr,
                 )
                 unverifiable.append({
                     "id": f"A-{slug}-unread",
                     "pass": slug,
                     "severity": "note",
-                    "issue": f"This pass was asked twice and produced no answer: {alone_exc}",
+                    "issue": (
+                        f"This pass was asked twice and produced no answer: {alone_exc}"
+                        if silent_provider
+                        else f"This pass was asked twice and its second answer could not be read: {alone_exc}"
+                    ),
                     "unresolved": [slug],
                 })
                 continue
-            except BookForgeError as alone_exc:
-                _set_attempt_failure(root, str(claim["attempt"]), block=True, reason=f"{slug}: {alone_exc}")
-                raise
         try:
             bound = _bind_audit_evidence(root, scope, value, _promise_chapters(open_promises, value.get("open_promises")))
             rows = _validate_audit_output(bound)

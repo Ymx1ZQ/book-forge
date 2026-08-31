@@ -37,9 +37,10 @@ def proposal(chapter_count=6):
 class SilentOnSomeWindows:
     """A provider that goes quiet on named audit passes, the way a hung call does."""
 
-    def __init__(self, bf, silent, forever=False):
+    def __init__(self, bf, silent, forever=False, unreadable=()):
         self.bf = bf
         self.silent = set(silent)
+        self.unreadable = set(unreadable)
         self.forever = forever
         self.calls = []
         self.asked = []
@@ -64,6 +65,15 @@ class SilentOnSomeWindows:
                 if not self.forever:
                     self.silent.discard(slug)
                 raise self.bf.ProviderProducedNothing("OpenCode call for canon-auditor produced no result in 900s")
+            if slug in self.unreadable:
+                # What this model does when it spends its whole budget reasoning:
+                # the call returns, and there is nothing in it to parse.
+                return {
+                    "text": "", "provider": "openrouter", "model": MODEL,
+                    "variant": self.bf.ROLE_SPECS[role][1], "session_id": f"ses-{len(self.calls)}",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 0},
+                    "cost": 0.001, "latency_ms": 5, "finish": "stop",
+                }
             value = {"findings": []}
             if "neighbourhood_digest" not in (envelope["payload"]["task"].get("design_scope") or {}):
                 value.update({"paid": [], "added": []})
@@ -141,6 +151,31 @@ class ACallThatNeverAnswersIsAPassToReAskTests(unittest.TestCase):
         exc = self.bf.OpencodeTimeout("call for canon-auditor", 900, '{"sessionID":"ses-9"}', "")
         self.assertEqual(self.bf._session_id_in(exc.stdout), "ses-9")
         self.assertEqual(self.bf._session_id_in("nothing on the wire"), None)
+
+
+    def test_a_window_whose_last_answer_cannot_be_read_is_set_aside_not_fatal(self):
+        """The rescue covered a silent provider and not the common failure: an
+        answer that arrives with its whole budget spent on reasoning. Landfall's
+        first audit died on exactly that, at window-11-11."""
+        provider = SilentOnSomeWindows(self.bf, silent=set(), unreadable={"3-4", "3-3", "4-4"})
+        record = self.bf.execute_book_design(self.project, self.book, provider=provider)
+        self.assertEqual(record["state"], "design_clean")
+        unread = [row for row in record["unverifiable"] if str(row["id"]).endswith("unread")]
+        self.assertTrue(unread, "the window that was never readable is recorded as unread")
+        self.assertIn("could not be read", unread[0]["issue"])
+        self.assertIn("5-6", provider.asked, "the audit went on to the windows after it")
+
+    def test_the_set_aside_row_says_which_of_the_two_failures_happened(self):
+        silent = SilentOnSomeWindows(self.bf, silent={"3-4", "3-3", "4-4"}, forever=True)
+        record = self.bf.execute_book_design(self.project, self.book, provider=silent)
+        row = next(r for r in record["unverifiable"] if str(r["id"]).endswith("unread"))
+        self.assertIn("produced no answer", row["issue"])
+        self.assertNotIn("could not be read", row["issue"])
+
+    def test_a_pass_that_answers_on_the_second_ask_is_not_set_aside(self):
+        provider = SilentOnSomeWindows(self.bf, silent={"3-4", "3-3"})
+        record = self.bf.execute_book_design(self.project, self.book, provider=provider)
+        self.assertEqual([row for row in record["unverifiable"] if str(row["id"]).endswith("unread")], [])
 
 
 class ADesignChunkThatGoesQuietTests(unittest.TestCase):

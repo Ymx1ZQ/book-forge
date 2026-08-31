@@ -2849,13 +2849,13 @@ The chunk runs only when the book's brief carries a non-empty `reader_knowledge`
 - [ ] Test: a brief with `reader_knowledge` produces the extra call and the rows reach both the design and the chapter slices; a brief without it produces neither the call nor the rows
 - [ ] Test: the spine is asked for no withheld list
 - [ ] Suite green. Reinstall, commit & push
-- [ ] Re-run landfall's design
+- [x] Re-run landfall's design
 
 **Done when:** The spine answers at the size it answered before this feature existed.
 
-## A design call is bounded by construction, not by the book 🔄
+## A design call is bounded by construction, not by the book ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **Why the previous entry was replaced.** It proposed moving `withheld` out of the spine because the spine had just failed three times. That would have worked today and failed again at a longer book, because the spine's real problem is not the withheld list: the spine's answer contains one row per chapter, so its size is the book's size. Landfall has 27 chapters and that answer came to 13298 bytes on 2026-08-27. At sixty chapters it does not fit whatever else is in it.
 
@@ -2892,13 +2892,13 @@ The audit's schedule pass becomes a fold. It walks the book in fixed windows, ea
 - [x] Test: a 200-chapter book, every design and audit envelope under a fixed bound
 - [x] Test: a 27-chapter book still produces the same chapters, so this is a change of shape and not of content
 - [x] Suite green: 471 passed, 195 subtests (era 459, 33). Reinstall, commit & push
-- [ ] Re-run landfall's design
+- [x] Re-run landfall's design
 
 **Done when:** The number of chapters changes how many calls a design costs, and nothing else about it.
 
-## Where the telling falls is the author's choice, not the engine's 🔄
+## Where the telling falls is the author's choice, not the engine's ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **Correction to "A design call is bounded by construction, not by the book".** `_reveal_candidates` offers the designer only the chapters from two thirds of the way in, and the constant is written into the engine. That is one book's taste compiled into every book. Landfall's designer, given that window, chose the last chapter of twenty-six: the truth and the climax in the same scene, and the reader holding the key for a handful of pages.
 
@@ -2918,13 +2918,13 @@ The engine keeps only the rule it can justify: never CH-0001, because a truth to
 - [x] Test: CH-0001 is never a candidate, whatever the window says
 - [x] Landfall's brief carries the window the author chose
 - [x] Suite green: 483 passed, 202 subtests (era 471, 195). Reinstall, commit & push
-- [ ] Re-run landfall's design
+- [x] Re-run landfall's design
 
 **Done when:** Moving the revelation is an edit to the brief, not to the engine.
 
-## A chunk reads what it needs, and a rangeless chunk has a way down 🔄
+## A chunk reads what it needs, and a rangeless chunk has a way down ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **What happened.** Landfall's `withheld` chunk came back empty three times and blocked the design, which the driver then restarted from the spine, re-paying nine chorus calls to arrive at the same wall. The chunk's envelope is 154473 bytes. Its task is 119729 of those, and 85102 of the task — 71% — is `worldbuilding.md`, a document this call has no use for. It is asked for a handful of rows: the truth, what a person living in the world experiences instead, which chapter tells it and who does the telling. It works from the author's `reader_knowledge`, the spine, the chapters it may choose between, and the canon summaries that let it name a teller.
 
@@ -2947,7 +2947,7 @@ And a rangeless chunk gets the rescue a ranged one has: when it exhausts its att
 - [x] Test: a rangeless chunk that answers only on the reduced capsule completes the design instead of blocking it
 - [x] Test: the reduced retry is a last resort, not the first call
 - [x] Suite green: 491 passed, 206 subtests (era 483, 202). Reinstall, commit & push
-- [ ] Re-run landfall's design
+- [x] Re-run landfall's design
 
 **Done when:** A call that comes back empty is asked again with less, whatever kind of chunk it is.
 
@@ -2967,8 +2967,13 @@ Leave the constant as the opening width only, and make it the width the engine s
 
 **And the right width is not one width.** Landfall split 17-24 into 17-20 and then 17-20 again into 17-18 and 19-20, while 1-8 and 9-16 answered whole. The chapters that would not fit are the ones carrying the revelation: CH-0017 and CH-0018 hold the first two withheld layers, so their contracts carry far heavier plants and reveals than a chapter of crossing does. A book's density is concentrated where something happens, and the engine can see that before it calls — the outline and the withheld rows already tell it which chapters do the revealing. A slice containing a reveal chapter should be narrower than one that does not, decided in advance rather than discovered by three empty calls.
 
+**The audit's own widths, measured 2026-08-31 across two full runs of landfall.** `SCHEDULE_WINDOW_SIZE = 8` never once succeeded on this book. Every eight-chapter fold split to four, and most of those split to two, and several of those to one: 1-8, 5-8, 17-24, 17-20, 21-24, 25-26 all came back empty in both runs. `BOOK_AUDIT_SLICE_SIZE = 2` held for the windows except at 19-20 and 23-24, which are reveal chapters.
+
+And the reason is not payload size. The fold envelopes measured 11.0k tokens at chapters 1-4, 13.9k at 9-16, 15.4k at 17-24, 12.5k at 21-22 — against a ceiling of 32k, with the open-promise ledger growing 0 → 37 rows and contributing little, since the shared capsule dominates. An eight-chapter fold fails at 13.9k while a two-chapter fold succeeds at 11.4k: 2.5k of input apart. What varies is how much the model has to reason about, which tracks the number of chapters in the slice and their density — so sizing a slice by its byte count would be measuring the wrong thing, and the telemetry to size it by is the output the slice produced, not the input it carried.
+
 **Tasks:**
 - [ ] Read this run's `chunk_telemetry`: output tokens per chapter contract, and the spread between the lightest and heaviest slice
+- [ ] The audit's widths come from the same measurement: an eight-chapter fold has never answered on a book this dense
 - [ ] Decide the opening width from that measurement, with headroom stated in the comment beside it
 - [ ] Size later slices from what the first ones actually cost, rather than from the constant
 - [ ] Narrow a slice that contains a chapter the withheld rows reveal in, or that the outline marks as carrying an arc turn, before calling rather than after failing
@@ -2978,9 +2983,9 @@ Leave the constant as the opening width only, and make it the width the engine s
 
 **Done when:** A slice is the width the book's own chapters turned out to need.
 
-## A run resumes from the calls it already paid for 🔄
+## A run resumes from the calls it already paid for ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **What happened.** Landfall's design was killed at its twenty-seventh call, and the engine had nothing to show for the other twenty-six. Nine chorus calls, the spine, three outline slices, the withheld list and fourteen chapter-contract calls — ninety-five minutes of work — were on disk as `raw-*.txt` files that nothing ever reads back. A book design writes its artifacts once, at the end, when every chunk has answered; anything that interrupts it burns the whole run.
 
@@ -3009,7 +3014,7 @@ It covers the two paths that make these runs long: the chorus advisors and the d
 - [x] Test: a truncated answer is not remembered, so the retry still happens
 - [x] Test: two advisors never share an entry
 - [x] Suite green: 506 passed, 206 subtests (era 491). Reinstall, commit & push
-- [ ] Resume landfall's design
+- [x] Resume landfall's design
 
 **And the run that taught us this can still be recovered.** Its answers are on disk beside the envelopes that produced them, and the hash is the sha256 of exactly those envelope bytes — so the entries the cache would have written can be written now. `runtime backfill-cache` walks a run's attempts, pairs each `envelope-<slug>.json` with its accepted `raw-<slug>.txt`, and remembers the pair under the task the attempt belonged to. A hash that no longer matches simply never hits, so the command cannot serve a wrong answer: the worst it can do is nothing.
 
@@ -3032,9 +3037,9 @@ The hash chain did its job — a different spine invalidates everything downstre
 
 **Done when:** Killing a design costs the call it was making, not the run.
 
-## An audit window is two chapters, and a pass that cannot be halved still has a way down 🔄
+## An audit window is two chapters, and a pass that cannot be halved still has a way down ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **Measured on landfall, not guessed.** `BOOK_AUDIT_SLICE_SIZE = 5` was set when five chapters answered where ten did not. On landfall five almost never answers: `window-6-10` came back empty, then `6-8`, then `6-7`, and only `6-6` and `7-7` answered — in a minute each. The first audit attempt died outright when `window-11-11` came back empty, because a window of one chapter cannot be halved and the pass had nothing left to try.
 
@@ -3053,7 +3058,7 @@ And an audit pass that cannot be halved gets the rescue the design chunks were g
 - [x] Test: the reduced pass is a last resort, never the first call
 - [x] Test: twenty-six chapters produce thirteen windows and the schedule fold is unchanged
 - [x] Suite green: 508 passed, 341 subtests (era 506, 206). Reinstall, commit & push
-- [ ] Re-run landfall's audit
+- [x] Re-run landfall's audit
 
 **What narrowing costs, and the direction that would not cost it.** Measured on the same envelopes: a five-chapter window is 48400 bytes and a one-chapter window is 41803, so a chapter adds about 1650 bytes and roughly 40000 — 84% — is fixed: the role prompt, the arc, the premise, and 24097 bytes of canon blocks, all carried identically whatever the width. Per chapter checked that is 41800 bytes at a width of one, 21700 at two, 9700 at five. Narrowing to one costs more than four times as much for the same work.
 
@@ -3063,9 +3068,9 @@ So the width is not really the defect. One call is being asked to do two differe
 
 **Done when:** An audit that cannot answer a question asks a smaller one instead of ending the design.
 
-## A promise is not an artifact, but the chapter that made it is 🔄
+## A promise is not an artifact, but the chapter that made it is ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **Correction to the schedule fold.** The fold hands each window the promises still open when the last one ended, so the auditor now has a vocabulary it did not have before: `OP-0014`, a promise. Asked for evidence, it cited one — which is the natural thing to do with an identifier it was just given — and `_bind_audit_evidence` refused it, because evidence must resolve to a stable artifact. The whole audit died on it, after seventeen passes, and burned one of three attempts.
 
@@ -3082,13 +3087,13 @@ And the prompt says what evidence is: a chapter or a canon block, never a promis
 - [x] Test: a finding citing a promise the pass is itself returning binds too
 - [x] Test: a promise that cannot be placed still fails closed
 - [x] Suite green: 513 passed, 341 subtests (era 508). Reinstall, commit & push
-- [ ] Re-run landfall's audit
+- [x] Re-run landfall's audit
 
 **Done when:** The auditor is not punished for using a name the engine gave it.
 
-## One bad citation must not destroy thirty good passes 🔄
+## One bad citation must not destroy thirty good passes ✅
 
-**Status: 🔄 In progress — opened 2026-08-29**
+**Status: ✅ Done — opened 2026-08-29**
 
 **Third audit failure in a row on the same seam.** `OP-0014` was a promise id the engine itself had handed out — fixed. Then `PL-0001#summary`: a canon block that does not exist, because the project's places are `PLC-` and the auditor wrote `PL-`. One mistyped prefix, in one evidence item, in one finding, killed an audit of twenty-five completed passes and burned an attempt.
 
@@ -3108,7 +3113,7 @@ The safety property is unchanged — no blocking finding stands on evidence that
 - [x] Test: a finding with only bad citations is set aside, not blocking, and appears in the record
 - [x] Test: an audit with one bad citation still returns a verdict for every other pass
 - [x] Suite green: 515 passed, 341 subtests (era 513). Reinstall, commit & push
-- [ ] Re-run landfall's audit
+- [x] Re-run landfall's audit
 
 **What the suite corrected, mid-change.** Four tests asserted that *any* unresolvable citation fails the design closed, whatever its severity — a stronger property than the one this entry set out to keep, and the right one: a citation nobody can look up means the audit is confused or the artifacts have moved, and either way a person has to look. Setting such a finding quietly aside would have let a design pass that should not have.
 
@@ -3116,9 +3121,9 @@ So the audit finishes, writes its verdict on every pass that did resolve, and th
 
 **Done when:** An auditor's typo costs its own finding and a person's attention, not thirty paid calls.
 
-## The fold's answer must not grow with the book either 🔄
+## The fold's answer must not grow with the book either ✅
 
-**Status: 🔄 In progress — opened 2026-08-30**
+**Status: ✅ Done — opened 2026-08-30**
 
 **Correction to the schedule fold, and to the invariant I wrote the same day.** The fold asks each pass to return the whole set of promises still open. So the size of the answer grows with how much the book has promised: by chapter eleven the pass must restate thirty or forty promises verbatim before it reaches anything of its own. Landfall's audit died there — `schedule-11-11`, three attempts, then the reduced pass, then blocked.
 
@@ -3140,13 +3145,13 @@ A paid id that matches nothing carried is reported and ignored rather than faili
 - [x] Test: a paid id nobody carried is reported, and the pass still counts
 - [x] Test: the answer of the twentieth window is no larger than the answer of the second
 - [x] Suite green: 521 passed, 341 subtests (era 515). Reinstall, commit & push
-- [ ] Re-run landfall's audit
+- [x] Re-run landfall's audit
 
 **Done when:** A pass in the middle of a long book answers as briefly as a pass at its start.
 
-## The audit remembers too, and forgets when the design changes 🔄
+## The audit remembers too, and forgets when the design changes ✅
 
-**Status: 🔄 In progress — opened 2026-08-30**
+**Status: ✅ Done — opened 2026-08-30**
 
 **Reversing a decision made yesterday, for a reason that turned out to be narrower than the rule I drew from it.** The audit was deliberately kept out of the call cache. The reason was real: the auditor is never shown a chapter's beats, so a repair that rewrites only beats leaves its question byte-identical, and a remembered verdict would come straight back — the repair loop ran to exhaustion without making a single call, and the suite caught it.
 
@@ -3163,13 +3168,13 @@ But that reason only bites **when the design has changed**. Between a hung call 
 - [x] Test: a repair round re-asks rather than replaying the verdict it just failed on — `test_design_repair` proves it by passing at all: its fixture answers blocking then clean, so a replayed verdict would leave the design blocked
 - [x] Test: the repair loop still terminates when the auditor keeps blocking
 - [x] Suite green: 525 passed, 341 subtests (era 521). Reinstall, commit & push
-- [ ] Re-run landfall's audit
+- [x] Re-run landfall's audit
 
 **Done when:** A hung call costs a call.
 
-## A window in the middle of the book is not bound by its opening 🔄
+## A window in the middle of the book is not bound by its opening ✅
 
-**Status: 🔄 In progress — opened 2026-08-30**
+**Status: ✅ Done — opened 2026-08-30**
 
 **Landfall's first completed audit blocked on four findings, and three of them are the engine's fault.** `_audit_chunk_scope` gives every pass the proposal minus its chapters — which carries `entry_state` and `exit_boundary` — and the prompt never says what those are. So a window reading chapters nine and ten was handed the book's opening state and read it as its own: *"the entry state the window opens from states that the Lost Candle is still cold in the Counting nave and that Binta does not yet know the Heart exists"*, against chapters where the company is already on the road carrying both. That is not a contradiction. That is the book proceeding.
 
@@ -3186,15 +3191,15 @@ The same reading produced the finding against chapter nineteen — *"the entry_s
 - [x] Test: a book short enough to fit one window carries both
 - [x] Test: the schedule fold follows the same rule
 - [x] Suite green: 529 passed, 341 subtests (era 525). Reinstall, commit & push
-- [ ] Re-audit landfall and read the findings that survive
+- [x] Re-audit landfall and read the findings that survive
 
 **Measured while fixing it.** The canon-auditor's role prompt is now 1951 tokens, and it rides in every audit call — thirty-odd of them per book. It has grown through today's corrections, each of which earned its line, and a budget test that had been sized with headroom now sits 51 tokens over. Nobody is measuring that growth; the same "measure, don't guess" that applies to slice widths applies to what every call is made to carry.
 
 **Done when:** No pass is asked to reconcile a chapter with a state the book has already left.
 
-## A verdict is stale when the question that produced it changed 🔄
+## A verdict is stale when the question that produced it changed ✅
 
-**Status: 🔄 In progress — opened 2026-08-30**
+**Status: ✅ Done — opened 2026-08-30**
 
 **Found immediately after fixing the window scoping.** A design whose audit already blocked skips the audit and repairs against the verdict on disk — deliberately, because rediscovering a known list costs thirty calls. But landfall's stored verdict was built by an auditor that had just been corrected: three of its four findings came from a pass reading the book's opening as its own boundary, and the fix changed both the scope and the prompt. The engine went to repair against them anyway, because a record on disk has no memory of what produced it.
 
@@ -3209,13 +3214,13 @@ The call cache already solves this shape for calls: an answer is keyed by the ha
 - [x] Test: a stored blocking verdict is repaired against when the prompt is unchanged
 - [x] Test: the same verdict is re-audited once the prompt changes
 - [x] Suite green: 533 passed, 341 subtests (era 529). Reinstall, commit & push
-- [ ] Re-audit landfall
+- [x] Re-audit landfall
 
 **Done when:** Correcting the auditor cannot leave its old conclusions standing.
 
-## What the engine cannot use is set aside, wherever it arrives 🔄
+## What the engine cannot use is set aside, wherever it arrives ✅
 
-**Status: 🔄 In progress — opened 2026-08-30**
+**Status: ✅ Done — opened 2026-08-30**
 
 **The same defect, corrected three times today in three places, and it is time to correct the class.** An audit of thirty-three completed passes died on this row:
 
@@ -3239,7 +3244,7 @@ Earlier today the same shape arrived as evidence that would not resolve, and aga
 - [x] Test: the audit reaches its verdict with a malformed row in the middle, and the verdict is `needs_review`
 - [x] Test: a response that is not an object still fails
 - [x] Suite green: 537 passed, 346 subtests (era 533, 341). Reinstall, commit & push
-- [ ] Re-audit landfall
+- [x] Re-audit landfall
 
 **Done when:** No single row a model writes can cost more than itself.
 
@@ -3289,7 +3294,7 @@ The engine accepts whatever a pass writes into `added` and carries it forward, t
 - [x] Test: a promise with no expected_in is kept
 - [x] Test: a promise whose own chapter does not exist is dropped
 - [x] Suite green: 564 passed, 354 subtests (era 542, 346). Reinstall, commit & push
-- [~] Re-audit landfall from the repaired design
+- [x] Re-audit landfall from the repaired design
 
 **Done when:** No finding rests on a chapter the book does not have.
 
@@ -3342,7 +3347,7 @@ The universe designer is asked for `voice` in the characters chunk and returned 
 - [x] Test: `validate` blocks on a POV with no voice block in canon
 - [x] Test: the cast is sliced when it exceeds the slice size
 - [x] Suite green: 564 passed, 354 subtests (era 542, 346). Reinstall, commit & push
-- [~] Landfall: the missing voices written, the chapters re-imported
+- [x] Landfall: the missing voices written, the chapters re-imported
 
 **Done when:** No chapter is written against a character the canon does not describe.
 
@@ -3369,7 +3374,7 @@ The audit already knows what to do with a pass that gives no answer: halve it, a
 - [x] Test: a timeout carrying a session id still raises `ProviderOutcomeUnknown`
 - [x] Test: a design chunk that times out is split rather than ending the design
 - [x] Suite green: 569 passed, 354 subtests (era 564). Reinstall, commit & push
-- [~] Re-audit landfall
+- [x] Re-audit landfall
 
 The repair loop got the same treatment: a quiet call there becomes an empty answer and the halving already in place handles it.
 
@@ -3392,3 +3397,23 @@ Two paths write the state and neither writes the other's field. Lease recovery w
 - [x] Suite green: 570 passed, 354 subtests (era 569). Reinstall, commit & push
 
 **Done when:** No recovery needs a hand-edited plan.
+
+## The last question asked is the last that may end the run ✅
+
+**Status: ✅ Done — 2026-08-31**
+
+**Caught watching landfall's re-audit, one line before it could bite.** A pass that cannot be halved is asked once more about its chapter alone. If that last call goes quiet the window is now set aside and the audit goes on — but only when the provider timed out. An answer that comes back and will not parse, which is what this model does when it spends its whole budget reasoning, still raises and ends the run.
+
+So the rescue covers the rarer failure and not the common one. Landfall's first audit died at `window-11-11` on exactly the common one, and the alone-call was written to fix it; the alone-call's own failure was left fatal.
+
+**Fix.** The last resort has no next resort. Whatever comes back from it — nothing, or something unusable — the window is recorded as unread and the audit moves to the next pass. What it could not read is on the record; ending the run puts every pass that did answer on the floor and asks a person, which is the thing being removed.
+
+**Tasks:**
+- [x] The alone-call sets the window aside on any failure, not only on a silent provider
+- [x] The set-aside row says which of the two happened
+- [x] Test: an alone-call whose answer will not parse sets the window aside and the audit continues
+- [x] Test: an alone-call that is silent still sets the window aside
+- [x] Test: a pass that answers on the second ask is not set aside
+- [x] Suite green: 573 passed, 354 subtests (era 570). Reinstall, commit & push
+
+**Done when:** No single pass can end an audit.
