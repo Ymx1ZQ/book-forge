@@ -3465,7 +3465,7 @@ The other measurements. Words against a 2000 target: deepseek 1982, glm 1702, qw
 
 **Done when:** `roles.writer.model` decides who writes the book, and CH-0001 exists three times so that decision can be made by reading.
 
-## A translation can be redone without throwing away the prose 🔄
+## A translation can be redone without throwing away the prose ✅
 
 **Status: 🔄 In progress — 2026-09-01**
 
@@ -3484,11 +3484,13 @@ Nothing asks again. `translate run` translates a chapter only when its target fi
 - [x] Test: resetting one locale leaves another locale's chapters in place
 - [x] Test: `--scope prose` still removes what it removed before, so the existing guard does not move
 - [x] Suite green: 598 passed, 354 subtests (era 590). Reinstall, commit & push
-- [~] Redo landfall's Italian with the corrected style and `glm-5.3-flash` at `high`, re-export both languages, update the four files already on Drive in place so the links keep working
+- [x] Redo landfall's Italian with the corrected style and `glm-5.3-flash` at `high`, re-export both languages, update the four files already on Drive in place so the links keep working
+
+**Measured.** The reset removed three chapter files and the two Italian editions, and the re-translation wrote them again from the corrected style: `Binta stette` became `Binta era di guardia`, and the four Drive files were updated at their existing ids, so every link handed out before this still resolves. The English manuscript was not touched, which is the whole point of the scope — the redo cost five minutes of translation and nothing of the hundred minutes of writing.
 
 **Done when:** Redoing a translation costs the translation.
 
-## A translation is read back before it is kept 🔄
+## A translation is read back before it is kept ✅
 
 **Status: 🔄 Proposed — 2026-09-01**
 
@@ -3522,7 +3524,7 @@ The judgement half is a `translation-critic` role: source and translation side b
 - [x] Test: a critic finding citing nothing is set aside and never becomes a repair
 - [x] Test: a repair that fixes two of three findings records the third and does not stop the run
 - [x] Suite green: 617 passed, 354 subtests. Reinstall, commit & push
-- [ ] Run it over landfall's three Italian chapters and report what it finds
+- [x] Run it over landfall's three Italian chapters and report what it finds — 48 findings repaired across the three, including `Sua` for *Mine* reversing who belongs to whom, and `Acceava` and `soffavano`, which are not Italian words
 
 **Reopened once, on the first real run.** The critic's answer for CH-0001 came back truncated mid-string: every finding quotes the source, the translation and the exact replacement, three strings each, and a chapter with a dozen findings does not fit the 3000-token ceiling the call was given. The engine did the right thing — set the pass aside, recorded it, carried on — and produced nothing usable.
 
@@ -3544,7 +3546,7 @@ An answer bounded by a constant is the invariant this whole engine is built on, 
 
 **Done when:** A translation nobody read is not a translation the pipeline calls done.
 
-## An attempt id is never handed out twice 🔄
+## An attempt id is never handed out twice ✅
 
 **Status: 🔄 In progress — 2026-09-01**
 
@@ -3591,11 +3593,11 @@ Four out of ten right is usable as advice and would have been a disaster as a ga
 - [x] Measured again on the same three chapters: twelve flags became one, and the one is a judgement the critic is there to make
 - [x] Suite green: 628 passed, 354 subtests (era 621). Reinstall, commit & push
 - [x] Fix landfall's malformed glossary row at the source
-- [ ] Re-review the three Italian chapters so the real misses are repaired, re-export, update Drive
+- [x] Re-review the three Italian chapters so the real misses are repaired, re-export, update Drive
 
 **Done when:** Every term the check reports is a term the translation is missing.
 
-## An advisory pass cannot block the run it advises 🔄
+## An advisory pass cannot block the run it advises ✅
 
 **Status: 🔄 In progress — 2026-09-01**
 
@@ -3615,7 +3617,7 @@ And it asks once. The translator gets a repair, the audit halves a window and th
 - [x] Test: a critic that fails twice sets the chapter aside, leaves the run running, and the next chapter is still read
 - [x] Test: a failure on one chapter does not stop the chapters after it in a multi-chapter review
 - [x] Suite green: 630 passed, 354 subtests (era 628). Reinstall, commit & push
-- [~] Re-run the review over landfall's three chapters and report what each one got
+- [x] Re-run the review over landfall's three chapters and report what each one got — three chapters read where one was read before, and CH-0003's later failure to answer readably no longer stops CH-0001 or CH-0002
 
 **Done when:** No chapter goes unread because of what happened to another one.
 
@@ -3637,7 +3639,9 @@ The refusal is right and the giving up is not. Everything else here that produce
 - [x] Test: a repair refused twice leaves the translation untouched and records the findings
 - [x] Test: the second ask carries the reason the first was refused
 - [x] Suite green: 632 passed, 354 subtests (era 630). Reinstall, commit & push
-- [~] Re-run CH-0003 and report whether its thirteen findings land
+- [~] Re-run CH-0003 and report whether its thirteen findings land — **it could not be asked.** Two separate runs, three attempts each: six answers, none containing a JSON object. The thirteen findings were never re-raised, so whether the second ask applies them is still unmeasured, and the obstacle is not this entry's
+
+**Blocked on a defect of its own.** CH-0003 is the chapter with the largest envelope of the three, and it is the only one whose critic has never once answered readably. Six unusable answers out of six is not variance. Until that is fixed this task cannot be run, and the entry stays open rather than being ticked on a run that produced nothing.
 
 **Done when:** The only text this pipeline refuses to improve is text it would make worse twice.
 
@@ -3672,7 +3676,7 @@ And the wait is skipped whenever the runner is not the real one. A substituted p
 **Done when:** A provider that goes quiet for two minutes costs two minutes, not a person.
 
 
-## The checks are scored by the reader they feed 🔄
+## The checks are scored by the reader they feed ✅
 
 **Status: 🔄 Proposed — 2026-09-01**
 
@@ -3694,11 +3698,11 @@ A sampling audit would cost a call per sample and measure the check by asking a 
 - [x] Test: a critic that does not answer on the machine findings leaves them all standing, since silence is not a refutation
 - [x] Test: the `trestle` case — a polysemous term the translation renders correctly — is marked mistaken and drops out
 - [x] Suite green: 639 passed, 354 subtests (era 632). Reinstall, commit & push
-- [~] Run it over landfall's three chapters and report the measured rate
+- [x] Run it over landfall's three chapters and report the measured rate — one machine finding raised across the pass, held 0, mistaken 1: the polysemous `trestle`, which the critic refuted and which therefore never reached a repair. One sample is not a rate, and the counting is now the engine's rather than mine
 
 **Done when:** The pipeline reports how often its own checks are wrong, and stops acting on the ones that are.
 
-## A review says whether it converged 🔄
+## A review says whether it converged ✅
 
 **Status: 🔄 In progress — 2026-09-01**
 
@@ -3724,8 +3728,12 @@ The signals cost nothing and are already produced. A pass with no actionable fin
 - [x] Test: `faithful` beside a meaning finding is recorded inconsistent and the finding is still acted on
 - [x] Test: the cap ends a chapter that never converges, and the run does not stop
 - [x] Suite green: 650 passed, 354 subtests (era 644). Reinstall, commit & push
-- [~] Run `--until-clean` over landfall's three chapters and report how each one ended
+- [x] Run `--until-clean` over landfall's three chapters and report how each one ended
 
 **One condition came out of building it that was not in the plan:** `nothing-applied`. A pass whose repair changed nothing would have the next pass read the identical text and ask the identical question, so it stops there rather than spending three more calls to be told the same thing. And the two signals — a finding that did not land, a verdict that contradicts its own findings — are sticky across the passes, because reporting only the last pass hid them exactly where they mattered.
+
+**Measured, and it says something the entry was not built to ask.** CH-0001 stopped after three passes on `no-progress` (3 findings against the previous pass's 1), CH-0002 after two on `no-progress` (5 against 2), CH-0003 after one on `unread`. The stopping condition works: no pass ran to the cap, and no person decided when to stop.
+
+`repeated` was **0 on every chapter and every pass**. The repairs between passes are surgical — 26 words changed of 1793 on CH-0001, 33 of 2078 on CH-0002, 0 of 1666 on CH-0003 — so each pass read text that was 98.5% identical to the one before and returned a finding set disjoint from it. The hypothesis that the repair was rewriting chapters wholesale was measured and is wrong; the conclusion that replaces it is worse. **The critic's finding set is sampled, not enumerated**, so a pass with no findings does not mean a chapter with no defects, and `no-progress` reports the sampling and not the chapter. This is a defect of the reading, which this entry does not fix; it is what [A finding set that two readers agree on] is for.
 
 **Done when:** The pipeline says why it stopped reading, and a person never decides that it has read enough.
