@@ -82,6 +82,7 @@ ROLE_SPECS = {
     "reviser": ("all", "low", 8),
     "canon-auditor": ("all", "high", 8),
     "translator": ("all", "low", 7),
+    "translation-critic": ("all", "high", 6),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
@@ -258,6 +259,8 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
                 return model, str(cfg.get("default_effort", DEFAULT_EFFORT))
     if role not in ROLE_SPECS:
         raise BookForgeError(f"Role cannot run headlessly: {role}")
+    if role == "translation-critic":
+        return _translation_critic_pin(config, _role_pin(config, "translator")[0])
     model, variant = MODEL, ROLE_SPECS[role][1]
     override = _role_overrides(config).get(role)
     if not override:
@@ -282,6 +285,47 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     elif variant not in ladder:
         # The role's own effort is not on the new model's ladder, and a step it does
         # not have cannot be asked for. Its declared operating point stands in.
+        variant = str(CHORUS_MODEL_CONFIGS[model].get("default_effort", DEFAULT_EFFORT))
+    return model, variant
+
+
+def _translation_critic_pin(config: dict[str, object] | None, translator_model: str) -> tuple[str, str]:
+    """The critic's pin, which may never be the translator's.
+
+    A model rereading its own rendering shares the blind spots that produced it
+    and approves them, so the pass costs a call and finds nothing. The default is
+    the catalogue's judge-grade model, and it steps aside to the project pin when
+    the translator already holds it.
+    """
+    override = _role_overrides(config).get("translation-critic")
+    if override and str(override.get("model") or "").strip():
+        model = str(override["model"]).strip()
+        if model == translator_model:
+            raise BookForgeError(
+                f"roles.translation-critic.model is the translator's own model ({model}). "
+                "A translation reread by the model that wrote it is approved, not audited: "
+                "name a different catalogue model, or leave it unset for the default"
+            )
+        if model not in CHORUS_MODEL_CONFIGS:
+            raise BookForgeError(
+                f"roles.translation-critic.model names a model the catalogue does not configure: {model}"
+            )
+        ladder = CHORUS_MODEL_CONFIGS[model].get("variants") or {}
+        variant = str(override.get("variant") or "").strip() or str(CHORUS_MODEL_CONFIGS[model].get("default_effort", DEFAULT_EFFORT))
+        if variant not in ladder:
+            raise BookForgeError(
+                f"roles.translation-critic.variant {variant} is not a step {model} offers: {', '.join(sorted(ladder))}"
+            )
+        return model, variant
+    model = CHORUS_SYNTHESIZER if CHORUS_SYNTHESIZER != translator_model else MODEL
+    if model == translator_model:
+        # Both defaults are the translator's. Any other catalogue model is a better
+        # reader than the one being read, and the order is fixed so the choice is
+        # the same on every machine.
+        model = next(name for name in sorted(CHORUS_MODEL_CONFIGS) if name != translator_model)
+    ladder = CHORUS_MODEL_CONFIGS[model].get("variants") or {}
+    variant = ROLE_SPECS["translation-critic"][1]
+    if variant not in ladder:
         variant = str(CHORUS_MODEL_CONFIGS[model].get("default_effort", DEFAULT_EFFORT))
     return model, variant
 
@@ -404,6 +448,23 @@ def _next_id(existing: list[str], prefix: str) -> str:
     while number in used:
         number += 1
     return f"{prefix}{number:04d}"
+
+
+def _next_attempt_id(root: Path, plan: dict[str, object]) -> str:
+    """The next attempt id, counting what exists rather than what the plan lists.
+
+    The plan is not the record of what exists: a reset drops the attempts of the
+    tasks it drops and a settled run prunes more, while the directories stay
+    because they are the audit trail. Allocating from the plan alone walks the
+    counter back over occupied ground, and the first claim to land on an occupied
+    id dies on the immutability guard that protects that evidence. Landfall hit it
+    with 207 directories against 69 planned attempts.
+    """
+    existing = [str(row["id"]) for row in plan.get("attempts", [])]
+    runs = root / ".book-forge" / "runs"
+    if runs.is_dir():
+        existing.extend(path.name for path in runs.glob("*/attempts/ATT-*") if path.is_dir())
+    return _next_id(existing, "ATT-")
 
 
 def _block_record(block: str) -> dict[str, str]:
@@ -1687,7 +1748,7 @@ def claim_task(
     control = _control(root)
     control["fencing_counter"] = int(control["fencing_counter"]) + 1
     fence = int(control["fencing_counter"])
-    attempt_id = _next_id([str(row["id"]) for row in plan["attempts"]], "ATT-")
+    attempt_id = _next_attempt_id(root, plan)
     task = next(row for row in plan["tasks"] if row["id"] == task_id)
     task["state"] = "running"
     task["attempt"] = attempt_id
@@ -3062,6 +3123,7 @@ ROLE_BUDGETS = {
     "reviser": (14000, 8000),
     "canon-auditor": (32000, 3500),
     "translator": (16000, 6000),
+    "translation-critic": (24000, 3000),
     "judge": (10000, 2000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
@@ -8650,7 +8712,116 @@ def _heading_case_problem(translated: str, locale: str) -> str | None:
     return None
 
 
-def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
+# What a locale can say to a machine. The engine carries the mechanism; the rules
+# are the project's, in `translations/<locale>/checks.yaml`, because a skill that
+# hardcodes one language's tense law is a skill nobody else can install.
+LOCALE_CHECKS_STUB = "Record the target language's machine-checkable rules here."
+
+
+def _locale_checks(locale_root: Path) -> dict[str, object]:
+    """The locale's machine-checkable rules, or nothing if it declares none."""
+    path = locale_root / "checks.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        value = _read_json(path)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _forbidden_form_problems(translated: str, checks: dict[str, object]) -> list[str]:
+    """Forms the locale forbids outright.
+
+    Exact, free, and never wrong about what it found: the pattern either matches
+    the delivered text or it does not. Landfall's `stette` sat in three chapters
+    that every other gate passed, because no gate read the target language.
+    """
+    problems = []
+    for row in checks.get("forbidden", []) if isinstance(checks.get("forbidden"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        pattern = str(row.get("pattern") or "").strip()
+        if not pattern:
+            continue
+        try:
+            found = re.findall(pattern, translated, re.IGNORECASE | re.UNICODE)
+        except re.error:
+            problems.append(f"locale checks: {pattern} is not a usable pattern")
+            continue
+        if found:
+            seen = sorted({str(match if isinstance(match, str) else match[0]) for match in found})
+            reason = str(row.get("reason") or "forbidden by the locale checks")
+            problems.append(f"forbidden form {', '.join(seen[:4])}: {reason}")
+    return problems
+
+
+def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
+    """The glossary's rows as (source alternatives, target alternatives)."""
+    rows = []
+    for line in glossary.splitlines():
+        if not line.startswith("- **") or "** → " not in line:
+            continue
+        source_part, rest = line[4:].split("**", 1)
+        target_part = rest.split("→", 1)[1].split(" — ", 1)[0]
+        sources = [
+            re.sub(r"\([^)]*\)", "", piece).strip()
+            for piece in source_part.split("/")
+        ]
+        targets = [piece.strip() for piece in re.split(r"[/,]", target_part)]
+        sources = [value for value in sources if len(value) >= 4]
+        targets = [value for value in targets if len(value) >= 4]
+        if sources and targets:
+            rows.append((sources, targets))
+    return rows
+
+
+# Italian and its neighbours inflect, so a rendering is looked for by its content
+# words with the ending left open: `gesso di marea` must also match `gessi di marea`.
+_GLOSSARY_FUNCTION_WORDS = {"il", "lo", "la", "i", "gli", "le", "un", "una", "di", "del", "della", "dei", "delle", "da", "a", "e", "the", "of", "l'"}
+
+
+def _term_pattern(term: str) -> str:
+    """A term as its content words, joined loosely and left open at the end.
+
+    `tide-chalk` must match the hyphen the source writes and the space another
+    text writes, and `gesso di marea` must match `gessi di marea`, so a word long
+    enough to inflect gives up its last letter. Both were found by the check
+    returning nothing on a translation that had genuinely dropped the term.
+    """
+    pieces = []
+    for word in re.findall(r"[\w']+", term, re.UNICODE):
+        if word.casefold() in _GLOSSARY_FUNCTION_WORDS:
+            pieces.append(re.escape(word))
+        elif len(word) >= 5:
+            pieces.append(re.escape(word[:-1]) + r"\w*")
+        else:
+            pieces.append(re.escape(word) + r"\w*")
+    return r"[\s\-\u2010-\u2015]+".join(pieces) if pieces else ""
+
+
+def _glossary_compliance(source: str, translated: str, glossary: str) -> list[str]:
+    """Terms the source uses whose agreed rendering never reaches the translation.
+
+    Advisory, not a gate: the match tolerates inflection and can therefore be
+    wrong, and a heuristic inside a blocking check is how a book deadlocks. It is
+    exact enough to be worth a repair call and not to be trusted with a refusal.
+    """
+    findings = []
+    for sources, targets in _glossary_terms(glossary):
+        used = next(
+            (value for value in sources if re.search(_term_pattern(value), source, re.IGNORECASE | re.UNICODE)),
+            None,
+        )
+        if not used:
+            continue
+        if any(re.search(_term_pattern(value), translated, re.IGNORECASE | re.UNICODE) for value in targets):
+            continue
+        findings.append(f"glossary: the source uses {used!r} and the translation never renders it as {targets[0]!r}")
+    return findings
+
+
+def _translation_validation(source: str, value: dict[str, object], checks: dict[str, object] | None = None) -> list[str]:
     translated = value.get("translated_markdown")
     problems = []
     if not isinstance(translated, str) or not translated.strip():
@@ -8662,6 +8833,7 @@ def _translation_validation(source: str, value: dict[str, object]) -> list[str]:
     heading = _heading_case_problem(translated, str(value.get("_locale") or ""))
     if heading:
         problems.append(heading)
+    problems.extend(_forbidden_form_problems(translated, checks or {}))
     # A locale writes 5,8 where the source writes 5.8. Comparing the literal strings
     # made a correctly localized number look like a changed one, and since the repair
     # attempt carries the failure reason, the loop taught the translator to keep the
@@ -8717,6 +8889,203 @@ def _ensure_locale_artifacts(root: Path, book_id: str, locale: str) -> None:
         if artifact_id not in registry["artifacts"]:
             register_artifact(root, artifact_id, kind, path=path, authored=True)
             registry = _artifact_registry(root)
+
+
+
+def _translation_review_enabled(config: dict[str, object]) -> bool:
+    section = config.get("translation")
+    if isinstance(section, dict) and "review" in section:
+        return bool(section["review"])
+    return True
+
+
+def _cited_findings(findings: object) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Split what the critic returned into what can be acted on and what cannot.
+
+    A finding that quotes no source and no translation names nothing the repair
+    could substitute, so it is set aside and recorded rather than argued with —
+    the same treatment the canon auditor gives evidence that resolves to nothing.
+    """
+    kept, aside = [], []
+    for row in findings if isinstance(findings, list) else []:
+        if not isinstance(row, dict):
+            continue
+        quoted = str(row.get("translated") or "").strip()
+        rule = str(row.get("rule") or "").strip()
+        (kept if quoted and rule else aside).append(row)
+    return kept, aside
+
+
+def _review_translation(
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    source: str,
+    translated: str,
+    *,
+    runner,
+) -> dict[str, object]:
+    """Read the translation back against the source, and repair what is cited.
+
+    The prose has a review stack and a translation had one call and nobody reading
+    it. Half of this needs no model: the glossary is machine-readable, so a term
+    the source uses and the translation never renders is an exact finding. The
+    other half is judgement — a calque is grammatical, breaks no listed rule, and
+    is still wrong — and that is what the critic is for.
+
+    Advisory throughout. A critic that cannot be reached, an answer that will not
+    parse, a repair that comes back worse: each is recorded beside the chapter and
+    the translation that already validated is kept. Nothing here stops a run and
+    nothing asks a person.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    findings: list[dict[str, object]] = [
+        {
+            "id": f"G-{index:02d}",
+            "severity": "warning",
+            "kind": "glossary",
+            "rule": "the locale glossary",
+            "issue": problem,
+            "source": "",
+            "translated": "",
+            "fix": "",
+        }
+        for index, problem in enumerate(_glossary_compliance(source, translated, glossary), start=1)
+    ]
+    set_aside: list[dict[str, object]] = []
+    verdict = "unread"
+    task_id = f"TRANSCRIT-{book_id}-{chapter_id}-{locale}"
+    review_path = f"books/{book_id}/translations/{locale}/reviews/{chapter_id}.json"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(
+            root,
+            task_id,
+            "translation-critic",
+            priority=82,
+            chapter_order=int(contract.get("order", 0)),
+            outputs=[review_path],
+        )
+    try:
+        envelope = build_envelope(
+            root,
+            role="translation-critic",
+            task_capsule={
+                "book": book_id,
+                "chapter": chapter_id,
+                "target_locale": locale,
+                "source_markdown": source,
+                "translated_markdown": translated,
+                "locale_style": style,
+                "glossary": glossary,
+            },
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=3000,
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = runner("translation-critic", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        value = _parse_contract_json(str(result["text"]))
+        cited, aside = _cited_findings(value.get("findings"))
+        findings.extend(cited)
+        set_aside.extend(aside)
+        verdict = str(value.get("verdict") or "repairable")
+        manifest = stage_outputs(root, claim["attempt"], {review_path: _json_bytes(
+            {"schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings, "set_aside": set_aside}
+        )})
+        record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=_provider_telemetry(result, envelope),
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+    except BookForgeError as exc:
+        print(f"[translation-critic] {chapter_id} was not read: {exc}", file=sys.stderr)
+        set_aside.append({"id": "C-unread", "severity": "note", "kind": "critic", "issue": str(exc)})
+    if set_aside:
+        print(
+            f"[translation-critic] {chapter_id}: {len(set_aside)} finding(s) set aside, cited nothing that resolves",
+            file=sys.stderr,
+        )
+    return {"findings": findings, "set_aside": set_aside, "verdict": verdict}
+
+
+
+def _repair_translation(
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    source: str,
+    value: dict[str, object],
+    findings: list[dict[str, object]],
+    *,
+    runner,
+) -> dict[str, object] | None:
+    """One repair call carrying the cited findings, or None if it did not improve.
+
+    The repair is held to the same gate the translation was: if what comes back
+    does not validate, the translation that did is kept. A review that makes a
+    chapter worse is a review that costs a call, not a chapter.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    task_id = f"TRANSFIX-{book_id}-{chapter_id}-{locale}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, "translator", priority=84, chapter_order=int(contract.get("order", 0)))
+    capsule = {
+        "book": book_id,
+        "chapter": chapter_id,
+        "source_language": _read_json(root / "book-forge.yaml")["source_language"],
+        "target_locale": locale,
+        "source_markdown": source,
+        "contract": contract,
+        "locale_style": (locale_root / "style.md").read_text(encoding="utf-8"),
+        "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
+        "metadata": _read_json(locale_root / "metadata.yaml"),
+        "repair": {
+            "reason": "a critic read this translation against its source",
+            "previous_output": str(value["translated_markdown"]),
+            "findings": findings,
+            "instruction": (
+                "Apply every finding whose fix you accept and leave the rest of the chapter untouched. "
+                "Return the whole chapter, not a diff."
+            ),
+        },
+    }
+    try:
+        envelope = build_envelope(
+            root,
+            role="translator",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state={},
+            tools=[],
+            max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = runner("translator", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        repaired = _parse_contract_json(str(result["text"]))
+        problems = _translation_validation(source, {**repaired, "_locale": locale}, _locale_checks(locale_root))
+        if problems:
+            raise BookForgeError("; ".join(problems))
+    except BookForgeError as exc:
+        print(f"[translation-critic] {chapter_id}: the repair was refused and the accepted translation kept: {exc}", file=sys.stderr)
+        return None
+    _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
+    return repaired
 
 
 def _translate_one(
@@ -8804,7 +9173,7 @@ def _translate_one(
         _write_bytes_atomic(attempt_dir / "raw-output.txt", str(result["text"]).encode())
         try:
             value = _parse_contract_json(str(result["text"]))
-            problems = _translation_validation(source, {**value, "_locale": locale})
+            problems = _translation_validation(source, {**value, "_locale": locale}, _locale_checks(locale_root))
             if problems:
                 raise BookForgeError("; ".join(problems))
         except BookForgeError as exc:
@@ -8818,6 +9187,19 @@ def _translate_one(
             previous_output = value
             _set_attempt_failure(root, claim["attempt"], block=False, reason="pivotal-review-requested")
             continue
+        if _translation_review_enabled(_read_json(root / "book-forge.yaml")):
+            review = _review_translation(
+                root, book_id, locale, chapter_id, contract, source, str(value["translated_markdown"]), runner=runner
+            )
+            actionable = [row for row in review["findings"] if str(row.get("severity")) in {"blocking", "warning"}]
+            if actionable:
+                repaired = _repair_translation(
+                    root, book_id, locale, chapter_id, contract, source, value, actionable, runner=runner
+                )
+                if repaired is not None:
+                    calls += 1
+                    value = repaired
+            calls += 1
         glossary = _append_glossary((locale_root / "glossary.md").read_text(encoding="utf-8"), list(value["glossary_updates"]))
         completed = list(state.get("completed_chapters", []))
         if chapter_id not in completed:
@@ -8898,6 +9280,71 @@ def translate_next(
         "calls": sum(int(result["calls"]) for result in results),
         "chapters": [result["chapter"] for result in results],
     }
+
+
+
+def review_translation(
+    project: Path | str,
+    book_id: str,
+    locale: str,
+    *,
+    provider=None,
+    chapter_id: str | None = None,
+) -> dict[str, object]:
+    """Read an existing translation back against its source, and repair what is cited.
+
+    The critic runs inside a translation, which leaves every chapter translated
+    before it was written unreachable. This route reaches them: it reviews what is
+    on disk, applies the repairs that validate, and reports what it found — the
+    same pass, on work already done.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    canonical = _canonical_locale(locale)
+    locale_root = root / "books" / book_id / "translations" / canonical
+    if not (locale_root / "locale.yaml").is_file():
+        raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
+    _require_locale_style(root, book_id, canonical)
+    chapters = sorted((locale_root / "chapters").glob("CH-*.md"))
+    if chapter_id:
+        chapters = [path for path in chapters if path.stem == chapter_id]
+        if not chapters:
+            raise BookForgeError(f"{chapter_id} is not translated into {canonical}")
+    if not chapters:
+        raise BookForgeError(f"Nothing is translated into {canonical} yet")
+    reviewed = []
+    for path in chapters:
+        chapter = path.stem
+        source_path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter}.md"
+        if not source_path.is_file():
+            continue
+        contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter}.json")
+        source = source_path.read_text(encoding="utf-8")
+        translated = path.read_text(encoding="utf-8")
+        review = _review_translation(root, book_id, canonical, chapter, contract, source, translated, runner=runner)
+        actionable = [row for row in review["findings"] if str(row.get("severity")) in {"blocking", "warning"}]
+        repaired = None
+        if actionable:
+            repaired = _repair_translation(
+                root, book_id, canonical, chapter, contract, source,
+                {"translated_markdown": translated}, actionable, runner=runner,
+            )
+        if repaired is not None:
+            task_id = f"TRANSFIX-{book_id}-{chapter}-{canonical}"
+            _execute_materialized_task(
+                root,
+                task_id,
+                {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": str(repaired["translated_markdown"]).rstrip() + "\n"},
+            )
+        reviewed.append({
+            "chapter": chapter,
+            "verdict": review["verdict"],
+            "findings": len(review["findings"]),
+            "by_kind": {kind: sum(1 for row in review["findings"] if str(row.get("kind")) == kind) for kind in sorted({str(row.get("kind") or "?") for row in review["findings"]})},
+            "set_aside": len(review["set_aside"]),
+            "repaired": repaired is not None,
+        })
+    return {"book": book_id, "locale": canonical, "reviewed": reviewed}
 
 
 def translation_impact(project: Path | str, book_id: str, locale: str) -> dict[str, object]:
@@ -10033,7 +10480,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task")
     run.add_argument("--next", action="store_true")
     translate = commands.add_parser("translate")
-    translate.add_argument("action", choices=("add", "next", "run", "status"))
+    translate.add_argument("action", choices=("add", "next", "run", "status", "review"))
+    translate.add_argument("--chapter", help="With review: read back one chapter instead of every translated one")
     translate.add_argument("book")
     translate.add_argument("locale")
     audit = commands.add_parser("audit")
@@ -10188,6 +10636,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(run_next(args.project, book_id=args.book, task_id=args.task), sort_keys=True))
         elif args.command == "translate" and args.action == "add":
             print(json.dumps(add_translation(args.project, args.book, args.locale), sort_keys=True))
+        elif args.command == "translate" and args.action == "review":
+            print(json.dumps(review_translation(args.project, args.book, args.locale, chapter_id=args.chapter), sort_keys=True))
         elif args.command == "translate" and args.action == "status":
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))

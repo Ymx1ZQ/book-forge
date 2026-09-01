@@ -255,5 +255,53 @@ class TranslationResetTests(ResetFixture):
         self.assertTrue((self.project / "books" / self.book / "translations" / "it" / "chapters" / "CH-0001.md").is_file())
 
 
+class AttemptIdTests(ResetFixture):
+    """Landfall had 207 attempt directories against 69 planned attempts, and the
+    first claim after a reset was handed an id whose directory already held a
+    receipt. The immutability guard that protects the audit trail fired on honest
+    work, and the translation died with the call already paid for."""
+
+    def attempt_dir(self, run_id, attempt_id):
+        path = self.project / ".book-forge" / "runs" / run_id / "attempts" / attempt_id
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "execution-receipt.json").write_text("{}", encoding="utf-8")
+        return path
+
+    def test_an_id_whose_directory_exists_is_never_handed_out(self):
+        for number in range(1, 12):
+            self.attempt_dir("RUN-0001", f"ATT-{number:04d}")
+        plan = self.bf._load_plan(self.project)
+        plan["attempts"] = []
+        self.bf._save_plan(self.project, plan)
+        self.assertEqual(self.bf._next_attempt_id(self.project, plan), "ATT-0012")
+
+    def test_the_plan_and_the_directories_are_counted_together(self):
+        self.attempt_dir("RUN-0001", "ATT-0007")
+        plan = self.bf._load_plan(self.project)
+        plan["attempts"] = [{"id": "ATT-0001", "task": "x"}, {"id": "ATT-0002", "task": "x"}]
+        self.assertEqual(self.bf._next_attempt_id(self.project, plan), "ATT-0003")
+        for number in (3, 4, 5, 6):
+            self.attempt_dir("RUN-0002", f"ATT-{number:04d}")
+        self.assertEqual(self.bf._next_attempt_id(self.project, plan), "ATT-0008")
+
+    def test_an_empty_project_starts_at_one(self):
+        plan = self.bf._load_plan(self.project)
+        plan["attempts"] = []
+        for path in (self.project / ".book-forge" / "runs").glob("*"):
+            shutil.rmtree(path)
+        self.assertEqual(self.bf._next_attempt_id(self.project, plan), "ATT-0001")
+
+    def test_the_receipt_of_the_earlier_attempt_survives_the_reset(self):
+        self.bf._write_json(
+            self.project / "books" / self.book / "translations" / "it" / "locale.yaml",
+            {"schema": 1, "id": "LOC-IT", "book": self.book, "locale": "it"},
+        )
+        kept = self.attempt_dir("RUN-0001", "ATT-0003")
+        self.bf.reset_book(self.project, self.book, scope="translation", confirm=True, locale="it")
+        self.assertTrue((kept / "execution-receipt.json").is_file())
+        plan = self.bf._load_plan(self.project)
+        self.assertNotEqual(self.bf._next_attempt_id(self.project, plan), "ATT-0003")
+
+
 if __name__ == "__main__":
     unittest.main()

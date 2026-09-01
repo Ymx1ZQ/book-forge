@@ -120,7 +120,23 @@ class ARoleCarriesItsOwnPinTests(WriterPinFixture):
 
     def test_a_project_that_names_no_role_keeps_every_pin_where_it_was(self):
         for role, (_mode, variant, _steps) in self.bf.ROLE_SPECS.items():
+            if role == "translation-critic":
+                continue  # its default is deliberately not the translator's model
             self.assertEqual(self.bf._role_pin({}, role), (MODEL, variant))
+
+    def test_the_critic_never_defaults_to_the_translator(self):
+        """A model rereading its own rendering approves it."""
+        for translator in (MODEL, GLM, QWEN, self.bf.CHORUS_SYNTHESIZER):
+            config = {"roles": {"translator": {"model": translator}}}
+            critic = self.bf._role_pin(config, "translation-critic")[0]
+            self.assertNotEqual(critic, self.bf._role_pin(config, "translator")[0])
+            self.assertIn(critic, self.bf.CHORUS_MODEL_CONFIGS)
+
+    def test_a_critic_pinned_to_the_translator_is_refused_with_the_reason(self):
+        config = {"roles": {"translator": {"model": GLM}, "translation-critic": {"model": GLM}}}
+        with self.assertRaises(self.bf.BookForgeError) as raised:
+            self.bf._role_pin(config, "translation-critic")
+        self.assertIn("approved, not audited", str(raised.exception))
 
     def test_the_generated_catalogue_carries_a_pin_the_chorus_does_not(self):
         config = {"roles": {"writer": {"model": "openrouter/z-ai/glm-5.3"}}}

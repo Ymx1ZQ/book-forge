@@ -79,6 +79,18 @@ def prose(word):
     return "# The Archive\n\n" + " ".join([word] * 700)
 
 
+def _isolate_translator(bf, project):
+    """These tests measure the translator, not the critic that now reads it back.
+
+    The translation review is on by default, as the prose style review is, and it
+    adds one call to every translation. A test that counts translator calls must
+    say which of the two it is counting.
+    """
+    path = Path(project) / "book-forge.yaml"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["translation"] = {"review": False}
+    path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
 class FixtureProvider:
     def __init__(self):
         self.calls = []
@@ -126,6 +138,7 @@ class EndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp) / "world"
             bf.init_project(project, "World")
+            _isolate_translator(bf, project)
             self.assertEqual(bf.execute_universe_design(project, provider=provider)["calls"], len(bf.UNIVERSE_DESIGN_CHUNKS) + 1)
 
             a, b, c, local = [bf.add_book(project, title)["id"] for title in ("Origin", "Sequel", "Parallel", "Local")]

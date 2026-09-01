@@ -23,6 +23,18 @@ def load_module():
     return module
 
 
+def _isolate_translator(bf, project):
+    """These tests measure the translator, not the critic that now reads it back.
+
+    The translation review is on by default, as the prose style review is, and it
+    adds one call to every translation. A test that counts translator calls must
+    say which of the two it is counting.
+    """
+    path = Path(project) / "book-forge.yaml"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["translation"] = {"review": False}
+    path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
 class TranslationProvider:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -52,6 +64,7 @@ class TranslateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "world"
         self.bf.init_project(self.project, "World")
+        _isolate_translator(self.bf, self.project)
         self.book = self.bf.add_book(self.project, "Book")["id"]
         chapters = self.project / f"books/{self.book}/chapters"
         chapters.mkdir()
@@ -89,6 +102,7 @@ class TranslateTests(unittest.TestCase):
 
         second = Path(self.temp.name) / "blocked"
         self.bf.init_project(second, "Blocked")
+        _isolate_translator(self.bf, second)
         book = self.bf.add_book(second, "Book")["id"]
         chapters = second / f"books/{book}/chapters"
         chapters.mkdir()

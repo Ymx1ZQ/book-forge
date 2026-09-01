@@ -3487,3 +3487,62 @@ Nothing asks again. `translate run` translates a chapter only when its target fi
 - [~] Redo landfall's Italian with the corrected style and `glm-5.3-flash` at `high`, re-export both languages, update the four files already on Drive in place so the links keep working
 
 **Done when:** Redoing a translation costs the translation.
+
+## A translation is read back before it is kept 🔄
+
+**Status: 🔄 Proposed — 2026-09-01**
+
+The prose has a review stack — cold reader, technical editor, four style reviewers, reviser. A translation has one call and nobody reads it. Landfall's Italian shipped `Binta stette` for "Binta stood the watch" and `teneva i suoi polmoni dal dimenticare` for "kept her lungs from forgetting", and the pipeline reported success both times.
+
+`_translation_validation` already refuses real defects: numbers that do not match the source, heading or scene structure that differs, a length ratio outside 0.45–2.2, source-language fragments left in, English title case in a locale that does not use it. It is deterministic, blocking, and free. What it cannot see is the target language: nothing reads the locale style or the glossary, so a decision written there reaches the translator's prompt and is never checked against the answer.
+
+**Two halves, and the cheaper one catches more.**
+
+The glossary is already machine-readable — `- **source** → target — note`. A source chapter containing `tide-chalk` whose translation contains no `gesso di marea` is an exact finding that costs nothing and cannot be hallucinated. The same mechanism reads a locale rules file for what prose cannot express to a machine: forbidden forms, dialogue punctuation, the body-part possessive. `stette` would have been caught here, on the first chapter, for free. The engine carries the mechanism and the project carries the rules — a skill that hardcodes Italian tense law is a skill nobody else can install.
+
+The judgement half is a `translation-critic` role: source and translation side by side, plus the style and the glossary, returning findings that each cite a source span, a translated span and the rule broken. A finding citing nothing is set aside and recorded, the way the canon auditor already treats unverifiable evidence. This is what catches a calque, which is grammatical, breaks no listed ban, and is still wrong.
+
+**The critic may not run on the translator's model.** A model rereading its own rendering shares its blind spots and approves them. This is refused in the resolver, not left to whoever writes the config.
+
+**Bounded and never a stop.** One chapter per call, the same envelope class as the translation itself. Findings feed one repair call to the translator, as the reviser applies findings to prose. What the repair does not resolve is recorded beside the chapter and the run continues; nothing waits for a person.
+
+**Tasks:**
+- [x] `_glossary_compliance(source, translated, glossary)` returns a finding per term whose source appears and whose rendering does not
+- [x] `translations/<locale>/checks.yaml` carries the locale's machine-checkable rules: forbidden patterns with a reason, required dialogue marks, and a body-part possessive rule
+- [x] The generated `checks.yaml` is a stub, and an empty one is legal — a locale that declares no rules is checked by the glossary alone
+- [x] The forbidden forms run inside `_translation_validation`, before any model is asked — exact patterns, so the gate can refuse on them
+- [x] **Changed from the plan, deliberately.** Glossary compliance is advisory, not a gate. The match tolerates inflection so it can be wrong, and a heuristic inside a blocking check is how a book deadlocks: a false positive would spend the translation's one repair and then block the chapter. It runs in the review, where a false positive costs one repair call and nothing else
+- [x] `translation-critic` role and prompt: cites source span, translated span, and the rule; a finding citing nothing is set aside
+- [x] `_role_pin` refuses `roles.translation-critic` naming the translator's model, and says why
+- [x] The critic's findings drive one repair call to the translator; unresolved findings are written beside the chapter and the run continues
+- [x] Test: a translation dropping a glossary term is caught with no model call
+- [x] Test: `stette` in an Italian chapter is caught by `checks.yaml` with no model call
+- [x] Test: a locale with no `checks.yaml` still translates and is still glossary-checked
+- [x] Test: a critic pinned to the translator's model is refused before the call
+- [x] Test: a critic finding citing nothing is set aside and never becomes a repair
+- [x] Test: a repair that fixes two of three findings records the third and does not stop the run
+- [x] Suite green: 617 passed, 354 subtests. Reinstall, commit & push
+- [ ] Run it over landfall's three Italian chapters and report what it finds
+
+**Done when:** A translation nobody read is not a translation the pipeline calls done.
+
+## An attempt id is never handed out twice 🔄
+
+**Status: 🔄 In progress — 2026-09-01**
+
+**Found on landfall, one command after the translation reset.** Re-translating died on `Execution receipt is immutable`: the claim was given `ATT-0040`, whose directory already held a receipt from the run that wrote chapter one.
+
+`claim_task` allocates from the plan — `_next_id([row["id"] for row in plan["attempts"]], "ATT-")` — and the plan is not the record of what exists. Landfall has 207 attempt directories on disk and 69 attempts in its plan; every reset drops the attempts of the tasks it drops, and settled runs prune more. The directories stay, because they are the audit trail. So the counter walks back over ground that is already occupied, and the first claim to reach an occupied id dies on the immutability guard that exists to protect exactly that evidence.
+
+This is not a defect of the translation scope. Any reset has always been able to do it; the translation scope is simply the first one used on a project old enough to have the gap.
+
+**Fix.** The next attempt id is the successor of the highest id that exists anywhere — in the plan or on disk. Ids are never reused, the audit trail is never overwritten, and the guard stops firing on honest work.
+
+**Tasks:**
+- [x] Attempt ids allocate from the plan and the attempt directories together
+- [x] Test: a plan pruned back to nothing still allocates past the directories on disk
+- [x] Test: a reset followed by a re-run claims a fresh id and writes a fresh receipt
+- [x] Test: the receipt of the earlier attempt is still there afterwards
+- [x] Suite green: 617 passed, 354 subtests (era 604). Reinstall, commit & push
+
+**Done when:** A reset cannot make the engine overwrite its own evidence.

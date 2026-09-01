@@ -63,7 +63,13 @@ class RoleTopologyTests(unittest.TestCase):
         expected_writers = {self.bf._writer_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {
             self.bf._writer_candidate_name("openrouter/x-ai/grok-4.6")
         }
-        self.assertEqual(set(files), set(expected) | expected_chorus | expected_writers)
+        # The critic is the one role whose pin is deliberately not the project's:
+        # a translation reread by the model that wrote it is approved, not audited.
+        self.assertEqual(set(files), set(expected) | expected_chorus | expected_writers | {"translation-critic"})
+        critic = files["translation-critic"]
+        self.assertIn(f"model: {self.bf.CHORUS_SYNTHESIZER}", critic)
+        self.assertNotIn(f"model: {MODEL}\n", critic)
+        self.assertIn('"*": deny', critic)
         for name, (mode, variant) in expected.items():
             body = files[name]
             self.assertIn(f"mode: {mode}", body)
