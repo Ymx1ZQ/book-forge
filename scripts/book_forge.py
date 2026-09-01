@@ -8767,40 +8767,76 @@ def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
             continue
         source_part, rest = line[4:].split("**", 1)
         target_part = rest.split("→", 1)[1].split(" — ", 1)[0]
-        sources = [
-            re.sub(r"\([^)]*\)", "", piece).strip()
-            for piece in source_part.split("/")
-        ]
-        targets = [piece.strip() for piece in re.split(r"[/,]", target_part)]
+        def _clean(piece: str) -> str:
+            # A gloss in brackets belongs to neither side of the row. Stripping it
+            # from the source only left `i ripetitori a specchio (via degli specchi)`
+            # being looked for with its own explanation attached.
+            return re.sub(r"\([^)]*\)", "", piece).strip()
+
+        # A source side carrying the row's note separator has its braces in the
+        # wrong place, and which half is the term cannot be told apart from which
+        # half is the note: `**wind / foggia — the boatman's rig**` made `wind` a
+        # glossary term and flagged every chapter containing one of the commonest
+        # words in English. A row nobody can read is a row nobody checks against.
+        if "—" in source_part:
+            continue
+        sources = [_clean(piece) for piece in source_part.split("/")]
+        targets = [_clean(piece) for piece in re.split(r"[/,]", target_part)]
         sources = [value for value in sources if len(value) >= 4]
         targets = [value for value in targets if len(value) >= 4]
         if sources and targets:
-            rows.append((sources, targets))
+            # Longest first, so a row offering both `fen-gate` and `the gate` is
+            # judged on the specific alternative when the chapter contains it.
+            rows.append((sorted(sources, key=len, reverse=True), targets))
     return rows
 
 
 # Italian and its neighbours inflect, so a rendering is looked for by its content
 # words with the ending left open: `gesso di marea` must also match `gessi di marea`.
+# What separates an inflected form from a different word: one letter of ending.
+INFLECTION_TAIL = r"\w?"
 _GLOSSARY_FUNCTION_WORDS = {"il", "lo", "la", "i", "gli", "le", "un", "una", "di", "del", "della", "dei", "delle", "da", "a", "e", "the", "of", "l'"}
 
 
-def _term_pattern(term: str) -> str:
-    """A term as its content words, joined loosely and left open at the end.
+def _term_pattern(term: str, *, drop_leading_article: bool = False) -> str:
+    r"""A term as its content words, joined loosely and left open at the end.
 
     `tide-chalk` must match the hyphen the source writes and the space another
-    text writes, and `gesso di marea` must match `gessi di marea`, so a word long
-    enough to inflect gives up its last letter. Both were found by the check
-    returning nothing on a translation that had genuinely dropped the term.
+    text writes, and `gesso di marea` must also match `gessi di marea`, so a word
+    long enough to inflect gives up its last letter.
+
+    The leading article is dropped rather than required: the row says `il registro
+    di riva` and the chapter says `del registro di riva`, and requiring the row's
+    own article reported a term as missing while it sat in the sentence. A
+    four-letter word inflects too when the term has more than one content word —
+    `mano della palude` must recognise `mani della palude` — and stays literal on
+    its own, where `man\w*` would match half the dictionary.
+
+    The article is dropped from the rendering being looked for and never from the
+    term being looked up. English uses it to tell a proper noun from a common one:
+    `the Wall` is the returning tide and `wall` is a wall, and dropping the article
+    on that side reported the row against six ordinary walls.
     """
+    words = re.findall(r"[\w']+", term, re.UNICODE)
+    content = [word for word in words if word.casefold() not in _GLOSSARY_FUNCTION_WORDS]
+    while drop_leading_article and words and words[0].casefold() in _GLOSSARY_FUNCTION_WORDS:
+        words = words[1:]
     pieces = []
-    for word in re.findall(r"[\w']+", term, re.UNICODE):
+    for word in words:
         if word.casefold() in _GLOSSARY_FUNCTION_WORDS:
             pieces.append(re.escape(word))
-        elif len(word) >= 5:
-            pieces.append(re.escape(word[:-1]) + r"\w*")
+        elif len(word) >= 5 or (len(word) >= 4 and len(content) > 1):
+            # One letter, not any number of them. Inflection changes an ending;
+            # derivation replaces it, and an open tail read `watch-lieutenancy`
+            # as the term `watch-lieutenant` and called a correct rendering of
+            # the office a missing rendering of the person.
+            pieces.append(re.escape(word[:-1]) + INFLECTION_TAIL)
         else:
-            pieces.append(re.escape(word) + r"\w*")
-    return r"[\s\-\u2010-\u2015]+".join(pieces) if pieces else ""
+            pieces.append(re.escape(word) + INFLECTION_TAIL)
+    # Anchored at the end, or the bounded tail buys nothing: the pattern is not
+    # anchored by default, so `lieutenan\w?` still matches the first ten letters
+    # of `lieutenancy` and the term is read into a word that is not it.
+    return r"[\s\-\u2010-\u2015]+".join(pieces) + r"\b" if pieces else ""
 
 
 def _glossary_compliance(source: str, translated: str, glossary: str) -> list[str]:
@@ -8810,15 +8846,25 @@ def _glossary_compliance(source: str, translated: str, glossary: str) -> list[st
     wrong, and a heuristic inside a blocking check is how a book deadlocks. It is
     exact enough to be worth a repair call and not to be trusted with a refusal.
     """
+    def _flags(term: str) -> int:
+        # A capitalised term is a name, and English tells `the Wall` from `wall`
+        # by the capital alone. Folding the case there turns every ordinary wall
+        # into a missing proper noun.
+        capitalised = any(word[:1].isupper() for word in re.findall(r"[\w']+", term)[1:] or re.findall(r"[\w']+", term))
+        return re.UNICODE if capitalised else re.IGNORECASE | re.UNICODE
+
     findings = []
     for sources, targets in _glossary_terms(glossary):
         used = next(
-            (value for value in sources if re.search(_term_pattern(value), source, re.IGNORECASE | re.UNICODE)),
+            (value for value in sources if re.search(_term_pattern(value), source, _flags(value))),
             None,
         )
         if not used:
             continue
-        if any(re.search(_term_pattern(value), translated, re.IGNORECASE | re.UNICODE) for value in targets):
+        if any(
+            re.search(_term_pattern(value, drop_leading_article=True), translated, _flags(value))
+            for value in targets
+        ):
             continue
         findings.append(f"glossary: the source uses {used!r} and the translation never renders it as {targets[0]!r}")
     return findings

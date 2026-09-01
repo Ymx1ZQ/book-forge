@@ -134,6 +134,57 @@ class WhatCostsNoModelCallTests(TranslationReviewFixture):
         self.assertEqual(self.bf._glossary_compliance(SOURCE, inflected, glossary), [])
 
 
+class WhatTheGlossaryCheckFlagsTests(TranslationReviewFixture):
+    """On landfall's three chapters the check reported twelve missing terms and was
+    wrong about seven, in four distinct ways. Advice nobody can trust is advice
+    nobody reads, and the repair it drives is paid for either way."""
+
+    GLOSSARY = (
+        "- **the shore ledger** → il registro di riva — fixed.\n"
+        "- **fen-hand** → mano della palude — fixed.\n"
+        "- **mirror-road relays** → i ripetitori a specchio (via degli specchi) — fixed.\n"
+        "- **wind / foggia — the boatman's rig** → la foggia — malformed row.\n"
+    )
+
+    def flag(self, source, translated):
+        return self.bf._glossary_compliance(source, translated, self.GLOSSARY)
+
+    def test_a_contracted_article_still_satisfies_the_row(self):
+        """The row says `il registro di riva`; Italian writes `del registro di riva`."""
+        self.assertEqual(self.flag("The shore ledger was open.", "Il testo del registro di riva era aperto."), [])
+
+    def test_a_four_letter_word_inflects_when_the_term_has_more_than_one(self):
+        """`mano della palude` must recognise `mani della palude`."""
+        self.assertEqual(self.flag("A fen-hand waited.", "Le mani della palude aspettavano."), [])
+
+    def test_a_parenthetical_gloss_is_not_part_of_the_rendering(self):
+        self.assertEqual(self.flag("The mirror-road relays woke.", "I ripetitori a specchio si svegliarono."), [])
+
+    def test_a_row_whose_braces_swallow_its_note_is_not_read_as_a_term(self):
+        """`**wind / foggia — the boatman's rig**` made `wind` a glossary term."""
+        self.assertNotIn("wind", [row[0][0] for row in self.bf._glossary_terms(self.GLOSSARY)])
+        self.assertEqual(self.flag("The wind rose off the water.", "Il vento si alzava dall'acqua."), [])
+
+    def test_a_term_the_translation_really_drops_is_still_reported(self):
+        found = self.flag("A fen-hand waited by the shore ledger.", "Qualcuno aspettava accanto al libro.")
+        self.assertEqual(len(found), 2)
+
+    def test_a_short_word_is_not_satisfied_by_a_longer_one_that_starts_with_it(self):
+        """An open tail read `watch-lieutenancy` as `watch-lieutenant` and called a
+        correct rendering of the office a missing rendering of the person."""
+        glossary = "- **the oar** → remo — fixed.\n"
+        self.assertEqual(self.bf._glossary_compliance("The oar dipped.", "Il remo si immerse.", glossary), [])
+        self.assertEqual(len(self.bf._glossary_compliance("The oar dipped.", "Un passato remoto.", glossary)), 1)
+
+    def test_a_derived_word_is_not_the_term(self):
+        glossary = "- **watch-lieutenant** → il tenente di ronda — fixed.\n"
+        self.assertEqual(
+            self.bf._glossary_compliance("He knew the watch-lieutenancy.", "Conosceva la tenenza di ronda.", glossary),
+            [],
+            "the source says lieutenancy, which is not the term the row fixes",
+        )
+
+
 class WhatTheCriticIsForTests(TranslationReviewFixture):
     def critic(self, findings, verdict="repairable"):
         return {"findings": findings, "verdict": verdict}

@@ -3564,3 +3564,33 @@ This is not a defect of the translation scope. Any reset has always been able to
 - [x] Suite green: 617 passed, 354 subtests (era 604). Reinstall, commit & push
 
 **Done when:** A reset cannot make the engine overwrite its own evidence.
+
+## The glossary check is right about what it flags ✅
+
+**Status: ✅ Done — 2026-09-01**
+
+**Measured on landfall's three Italian chapters.** The check reported twelve terms missing. Five were real — `Contatori`, `il Conteggio`, `il Vault`, `il tenente di ronda`, and a chapter rendering `the gate` without the phrase its row fixes. Seven were the check being wrong, and it was wrong in four distinct ways, all in the matcher rather than in the translation:
+
+The target's leading article is matched literally, and Italian contracts it: the row says `il registro di riva`, the chapter says `del registro di riva`, and the term is reported missing while sitting in the sentence. A word under five letters is matched without tolerating inflection, so `mano della palude` does not recognise `mani della palude`, which is what the chapter says. Parentheticals are stripped from the source side of a row and not from the target, so `i ripetitori a specchio (via degli specchi)` is looked for with its gloss attached. And one row is malformed — `**wind / foggia — the boatman's rig**` puts the row's own note inside the term, which makes `wind` a glossary term and flags every chapter that contains one of the commonest words in English.
+
+Four out of ten right is usable as advice and would have been a disaster as a gate, which is the measured confirmation of a judgement made earlier by feel. But advice nobody can trust is advice nobody reads, and the repair call it drives is paid for either way.
+
+**Tasks:**
+- [x] A leading article in a target rendering is not required: the pattern starts at the first content word
+- [x] A four-letter word inflects like any other when the term has more than one content word
+- [x] Parentheticals are stripped from both sides of a glossary row
+- [x] A row alternative carrying the note separator is not read as a term
+- [x] Test: `del registro di riva` satisfies the row `il registro di riva`
+- [x] Test: `mani della palude` satisfies `mano della palude`
+- [x] Test: a target with a parenthetical gloss is matched without it
+- [x] Test: a malformed row does not turn a common source word into a term
+- [x] Test: the five real misses on landfall are still reported
+- [x] The article is dropped from the rendering looked for and never from the term looked up: English tells `the Wall` from `wall` by that article, and dropping it flagged the row against six ordinary walls
+- [x] A capitalised term is matched case-sensitively, for the same reason
+- [x] The inflection tail is one letter and the pattern is anchored: an open tail read `watch-lieutenancy` as `watch-lieutenant` and called a correct rendering of the office a missing rendering of the person
+- [x] Measured again on the same three chapters: twelve flags became one, and the one is a judgement the critic is there to make
+- [x] Suite green: 628 passed, 354 subtests (era 621). Reinstall, commit & push
+- [x] Fix landfall's malformed glossary row at the source
+- [ ] Re-review the three Italian chapters so the real misses are repaired, re-export, update Drive
+
+**Done when:** Every term the check reports is a term the translation is missing.
