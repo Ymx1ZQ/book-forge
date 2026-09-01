@@ -175,5 +175,85 @@ class ResetGuardTests(ResetFixture):
         self.assertTrue(receipt["kept"])
 
 
+class TranslationResetTests(ResetFixture):
+    """Landfall's Italian came back with the wrong tense rule and a translator on
+    `low`. Both causes were fixed at the source, and then nothing could ask the
+    question again: `translate run` skips a chapter whose file exists, and the
+    only reset that revisited it deleted the English manuscript with it."""
+
+    def setUp(self):
+        super().setUp()
+        book = self.project / "books" / self.book
+        for locale in ("it", "fr"):
+            workspace = book / "translations" / locale
+            (workspace / "chapters").mkdir(parents=True, exist_ok=True)
+            self.bf._write_json(workspace / "locale.yaml", {"schema": 1, "id": f"LOC-{locale.upper()}", "book": self.book, "locale": locale})
+            (workspace / "chapters" / "CH-0001.md").write_text(f"# CH-0001\n\n{locale}\n", encoding="utf-8")
+            if not (workspace / "state.yaml").is_file():
+                self.bf._write_json(workspace / "state.yaml", {"schema": 1, "locale": locale, "completed_chapters": ["CH-0001"], "current": True, "boundary_hashes": {"CH-0001": "abc"}})
+        (self.project / "dist" / self.book / "it").mkdir(parents=True, exist_ok=True)
+        (self.project / "dist" / self.book / "it" / "book-one-it.epub").write_text("edizione", encoding="utf-8")
+
+    def reset_it(self):
+        return self.bf.reset_book(self.project, self.book, scope="translation", confirm=True, locale="it")
+
+    def test_the_locale_loses_its_chapters_and_its_editions(self):
+        receipt = self.reset_it()
+        book = self.project / "books" / self.book
+        self.assertEqual(list((book / "translations" / "it" / "chapters").glob("*.md")), [])
+        self.assertFalse((self.project / "dist" / self.book / "it" / "book-one-it.epub").exists())
+        self.assertTrue(receipt["removed_paths"])
+
+    def test_the_prose_it_was_translated_from_is_untouched(self):
+        book = self.project / "books" / self.book
+        before = {path.name: path.read_bytes() for path in (book / "manuscript" / "chapters").glob("*.md")}
+        self.reset_it()
+        after = {path.name: path.read_bytes() for path in (book / "manuscript" / "chapters").glob("*.md")}
+        self.assertEqual(before, after)
+        self.assertTrue(before)
+        self.assertTrue((book / "design-audit.json").is_file())
+        self.assertTrue((book / "chapters" / "CH-0001.json").is_file())
+        self.assertEqual(self.bf._read_json(book / "state.yaml")["closed_chapters"], ["CH-0001", "CH-0002"])
+
+    def test_another_locale_keeps_its_own_translation(self):
+        self.reset_it()
+        book = self.project / "books" / self.book
+        self.assertTrue((book / "translations" / "fr" / "chapters" / "CH-0001.md").is_file())
+        self.assertEqual(self.bf._read_json(book / "translations" / "fr" / "state.yaml").get("locale", "fr"), "fr")
+
+    def test_the_locale_state_forgets_what_it_had_completed(self):
+        self.reset_it()
+        state = self.bf._read_json(self.project / "books" / self.book / "translations" / "it" / "state.yaml")
+        self.assertEqual(state["completed_chapters"], [])
+        self.assertEqual(state["boundary_hashes"], {})
+        self.assertTrue(state["current"])
+
+    def test_only_that_locale_translate_task_is_dropped(self):
+        self.bf.add_task(self.project, f"TRANSLATE-{self.book}-CH-0001-fr", "translator", deps=[], priority=50, outputs=[])
+        self.reset_it()
+        ids = {str(task["id"]) for task in self.bf._load_plan(self.project)["tasks"]}
+        self.assertNotIn(f"TRANSLATE-{self.book}-CH-0001-it", ids)
+        self.assertIn(f"TRANSLATE-{self.book}-CH-0001-fr", ids)
+        self.assertIn(f"DRAFT-{self.book}-CH-0001", ids)
+        self.assertIn(f"DESIGN-{self.book}", ids)
+
+    def test_it_refuses_without_a_locale_and_names_the_ones_the_book_has(self):
+        with self.assertRaises(self.bf.BookForgeError) as raised:
+            self.bf.reset_book(self.project, self.book, scope="translation", confirm=True)
+        self.assertIn("it", str(raised.exception))
+        self.assertIn("fr", str(raised.exception))
+
+    def test_it_refuses_a_locale_the_book_does_not_have(self):
+        with self.assertRaises(self.bf.BookForgeError) as raised:
+            self.bf.reset_book(self.project, self.book, scope="translation", confirm=True, locale="de")
+        self.assertIn("de", str(raised.exception))
+        self.assertTrue((self.project / "books" / self.book / "translations" / "it" / "chapters" / "CH-0001.md").is_file())
+
+    def test_it_still_needs_confirmation(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.reset_book(self.project, self.book, scope="translation", locale="it")
+        self.assertTrue((self.project / "books" / self.book / "translations" / "it" / "chapters" / "CH-0001.md").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

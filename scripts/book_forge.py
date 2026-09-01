@@ -9786,10 +9786,18 @@ RESET_KEPT = (
 )
 
 
-def _reset_paths(root: Path, book_id: str, scope: str) -> list[Path]:
+def _reset_paths(root: Path, book_id: str, scope: str, locale: str | None = None) -> list[Path]:
     """Every derived path a reset removes, in the order it removes them."""
     book = root / "books" / book_id
     targets: list[Path] = []
+    if scope == "translation":
+        # Only what this locale derived. The manuscript it was translated from is
+        # an input here, and re-translating five minutes of work must never cost
+        # the hundred minutes that wrote the prose.
+        targets.extend(sorted(book.glob(f"translations/{locale}/chapters/*.md")))
+        editions = root / "dist" / book_id / str(locale)
+        targets.extend(sorted(path for path in editions.glob("*") if path.exists()))
+        return targets
     targets.extend(sorted(book.glob("manuscript/chapters/*.md")))
     targets.extend(sorted(book.glob("translations/*/chapters/*.md")))
     for directory in ("reviews", "work", "coldread-state"):
@@ -9804,11 +9812,17 @@ def _reset_paths(root: Path, book_id: str, scope: str) -> list[Path]:
     return targets
 
 
-def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str) -> list[str]:
+def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str, locale: str | None = None) -> list[str]:
     dropped = []
     for task in plan["tasks"]:
         task_id = str(task["id"])
         if book_id not in task_id:
+            continue
+        if scope == "translation":
+            # `TRANSLATE-<book>-<chapter>-<locale>`: this locale's translations and
+            # nothing else, so a book translated into three languages loses one.
+            if task_id.startswith("TRANSLATE-") and task_id.endswith(f"-{locale}"):
+                dropped.append(task_id)
             continue
         if scope == "prose" and task_id.startswith(("DESIGN-", "AUDIT-")):
             continue
@@ -9816,7 +9830,7 @@ def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str) -> list[s
     return sorted(dropped)
 
 
-def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confirm: bool = False) -> dict[str, object]:
+def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confirm: bool = False, locale: str | None = None) -> dict[str, object]:
     """Return a book to its pre-writing state without leaving the control plane
     claiming work whose output is gone.
 
@@ -9827,19 +9841,30 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
     views. Canon, the brief, the continuity and the locale aids are input and
     are never touched.
     """
-    if scope not in {"prose", "design"}:
-        raise BookForgeError(f"Unknown reset scope: {scope} (prose, design)")
+    if scope not in {"prose", "design", "translation"}:
+        raise BookForgeError(f"Unknown reset scope: {scope} (prose, design, translation)")
     if not confirm:
         raise BookForgeError("reset removes written work; pass --yes to confirm")
     root = _project_root(project)
     book = root / "books" / book_id
     if not (book / "book.yaml").is_file():
         raise BookForgeError(f"Unknown book: {book_id}")
+    if scope == "translation":
+        # Guessing the language would delete the wrong one, and a translation is
+        # the one thing here that a person cannot tell apart by looking at the plan.
+        known = sorted(path.parent.name for path in book.glob("translations/*/locale.yaml"))
+        if not locale:
+            raise BookForgeError(
+                f"reset --scope translation needs --locale. This book has: {', '.join(known) or 'none'}"
+            )
+        locale = _canonical_locale(locale)
+        if locale not in known:
+            raise BookForgeError(f"Unknown translation locale: {locale}. This book has: {', '.join(known) or 'none'}")
     title = str(_read_json(book / "book.yaml").get("title", book_id))
     continuity = str(_read_json(book / "book.yaml").get("continuity", "CNT-0001"))
 
     removed = []
-    for path in _reset_paths(root, book_id, scope):
+    for path in _reset_paths(root, book_id, scope, locale):
         if path.is_dir():
             shutil.rmtree(path)
         elif path.exists():
@@ -9847,17 +9872,24 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
         removed.append(str(path.relative_to(root)))
 
     plan = _load_plan(root)
-    dropped = _reset_task_ids(plan, book_id, scope)
+    dropped = _reset_task_ids(plan, book_id, scope, locale)
     plan["tasks"] = [task for task in plan["tasks"] if str(task["id"]) not in set(dropped)]
     plan["attempts"] = [row for row in plan.get("attempts", []) if str(row.get("task")) not in set(dropped)]
     _save_plan(root, plan)
 
-    _write_json(book / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
     locales = []
-    for state_path in sorted(book.glob("translations/*/state.yaml")):
-        locale = state_path.parent.name
+    if scope == "translation":
+        # The book's own state records which chapters are closed in the source
+        # language, and this reset did not touch one of them.
+        state_path = book / "translations" / str(locale) / "state.yaml"
         _write_json(state_path, {"schema": 1, "locale": locale, "completed_chapters": [], "current": True, "boundary_hashes": {}})
-        locales.append(locale)
+        locales.append(str(locale))
+    else:
+        _write_json(book / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
+        for state_path in sorted(book.glob("translations/*/state.yaml")):
+            name = state_path.parent.name
+            _write_json(state_path, {"schema": 1, "locale": name, "completed_chapters": [], "current": True, "boundary_hashes": {}})
+            locales.append(name)
 
     if scope == "design":
         _write_json(book / "outline.yaml", {"schema": SCHEMA_VERSION, "chapters": []})
@@ -9934,7 +9966,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--style", help="Prose style preset; when omitted and TTY, prompts interactively")
     reset = commands.add_parser("reset")
     reset.add_argument("--book", required=True)
-    reset.add_argument("--scope", choices=("prose", "design"), default="prose")
+    reset.add_argument("--scope", choices=("prose", "design", "translation"), default="prose")
+    reset.add_argument("--locale", help="Required with --scope translation: the locale to redo")
     reset.add_argument("--yes", action="store_true", help="Required: reset removes written work")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
@@ -10054,7 +10087,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "reset":
-            print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes), sort_keys=True))
+            print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale), sort_keys=True))
         elif args.command == "add-book":
             print(json.dumps(add_book(args.project, args.title, continuity=args.continuity), sort_keys=True))
         elif args.command == "relate":

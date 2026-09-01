@@ -3464,3 +3464,26 @@ The other measurements. Words against a 2000 target: deepseek 1982, glm 1702, qw
 **Left open, deliberately.** The reviser writes prose too and is still pinned to DeepSeek. Both roles read the same style preset, so the register is nominally shared, but a chapter written by one model and repaired by another is two hands on the same paragraph. Pinning `roles.reviser` to the writer's model is one line, and it was not taken without asking.
 
 **Done when:** `roles.writer.model` decides who writes the book, and CH-0001 exists three times so that decision can be made by reading.
+
+## A translation can be redone without throwing away the prose 🔄
+
+**Status: 🔄 In progress — 2026-09-01**
+
+**Found on landfall's first Italian edition.** The locale style ruled `passato remoto` for action without excepting stative and durative verbs, and the translator was still on the default `low` effort, so three chapters came back with `Binta stette` for "Binta stood the watch" and with calques rendered word by word — `teneva i suoi polmoni dal dimenticare` for "kept her lungs from forgetting". Both causes are fixed where they live: the style now makes the imperfetto the base tense and forbids the remoto forms that stop a reader, and `roles.translator` is pinned to a model and an effort. Redoing the work is then a matter of asking again.
+
+Nothing asks again. `translate run` translates a chapter only when its target file is absent, so a chapter whose style, glossary or model has changed is never revisited — the engine detects the staleness well enough to refuse publication, and offers no way to answer it. `reset --scope prose` does revisit it, by deleting the English manuscript with it: a hundred minutes of writing thrown away to redo five minutes of translation. What is left is deleting the locale's chapter files by hand, which is the move this project treats as the unforgivable one, because it fixes one directory and reaches no future run.
+
+**Fix.** A `translation` reset scope that removes what a locale derived and nothing else: `translations/<locale>/chapters/*.md`, the locale state's completed chapters and boundary hashes, and that locale's editions. The manuscript, the contracts, the design and the canon are untouched. It requires `--locale`, and refuses without one rather than guessing which language was meant.
+
+**Tasks:**
+- [x] `reset --book <id> --scope translation --locale <loc>` removes the locale's chapters, its completed markers and its editions
+- [x] The English manuscript, the chapter contracts and the design audit survive it
+- [x] It refuses without `--locale`, naming the locales the book has, and refuses a locale the book does not have
+- [x] `--yes` is required, as every other reset requires it
+- [x] Test: a reset locale is re-translated by the next `translate run`, and the source chapters are byte-identical afterwards
+- [x] Test: resetting one locale leaves another locale's chapters in place
+- [x] Test: `--scope prose` still removes what it removed before, so the existing guard does not move
+- [x] Suite green: 598 passed, 354 subtests (era 590). Reinstall, commit & push
+- [~] Redo landfall's Italian with the corrected style and `glm-5.3-flash` at `high`, re-export both languages, update the four files already on Drive in place so the links keep working
+
+**Done when:** Redoing a translation costs the translation.

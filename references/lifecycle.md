@@ -33,7 +33,8 @@ never completion evidence.
 
 - `--scope prose` removes the manuscript chapters, the translated chapters, the reviews, the pivotal-variant work, the cold-read state and the editions; drops every chapter-scoped task; reseeds the book state and each translation workspace; drops the artifact rows whose files are gone and rebuilds the derived views.
 - `--scope design` does all of that and additionally reseeds the outline, the chapter contracts, `design.md`, `reader-state.md` and the design audit, and drops the book's `DESIGN-` and `AUDIT-` tasks. Use it when the beats are what needs rewriting, not just the prose.
-- Neither scope touches the universe canon, `book.yaml`, `book-brief.json`, `continuity.yaml` or the locale aids — glossary, style guide and metadata. Those are input, not output.
+- `--scope translation --locale <loc>` removes only what that locale derived: its translated chapters, its completed-chapter markers and boundary hashes, and its editions. The manuscript it was translated from, the contracts, the design and every other locale survive. Use it when the locale style, the glossary or `roles.translator` has changed and the existing translation was made under the old decision — `translate run` only translates a chapter whose file is absent, so without this the change never reaches the prose. It requires `--locale` and refuses without one, naming the locales the book has.
+- No scope touches the universe canon, `book.yaml`, `book-brief.json`, `continuity.yaml` or the locale aids — glossary, style guide and metadata. Those are input, not output.
 - `--yes` is required. Without it the command refuses and changes nothing.
 - The receipt names every removed path, dropped task and dropped artifact. Report it rather than summarizing it.
 
