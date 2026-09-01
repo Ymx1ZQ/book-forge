@@ -231,6 +231,73 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         self.assertIn("gesso di marea", text)
         self.assertNotIn("not a contract", text)
 
+    def test_an_unreadable_answer_is_asked_again_and_the_second_one_counts(self):
+        """The critic's output is the most structured this engine asks for, so it is
+        the likeliest to come back malformed, and it was the only role asked once."""
+
+        class OnceUnreadable(ScriptedProvider):
+            answers = 0
+
+            def __call__(self, role, envelope, attempt_dir):
+                if role == "translation-critic":
+                    OnceUnreadable.answers += 1
+                    if OnceUnreadable.answers == 1:
+                        payload = dict(envelope["payload"])
+                        self.calls.append(role)
+                        return {
+                            "text": "Here is my reading, in prose, with no object at all.",
+                            "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                            "session_id": "ses-bad", "tokens": {"input": 1, "output": 1},
+                            "cost": 0.0, "latency_ms": 1, "finish": "stop",
+                        }
+                return super().__call__(role, envelope, attempt_dir)
+
+        OnceUnreadable.answers = 0
+        provider = OnceUnreadable(
+            [translation(CALQUE_BODY), translation(GOOD_BODY)],
+            critic={"findings": [self.calque_finding()], "verdict": "repairable"},
+        )
+        self.translate(provider)
+        self.assertEqual(provider.calls.count("translation-critic"), 2)
+        review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
+        self.assertEqual(review["set_aside"], [])
+        self.assertTrue(review["findings"])
+
+    def test_a_chapter_the_critic_never_reads_does_not_stop_the_next_one(self):
+        """CH-0002's failure blocked the run and CH-0003 died on a dispatch refusal
+        that had nothing to do with CH-0003."""
+        second = {"schema": 1, "book": self.book, "id": "CH-0002", "order": 2, "pov": "CHR-0001",
+                  "beats": ["Wait"], "plants": [], "reveals": [], "target_words": 120,
+                  "imports": [], "pivotal": None, "title": "The Blue Tear"}
+        (self.project / f"books/{self.book}/chapters/CH-0002.json").write_text(json.dumps(second))
+        (self.project / f"books/{self.book}/manuscript/chapters/CH-0002.md").write_text(SOURCE, encoding="utf-8")
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {"review": False}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        config.pop("translation")
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+        class BlindOnFirst(ScriptedProvider):
+            def __call__(self, role, envelope, attempt_dir):
+                if role == "translation-critic" and envelope["payload"]["task"]["chapter"] == "CH-0001":
+                    self.calls.append(role)
+                    payload = envelope["payload"]
+                    return {
+                        "text": "no object here either", "provider": "openrouter",
+                        "model": payload["model"], "variant": payload["variant"],
+                        "session_id": "ses-bad", "tokens": {"input": 1, "output": 1},
+                        "cost": 0.0, "latency_ms": 1, "finish": "stop",
+                    }
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = BlindOnFirst([translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"})
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        by_chapter = {row["chapter"]: row for row in report["reviewed"]}
+        self.assertEqual(by_chapter["CH-0001"]["verdict"], "unread")
+        self.assertEqual(by_chapter["CH-0002"]["verdict"], "faithful")
+
     def test_a_critic_that_cannot_be_read_never_stops_the_translation(self):
         class BrokenCritic(ScriptedProvider):
             def __call__(self, role, envelope, attempt_dir):

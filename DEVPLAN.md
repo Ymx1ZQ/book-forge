@@ -3594,3 +3594,27 @@ Four out of ten right is usable as advice and would have been a disaster as a ga
 - [ ] Re-review the three Italian chapters so the real misses are repaired, re-export, update Drive
 
 **Done when:** Every term the check reports is a term the translation is missing.
+
+## An advisory pass cannot block the run it advises 🔄
+
+**Status: 🔄 In progress — 2026-09-01**
+
+**Found on the final review of landfall's Italian.** One chapter of three was read. CH-0002's critic answered with prose instead of the contract, and CH-0003 then died on `Run does not accept dispatch while blocked` — not because anything was wrong with CH-0003, but because the failure on the chapter before it had blocked the run.
+
+Two defects, and both are the same sentence written twice: this pass is advisory and behaves as though it were not.
+
+It takes a claim and, when the answer cannot be read, never settles it. The lease lapses, recovery converts the abandoned claim, and the run goes blocked — so an advisory reading that fails takes every chapter after it down with it. The engine already has the settlement for this: a failure marked `block=False` returns the task and leaves the run alone.
+
+And it asks once. The translator gets a repair, the audit halves a window and then asks about the chapter alone, and the critic — the one role whose output is the most structured and therefore the most likely to come back malformed — gets a single attempt and is set aside. Two of three chapters went unread for want of a second ask.
+
+**Tasks:**
+- [x] Any failure of the critic settles its claim with `block=False`, so an unread chapter never blocks the run
+- [x] The critic is asked twice: the second ask carries what was unreadable about the first
+- [x] The repair keeps the same treatment, since it is the same kind of advisory call
+- [x] Test: a critic that answers unreadably once and correctly the second time produces its findings
+- [x] Test: a critic that fails twice sets the chapter aside, leaves the run running, and the next chapter is still read
+- [x] Test: a failure on one chapter does not stop the chapters after it in a multi-chapter review
+- [x] Suite green: 630 passed, 354 subtests (era 628). Reinstall, commit & push
+- [~] Re-run the review over landfall's three chapters and report what each one got
+
+**Done when:** No chapter goes unread because of what happened to another one.

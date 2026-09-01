@@ -9042,11 +9042,14 @@ def _review_translation(
         # a chapter can be read back once in its life, and the second pass finds
         # its own task already succeeded.
         _reopen_task(root, task_id)
-    try:
-        envelope = build_envelope(
-            root,
-            role="translation-critic",
-            task_capsule={
+    # The critic's output is the most structured this engine asks for, which makes
+    # it the most likely to come back malformed, and it was the only role with no
+    # second ask. Two of landfall's three chapters went unread for want of one.
+    unreadable = ""
+    for attempt_number in (1, 2):
+        claim = None
+        try:
+            capsule = {
                 "book": book_id,
                 "chapter": chapter_id,
                 "target_locale": locale,
@@ -9054,35 +9057,53 @@ def _review_translation(
                 "translated_markdown": translated,
                 "locale_style": style,
                 "glossary": glossary,
-            },
-            imports=[],
-            state={},
-            tools=[],
-            max_output_tokens=9000,
-        )
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        attempt_dir = Path(claim["capsule"]).parent
-        result = runner("translation-critic", envelope, attempt_dir)
-        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-        value = _parse_contract_json(str(result["text"]))
-        cited, aside = _cited_findings(value.get("findings"))
-        findings.extend(cited)
-        set_aside.extend(aside)
-        verdict = str(value.get("verdict") or "repairable")
-        manifest = stage_outputs(root, claim["attempt"], {review_path: _json_bytes(
-            {"schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings, "set_aside": set_aside}
-        )})
-        record_execution(
-            root,
-            claim["attempt"],
-            claim["fence"],
-            output_hash=_sha256_bytes(_json_bytes(manifest)),
-            telemetry=_provider_telemetry(result, envelope),
-        )
-        promote_task(root, claim["attempt"], claim["fence"])
-    except BookForgeError as exc:
-        print(f"[translation-critic] {chapter_id} was not read: {exc}", file=sys.stderr)
-        set_aside.append({"id": "C-unread", "severity": "note", "kind": "critic", "issue": str(exc)})
+            }
+            if unreadable:
+                capsule["retry"] = {
+                    "attempt": attempt_number,
+                    "why_the_last_answer_was_unusable": unreadable,
+                    "instruction": "Return one JSON object and nothing else. No prose before or after it.",
+                }
+            envelope = build_envelope(
+                root,
+                role="translation-critic",
+                task_capsule=capsule,
+                imports=[],
+                state={},
+                tools=[],
+                max_output_tokens=9000,
+            )
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            attempt_dir = Path(claim["capsule"]).parent
+            result = runner("translation-critic", envelope, attempt_dir)
+            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            value = _parse_contract_json(str(result["text"]))
+            cited, aside = _cited_findings(value.get("findings"))
+            findings.extend(cited)
+            set_aside.extend(aside)
+            verdict = str(value.get("verdict") or "repairable")
+            manifest = stage_outputs(root, claim["attempt"], {review_path: _json_bytes(
+                {"schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings, "set_aside": set_aside}
+            )})
+            record_execution(
+                root,
+                claim["attempt"],
+                claim["fence"],
+                output_hash=_sha256_bytes(_json_bytes(manifest)),
+                telemetry=_provider_telemetry(result, envelope),
+            )
+            promote_task(root, claim["attempt"], claim["fence"])
+            break
+        except BookForgeError as exc:
+            unreadable = str(exc)
+            if claim is not None:
+                # `block=False`, always. This pass advises; a reading that fails is
+                # a chapter without advice, and it must not be a run that stops for
+                # every chapter after it. Landfall lost two that way.
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=unreadable)
+            if attempt_number == 2:
+                print(f"[translation-critic] {chapter_id} was not read, asked twice: {unreadable}", file=sys.stderr)
+                set_aside.append({"id": "C-unread", "severity": "note", "kind": "critic", "issue": unreadable})
     if set_aside:
         print(
             f"[translation-critic] {chapter_id}: {len(set_aside)} finding(s) set aside, cited nothing that resolves",
@@ -9137,6 +9158,7 @@ def _repair_translation(
             ),
         },
     }
+    claim = None
     try:
         envelope = build_envelope(
             root,
@@ -9157,6 +9179,8 @@ def _repair_translation(
             raise BookForgeError("; ".join(problems))
     except BookForgeError as exc:
         print(f"[translation-critic] {chapter_id}: the repair was refused and the accepted translation kept: {exc}", file=sys.stderr)
+        if claim is not None:
+            _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc))
         return None
     _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
     return repaired
