@@ -192,6 +192,34 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         self.translate(provider)
         self.assertTrue((self.locale_root / "chapters" / "CH-0001.md").is_file())
 
+    def test_a_full_set_of_quoted_findings_is_parsed_and_repaired(self):
+        """Landfall's first critic answer was cut mid-string at 3000 tokens and the
+        whole pass was lost. Every finding carries three quotes, so twelve of them
+        must fit the budget the call is given."""
+        findings = [
+            {
+                "id": f"{index:02d}", "severity": "warning", "kind": "calque",
+                "source": "kept her lungs from forgetting " * 6,
+                "translated": "teneva i suoi polmoni dal dimenticare " * 6,
+                "rule": "Contro il calco, sezione dello stile della localizzazione",
+                "issue": "resa parola per parola " * 6,
+                "fix": "impediva ai polmoni di dimenticare " * 6,
+            }
+            for index in range(1, 13)
+        ]
+        provider = ScriptedProvider(
+            [translation(CALQUE_BODY), translation(GOOD_BODY)],
+            critic=self.critic(findings),
+        )
+        self.translate(provider)
+        self.assertEqual(provider.calls, ["translator", "translation-critic", "translator"])
+        review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
+        self.assertEqual(len(review["findings"]), 12 + 2, "twelve cited findings plus the two the glossary found")
+        self.assertEqual(review["set_aside"], [])
+
+    def test_the_critic_is_given_room_for_a_full_answer(self):
+        self.assertGreaterEqual(self.bf.ROLE_BUDGETS["translation-critic"][1], 9000)
+
     def test_the_review_can_be_switched_off(self):
         config = json.loads((self.project / "book-forge.yaml").read_text())
         config["translation"] = {"review": False}
@@ -230,6 +258,33 @@ class ReadingBackWhatIsAlreadyTranslatedTests(TranslationReviewFixture):
         provider = ScriptedProvider([translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"})
         report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
         self.assertEqual(report["reviewed"][0]["by_kind"]["glossary"], 2)
+
+    def test_a_rule_written_after_the_translation_still_reaches_it(self):
+        """The first real review left `su la scala` standing: the locale's rules ran
+        only while a chapter was being translated, and this chapter already was."""
+        self.checks([{"pattern": r"\bsu la\b", "reason": "preposizione non articolata: sulla"}])
+        path = self.locale_root / "chapters" / "CH-0001.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\n\nLampade su la scala del porto.\n", encoding="utf-8")
+        provider = ScriptedProvider([translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"})
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        row = report["reviewed"][0]
+        self.assertGreaterEqual(row["by_kind"].get("style", 0), 1)
+        self.assertTrue(row["repaired"])
+        self.assertNotIn("su la scala", path.read_text(encoding="utf-8"))
+
+    def test_a_chapter_can_be_read_back_more_than_once(self):
+        """The second review of landfall's CH-0001 produced its finding and could
+        not act on it: the task from the first review had already succeeded."""
+        first = ScriptedProvider([translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"})
+        self.bf.review_translation(self.project, self.book, "it", provider=first)
+        self.checks([{"pattern": r"\bsu la\b", "reason": "preposizione non articolata"}])
+        path = self.locale_root / "chapters" / "CH-0001.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\n\nLampade su la scala.\n", encoding="utf-8")
+        second = ScriptedProvider([translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"})
+        report = self.bf.review_translation(self.project, self.book, "it", provider=second)
+        self.assertIn("translation-critic", second.calls)
+        self.assertTrue(report["reviewed"][0]["repaired"])
+        self.assertNotIn("su la scala", path.read_text(encoding="utf-8"))
 
     def test_it_refuses_a_locale_with_nothing_translated(self):
         self.bf.add_translation(self.project, self.book, "fr")

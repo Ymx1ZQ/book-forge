@@ -3123,7 +3123,10 @@ ROLE_BUDGETS = {
     "reviser": (14000, 8000),
     "canon-auditor": (32000, 3500),
     "translator": (16000, 6000),
-    "translation-critic": (24000, 3000),
+    # Every finding quotes the source, the translation and the replacement, so a
+    # chapter's worth of them is long. Landfall's first critic answer was cut
+    # mid-string at 3000 and the whole pass was lost.
+    "translation-critic": (24000, 9000),
     "judge": (10000, 2000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
@@ -8956,6 +8959,23 @@ def _review_translation(
         }
         for index, problem in enumerate(_glossary_compliance(source, translated, glossary), start=1)
     ]
+    # The locale's own rules run here too, not only while a chapter is translated.
+    # A rule written after a translation exists is exactly the rule that chapter
+    # never met: landfall's review repaired forty-eight findings and left an
+    # un-contracted preposition standing, because `checks.yaml` was never opened.
+    findings.extend(
+        {
+            "id": f"L-{index:02d}",
+            "severity": "warning",
+            "kind": "style",
+            "rule": "the locale checks",
+            "issue": problem,
+            "source": "",
+            "translated": "",
+            "fix": "",
+        }
+        for index, problem in enumerate(_forbidden_form_problems(translated, _locale_checks(locale_root)), start=1)
+    )
     set_aside: list[dict[str, object]] = []
     verdict = "unread"
     task_id = f"TRANSCRIT-{book_id}-{chapter_id}-{locale}"
@@ -8970,6 +8990,12 @@ def _review_translation(
             chapter_order=int(contract.get("order", 0)),
             outputs=[review_path],
         )
+    else:
+        # A review is repeatable by nature: a locale rule written after a chapter
+        # was translated is exactly the rule that chapter never met. Without this
+        # a chapter can be read back once in its life, and the second pass finds
+        # its own task already succeeded.
+        _reopen_task(root, task_id)
     try:
         envelope = build_envelope(
             root,
@@ -8986,7 +9012,7 @@ def _review_translation(
             imports=[],
             state={},
             tools=[],
-            max_output_tokens=3000,
+            max_output_tokens=9000,
         )
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
         attempt_dir = Path(claim["capsule"]).parent
@@ -9043,6 +9069,8 @@ def _repair_translation(
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
         add_task(root, task_id, "translator", priority=84, chapter_order=int(contract.get("order", 0)))
+    else:
+        _reopen_task(root, task_id)
     capsule = {
         "book": book_id,
         "chapter": chapter_id,

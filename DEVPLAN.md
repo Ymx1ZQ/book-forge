@@ -3524,6 +3524,24 @@ The judgement half is a `translation-critic` role: source and translation side b
 - [x] Suite green: 617 passed, 354 subtests. Reinstall, commit & push
 - [ ] Run it over landfall's three Italian chapters and report what it finds
 
+**Reopened once, on the first real run.** The critic's answer for CH-0001 came back truncated mid-string: every finding quotes the source, the translation and the exact replacement, three strings each, and a chapter with a dozen findings does not fit the 3000-token ceiling the call was given. The engine did the right thing — set the pass aside, recorded it, carried on — and produced nothing usable.
+
+An answer bounded by a constant is the invariant this whole engine is built on, and the critic was given a budget without being told a limit. Both halves are fixed: the ceiling rises to what a full set of quoted findings actually costs, and the prompt caps the count so the answer is bounded by construction rather than by the ceiling catching it.
+
+- [x] The critic's output budget fits a chapter's worth of quoted findings
+- [x] The prompt asks for at most twelve findings, most severe first, so the bound is in the question and not only in the cut
+- [x] Test: a critic answer at the cap is parsed and drives its repair
+
+**Reopened again, by reading the result.** The first real review repaired 48 findings across three chapters and left `lampade su la scala del porto` standing — an un-contracted preposition, the most machine-checkable defect Italian has, spotted by eye in the first paragraph. The locale's `forbidden` patterns run inside `_translation_validation`, which only executes while a chapter is being translated: `translate review` ran the glossary half and never opened `checks.yaml`. A chapter translated before a rule existed is exactly the chapter that needs the rule applied to it.
+
+- [x] `_review_translation` runs the locale's forbidden patterns as well as the glossary, so a rule added after a translation still reaches it
+- [x] Test: a forbidden form in an already-translated chapter is found by `translate review` and repaired
+
+**Reopened a third time, and again by running it.** With the preposition rule in place, the second review of CH-0001 produced the finding and could not act on it: `Task is not ready: TRANSCRIT-BOOK-0001-CH-0001-it`. The pass reuses one task id per chapter, and that task had succeeded on the first review, so a chapter can be reviewed exactly once in its life. A review exists to be repeated — a rule written after a translation is precisely the rule that translation never met — and the engine already has `_reopen_task` for a completed task whose input changed.
+
+- [x] The review and its repair reopen their task when it has already succeeded, because a review is a repeatable pass
+- [x] Test: a chapter reviewed twice is reviewed twice, and the second pass can repair
+
 **Done when:** A translation nobody read is not a translation the pipeline calls done.
 
 ## An attempt id is never handed out twice 🔄

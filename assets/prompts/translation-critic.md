@@ -19,4 +19,6 @@ For each finding, `fix` proposes the exact replacement text, not a description o
 
 Return one JSON object and no fences: `{"findings":[{"id":"01","severity":"blocking|warning|note","kind":"meaning|calque|glossary|style|voice|agreement","source":"the source text, quoted","translated":"the translation as delivered, quoted","rule":"the style section, glossary row, or property of the target language","issue":"what is wrong and what it costs the reader","fix":"the exact replacement text"}],"verdict":"faithful|repairable|unfaithful"}`.
 
+Report **at most twelve findings**, most severe first. A chapter has more defects than that only if the translation is unusable, and in that case say so in `verdict` and report the twelve that matter — an answer cut off mid-sentence is an answer nobody can act on, and the whole pass is lost.
+
 `blocking` is for meaning changed or lost, and for nothing else. Everything a reader would survive is `warning` or `note`.
