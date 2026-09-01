@@ -256,9 +256,10 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         self.assertIn("refused", last["repair"])
         self.assertIn("olle", last["repair"]["refused"]["why_the_last_repair_was_rejected"].lower())
 
-    def test_a_repair_refused_twice_leaves_the_translation_and_records_the_findings(self):
+    def test_a_repair_refused_every_time_leaves_the_translation_and_records_the_findings(self):
         kept = translation(GOOD_BODY)
-        provider = ScriptedProvider([kept, "not a contract at all", "still not a contract"], critic=self.critic([self.calque_finding()]))
+        refusals = ["not a contract at all"] * self.bf.CRITIC_ATTEMPTS
+        provider = ScriptedProvider([kept, *refusals], critic=self.critic([self.calque_finding()]))
         self.translate(provider)
         text = (self.locale_root / "chapters" / "CH-0001.md").read_text()
         self.assertIn("gesso di marea", text)

@@ -5447,13 +5447,28 @@ def _run_book_audit_chunked(
                 max_output_tokens=max_output_tokens,
             )
             _write_bytes_atomic(attempt_dir / f"envelope-{slug}-alone.json", envelope["bytes"])
-            try:
-                result = runner("canon-auditor", envelope, attempt_dir)
-                results.append(result)
-                mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
-                _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
-                value = _parse_contract_json(str(result["text"]))
-            except BookForgeError as alone_exc:
+            alone_exc = None
+            value = None
+            # The last resort keeps having no next resort for an answer that will not
+            # parse: this model's common failure is a whole budget spent on reasoning,
+            # and asking the identical question again buys the identical nothing.
+            # Silence is the other failure and it is a window, so it is waited out
+            # once — the same distinction every other retry here now makes.
+            for alone_attempt in (1, 2):
+                try:
+                    result = runner("canon-auditor", envelope, attempt_dir)
+                    results.append(result)
+                    mark_provider_accepted(root, str(claim["attempt"]), str(result["session_id"]))
+                    _write_bytes_atomic(attempt_dir / f"raw-{slug}-alone.txt", str(result.get("text", "")).encode())
+                    value = _parse_contract_json(str(result["text"]))
+                    alone_exc = None
+                    break
+                except BookForgeError as caught:
+                    alone_exc = caught
+                    if alone_attempt == 2 or not _is_silence(caught):
+                        break
+                    _wait_before_retry("canon-auditor", slug, alone_attempt, caught, runner)
+            if alone_exc is not None:
                 # The last resort has no next resort. Whatever comes back from it —
                 # nothing, or something that will not parse — the window is recorded
                 # as unread and the audit moves on. Ending here puts every pass that
@@ -5461,9 +5476,9 @@ def _run_book_audit_chunked(
                 # whole line of work removes. The rescue used to cover only a silent
                 # provider, and this model's common failure is the other one: an
                 # answer that arrives with its whole budget spent on reasoning.
-                silent_provider = isinstance(alone_exc, ProviderProducedNothing)
+                silent_provider = _is_silence(alone_exc)
                 print(
-                    f"[canon-auditor] {slug} was asked twice and "
+                    f"[canon-auditor] {slug} was asked again and "
                     + ("answered neither time" if silent_provider else "its second answer could not be read")
                     + "; the window is set aside unread",
                     file=sys.stderr,
@@ -7304,6 +7319,7 @@ def draft_chapter(
             _set_attempt_failure(root, claim["attempt"], block=call_number == 2, reason=last_error)
             if call_number == 2:
                 raise BookForgeError(f"Chapter draft blocked after one repair: {last_error}") from exc
+            _wait_before_retry("writer", chapter_id, call_number, exc, runner)
             continue
         outputs = {
             f"books/{book_id}/work/{chapter_id}/draft.md": str(parsed["prose_markdown"]).rstrip() + "\n",
@@ -8948,6 +8964,53 @@ def _translation_review_enabled(config: dict[str, object]) -> bool:
     return True
 
 
+
+# What a failure needs. An unusable answer is a question that was heard and
+# answered badly, so it is asked again at once, carrying what was wrong with the
+# last answer. Silence is a window, and tonight the windows were minutes long:
+# two writer calls quiet for 900s each while the identical envelope answered in
+# 340, and a critic that produced no text twice in a row and read the same
+# chapter fine on the next command. Asking again inside the window spends a call
+# to be told the same nothing and burns the retry before the window closes.
+SILENCE_RETRY_DELAYS = {1: 60.0, 2: 180.0}
+# Three asks: a dead provider costs four minutes of waiting, not a night.
+CRITIC_ATTEMPTS = 3
+
+
+def _is_silence(exc: BaseException) -> bool:
+    """Whether the provider gave nothing, as opposed to something unusable."""
+    if isinstance(exc, (ProviderProducedNothing, ProviderOutcomeUnknown)):
+        return True
+    text = str(exc)
+    return "produced no result" in text or "no observable text" in text
+
+
+def _wait_before_retry(role: str, subject: str, failed_attempt: int, exc: BaseException, runner=None) -> float:
+    """Sleep before asking again, but only when the last answer was silence.
+
+    Returns what it waited, so a caller can report it. The claim of the failed
+    attempt is settled before this is called, never across it, so a run killed
+    during the wait leaves nothing half-held.
+
+    Only a real provider is waited for. A substituted runner has no window to
+    wait out — it answered the way it was told to — and making the engine sleep
+    for one turned a two-minute suite into a timeout.
+    """
+    if runner is not None and runner is not run_opencode_role:
+        return 0.0
+    if not _is_silence(exc):
+        return 0.0
+    delay = SILENCE_RETRY_DELAYS.get(failed_attempt, 0.0)
+    if delay <= 0:
+        return 0.0
+    print(
+        f"[{role}] {subject}: the provider answered nothing; waiting {int(delay)}s before asking again",
+        file=sys.stderr,
+    )
+    time.sleep(delay)
+    return delay
+
+
 def _cited_findings(findings: object) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Split what the critic returned into what can be acted on and what cannot.
 
@@ -9046,7 +9109,7 @@ def _review_translation(
     # it the most likely to come back malformed, and it was the only role with no
     # second ask. Two of landfall's three chapters went unread for want of one.
     unreadable = ""
-    for attempt_number in (1, 2):
+    for attempt_number in range(1, CRITIC_ATTEMPTS + 1):
         claim = None
         try:
             capsule = {
@@ -9101,9 +9164,14 @@ def _review_translation(
                 # a chapter without advice, and it must not be a run that stops for
                 # every chapter after it. Landfall lost two that way.
                 _set_attempt_failure(root, claim["attempt"], block=False, reason=unreadable)
-            if attempt_number == 2:
-                print(f"[translation-critic] {chapter_id} was not read, asked twice: {unreadable}", file=sys.stderr)
+            if attempt_number == CRITIC_ATTEMPTS:
+                print(
+                    f"[translation-critic] {chapter_id} was not read, asked {CRITIC_ATTEMPTS} times: {unreadable}",
+                    file=sys.stderr,
+                )
                 set_aside.append({"id": "C-unread", "severity": "note", "kind": "critic", "issue": unreadable})
+                break
+            _wait_before_retry("translation-critic", chapter_id, attempt_number, exc, runner)
     if set_aside:
         print(
             f"[translation-critic] {chapter_id}: {len(set_aside)} finding(s) set aside, cited nothing that resolves",
@@ -9157,7 +9225,7 @@ def _repair_translation(
     # landfall's CH-0003 came back carrying a forbidden form, was rightly refused,
     # and took thirteen findings — ten of them meaning — down with it.
     refused = ""
-    for attempt_number in (1, 2):
+    for attempt_number in range(1, CRITIC_ATTEMPTS + 1):
         capsule = {
             "book": book_id,
             "chapter": chapter_id,
@@ -9207,13 +9275,14 @@ def _repair_translation(
             refused = str(exc)
             if claim is not None:
                 _set_attempt_failure(root, claim["attempt"], block=False, reason=refused)
-            if attempt_number == 2:
+            if attempt_number == CRITIC_ATTEMPTS:
                 print(
-                    f"[translation-critic] {chapter_id}: the repair was refused twice and the accepted "
+                    f"[translation-critic] {chapter_id}: the repair was refused every time and the accepted "
                     f"translation kept: {refused}",
                     file=sys.stderr,
                 )
                 return None
+            _wait_before_retry("translation-critic", f"{chapter_id} repair", attempt_number, exc, runner)
             continue
         _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
         return repaired
@@ -9313,7 +9382,8 @@ def _translate_one(
             _set_attempt_failure(root, claim["attempt"], block=attempt_number == 2, reason=last_error)
             if attempt_number == 2:
                 raise BookForgeError(f"Translation blocked after one repair: {last_error}") from exc
-            previous_output = str(result["text"])
+            previous_output = str(result["text"]) if "result" in dir() else ""
+            _wait_before_retry("translator", chapter_id, attempt_number, exc, runner)
             continue
         if must_review and attempt_number == 1:
             previous_output = value

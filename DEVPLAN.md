@@ -3640,3 +3640,60 @@ The refusal is right and the giving up is not. Everything else here that produce
 - [~] Re-run CH-0003 and report whether its thirteen findings land
 
 **Done when:** The only text this pipeline refuses to improve is text it would make worse twice.
+
+## A silent provider is waited out, not asked again at once ✅
+
+**Status: ✅ Done — 2026-09-01**
+
+Every retry in this engine is immediate. That is right for one of the two failures a provider has and wrong for the other, and the engine already knows which is which: `ProviderProducedNothing` is raised when nothing came back on the wire, and a parse failure is raised when something came back that could not be used.
+
+An unusable answer is a question that was heard and answered badly, so asking again at once — carrying what was wrong with the last answer — is exactly right, and it works: the critic's second ask fixed a malformed answer an hour ago.
+
+Silence is not that. It is a window, and tonight the windows were minutes long: two writer calls went quiet for 900 seconds each and the identical envelope then answered in 340; `deepseek-v4-pro-0813` produced no observable text twice in a row on CH-0003 and read the same chapter fine on the next command. Asking again inside the same window spends a call to be told the same nothing, and the retry that exists to make the pass autonomous is consumed before the window closes. Both times a person restarted it — that is the gap.
+
+**Fix.** One helper, used at every point that already retries, that waits before a retry only when the last failure was silence: nothing, then a minute, then three. Feedback is what an unusable answer needs and time is what silence needs, and giving each the other's remedy is what makes both fail. Bounded at three attempts, so a dead provider costs four minutes and not a night.
+
+**Tasks:**
+- [x] `_retry_delay(attempt_number, silent)` returns zero for an unusable answer and a growing wait for silence
+- [x] Every existing retry point uses it: the writer's repair, the translator's repair, the critic, the critic's repair, the audit's alone-call
+- [x] The wait is reported on stderr as it happens, so a run that looks stalled says what it is waiting for
+- [x] A run interrupted during a wait leaves nothing to recover: the claim is settled before the sleep, not across it
+- [x] Test: a provider silent once then answering produces its result, and the clock was consulted
+- [x] Test: an unusable answer is re-asked with no wait at all
+- [x] Test: three silences give up, set the pass aside, and leave the run running
+- [x] Suite green: 639 passed, 354 subtests (era 632). Reinstall, commit & push
+
+**Two things came out different from the plan, both recorded rather than quietly done.**
+
+The audit's alone-call was on the list, and it is the one point in this engine that deliberately has no next resort — the comment beside it says so, and the reason is sound: this model's common failure there is a whole budget spent on reasoning, and asking the identical question again buys the identical nothing. It now gets a second ask **only when the failure was silence**, which keeps that decision and fixes the transient case it was not about.
+
+And the wait is skipped whenever the runner is not the real one. A substituted provider has no window to wait out — it answered exactly as the test told it to — and the first version made every existing test with a silent provider sleep for a minute, turning a two-minute suite into a timeout. That is the honest place for the condition: the engine waits for a provider, not for a stand-in.
+
+**Done when:** A provider that goes quiet for two minutes costs two minutes, not a person.
+
+
+## The checks are scored by the reader they feed 🔄
+
+**Status: 🔄 Proposed — 2026-09-01**
+
+The deterministic checks are cheap and they are sometimes wrong. On landfall's three Italian chapters the glossary check reported twelve missing terms and was right about five; after the matcher was repaired it reports one, and that one is a polysemous word the critic correctly declined to act on. Both of those numbers were counted by hand, by reading twelve findings against three chapters and deciding one at a time. Nothing in the pipeline knows its own precision, so the next time it drifts, the person who finds out is whoever is reading the book.
+
+A sampling audit would cost a call per sample and measure the check by asking a model the same question twice. There is something better available for nothing: **the critic is already reading the source, the translation, the style and the glossary, and it is already shown the deterministic findings.** Asking it to mark each one `holds` or `mistaken`, with a reason, costs a few tokens in an answer it is already producing, and it comes from the reader best placed to judge — the one that has both texts open.
+
+**Fix.** The deterministic findings go to the critic labelled as such, and its contract gains a verdict on each. The engine records, per chapter, how many machine findings held and how many were mistaken, and a finding the critic calls mistaken never reaches the repair — today a false positive costs a repair call and risks a needless edit. `translate review` reports the rate, and a check whose findings are mostly mistaken says so in its own output instead of waiting to be noticed.
+
+**Tasks:**
+- [ ] The critic's capsule carries the deterministic findings, labelled as machine findings rather than mixed into its own
+- [ ] Its contract gains `machine_findings: [{id, verdict: holds|mistaken, why}]`
+- [ ] A finding the critic calls mistaken is dropped before the repair and recorded with the reason
+- [ ] The review file records the counts: raised, held, mistaken, and the rate
+- [ ] `translate review` reports the rate per chapter and across the pass
+- [ ] A rate below half prints a line naming the check, because a check that is mostly wrong is a defect in the check
+- [ ] Test: a finding the critic calls mistaken never reaches the repair
+- [ ] Test: the counts land in the review file and in the route's report
+- [ ] Test: a critic that does not answer on the machine findings leaves them all standing, since silence is not a refutation
+- [ ] Test: the `trestle` case — a polysemous term the translation renders correctly — is marked mistaken and drops out
+- [x] Suite green: 639 passed, 354 subtests (era 632). Reinstall, commit & push
+- [ ] Run it over landfall's three chapters and report the measured rate
+
+**Done when:** The pipeline reports how often its own checks are wrong, and stops acting on the ones that are.
