@@ -3697,3 +3697,35 @@ A sampling audit would cost a call per sample and measure the check by asking a 
 - [~] Run it over landfall's three chapters and report the measured rate
 
 **Done when:** The pipeline reports how often its own checks are wrong, and stops acting on the ones that are.
+
+## A review says whether it converged 🔄
+
+**Status: 🔄 In progress — 2026-09-01**
+
+**Found by reading the pass log rather than the book.** CH-0001 has been read back four times. The passes returned 17 findings, then 6, then 12, and the last twelve were all `meaning` — on a chapter whose overall verdict in that same answer was `faithful`. A chapter the critic calls faithful while listing twelve changes of meaning is a contradiction, and nothing looked at it.
+
+The route has no stopping condition. `translate review` always finds something, because that is what it was asked to do, and nothing distinguishes a chapter that is finished from one that still has defects. So the decision of when to stop reading was made by a person going by feel — which is the judgement this line of work exists to remove — and there is no way to tell three passes that improved a chapter from three passes that invented work.
+
+The signals cost nothing and are already produced. A pass with no actionable finding has converged. A finding that comes back unchanged after a repair that claimed to apply it means the repair did not land, which is worse than one that refused, because the refusal was at least recorded. A count that does not fall from one pass to the next is not progress whatever the findings say. And a verdict that contradicts the findings beside it is an answer that cannot be acted on in either direction.
+
+**Fix.** Every pass records what it found in a form the next pass can compare: a fingerprint per finding, the hash of the text it read, and the count. The route reports `converged` with the reason, and `--until-clean` runs passes until convergence, until a pass makes no progress, or until a stated cap — and says which of the three ended it.
+
+**Tasks:**
+- [x] Each finding carries a fingerprint: its kind and the normalised span it quotes
+- [x] The review file records the fingerprints, the hash of the text read, and the actionable count
+- [x] A pass reports `repeated`, `new` and `gone` against the previous pass on that chapter
+- [x] A finding repeated after a repair that claimed to apply it is named as such, since the repair did not land
+- [x] A verdict of `faithful` beside a blocking or meaning finding is recorded as inconsistent, and the findings stand
+- [x] `review_translation` returns `converged` per chapter with the reason: clean, no-progress, or more-to-do
+- [x] `translate review --until-clean` runs at most `REVIEW_PASS_CAP` passes and reports which condition stopped it
+- [x] Test: a chapter with no actionable findings converges in one pass and asks for no repair
+- [x] Test: two passes returning the same count stop as no-progress rather than running to the cap
+- [x] Test: a finding repeated after a claimed repair is reported as not landed
+- [x] Test: `faithful` beside a meaning finding is recorded inconsistent and the finding is still acted on
+- [x] Test: the cap ends a chapter that never converges, and the run does not stop
+- [x] Suite green: 650 passed, 354 subtests (era 644). Reinstall, commit & push
+- [~] Run `--until-clean` over landfall's three chapters and report how each one ended
+
+**One condition came out of building it that was not in the plan:** `nothing-applied`. A pass whose repair changed nothing would have the next pass read the identical text and ask the identical question, so it stops there rather than spending three more calls to be told the same thing. And the two signals — a finding that did not land, a verdict that contradicts its own findings — are sticky across the passes, because reporting only the last pass hid them exactly where they mattered.
+
+**Done when:** The pipeline says why it stopped reading, and a person never decides that it has read enough.

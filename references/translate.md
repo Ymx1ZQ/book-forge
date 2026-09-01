@@ -36,3 +36,13 @@ The deterministic checks cost nothing and are sometimes wrong: a string rule can
 A finding called mistaken is dropped before the repair, so a false positive no longer costs a repair call or risks a needless edit. Silence is not a refutation: a finding the critic does not rule on holds.
 
 `translate review` reports the counts per chapter and across the pass — raised, held, mistaken — and the review file beside each chapter records them with the reason given for each dismissal. When four or more findings are raised and fewer than half hold, the run says so by name, because a check that is mostly wrong is a defect in the check rather than in the book.
+
+### When a review is finished
+
+`translate review` always finds something, because that is what the critic is asked to do. Without a stopping condition the decision of when to stop reading falls to whoever is watching, by feel — CH-0001 of the book this was built for was read back four times and returned 17 findings, then 6, then 12, and nothing could tell three improvements from three inventions.
+
+Every pass now records what it found in a form the next pass can compare: a fingerprint per actionable finding — its kind and the span it quotes, with spacing and case flattened — the hash of the text it read, whether a repair was applied, and the count. It lands in `reviews/<chapter>.state.json`, beside the promoted review rather than inside it, because the repair's outcome is only known after that receipt is written.
+
+`--until-clean` reads a chapter back until one of four things happens, and the report says which: **clean**, no actionable finding left; **no-progress**, a count that did not fall from the pass before; **nothing-applied**, a repair that changed nothing, so the next pass would read the same text and ask the same question; or **cap**, `REVIEW_PASS_CAP` passes. Without the flag it reads once, as before.
+
+Two signals are reported whenever they occur, and stay reported for the whole run once they have. A finding that comes back unchanged after a repair that claimed to apply it means the repair did not land — worse than one that refused, because the refusal was at least recorded. And a verdict of `faithful` beside a finding that changes meaning is a critic contradicting itself in one answer: the findings stand, the verdict is recorded as inconsistent, and the run says so.

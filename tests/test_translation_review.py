@@ -444,6 +444,102 @@ class TheChecksAreScoredByTheReaderTheyFeedTests(TranslationReviewFixture):
         self.assertEqual(len(held), 2, "an answer nobody can read refutes nothing")
 
 
+class WhenAReviewIsFinishedTests(TranslationReviewFixture):
+    """CH-0001 was read back four times and returned 17 findings, then 6, then 12,
+    the last twelve all `meaning` on a chapter whose verdict in the same answer
+    was `faithful`. Nobody could say whether that was three improvements or three
+    inventions, and the decision to stop reading was made by feel."""
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {"review": False}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        config.pop("translation")
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def finding(self, index, kind="calque", severity="warning"):
+        return {
+            "id": f"{index:02d}", "severity": severity, "kind": kind,
+            "source": f"source span {index}", "translated": f"resa numero {index}",
+            "rule": "Contro il calco", "issue": "resa parola per parola", "fix": "una resa migliore",
+        }
+
+    class Cycling:
+        """Answers every translator call with fresh valid prose and every critic
+        call with whatever the script says for that pass."""
+
+        def __init__(self, outer, critic_answers):
+            self.outer = outer
+            self.critic_answers = list(critic_answers)
+            self.calls = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            payload = envelope["payload"]
+            self.calls.append(role)
+            if role == "translation-critic":
+                answer = self.critic_answers.pop(0) if self.critic_answers else {"findings": [], "verdict": "faithful"}
+                text = json.dumps(answer)
+            else:
+                text = translation(GOOD_BODY + "Ancora. " * (len(self.calls) % 3))
+            return {
+                "text": text, "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                "session_id": f"ses-{len(self.calls)}", "tokens": {"input": 1, "output": 1},
+                "cost": 0.0, "latency_ms": 1, "finish": "stop",
+            }
+
+    def run_until_clean(self, critic_answers):
+        provider = self.Cycling(self, critic_answers)
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider, until_clean=True)
+        return report["reviewed"][0], provider
+
+    def test_a_chapter_with_nothing_to_act_on_converges_in_one_pass(self):
+        row, provider = self.run_until_clean([{"findings": [], "verdict": "faithful"}])
+        self.assertEqual(row["ended"], "clean")
+        self.assertTrue(row["converged"])
+        self.assertEqual(row["passes"], 1)
+        self.assertEqual(provider.calls.count("translator"), 0, "nothing to repair")
+
+    def test_two_passes_at_the_same_count_stop_as_no_progress(self):
+        same = {"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}
+        row, provider = self.run_until_clean([same, same, same, same])
+        self.assertEqual(row["ended"], "no-progress")
+        self.assertEqual(row["passes"], 2)
+        self.assertIn("the pass before found 2", row["why"])
+
+    def test_a_finding_that_comes_back_after_a_claimed_repair_is_named(self):
+        same = {"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}
+        self.run_until_clean([same, same])
+        state = json.loads((self.locale_root / "reviews" / "CH-0001.state.json").read_text())
+        self.assertEqual(len(state["not_landed"]), 2)
+        self.assertEqual(state["state"], "no-progress")
+
+    def test_a_faithful_verdict_beside_a_meaning_finding_is_inconsistent(self):
+        contradiction = {"findings": [self.finding(1, kind="meaning")], "verdict": "faithful"}
+        row, provider = self.run_until_clean([contradiction, {"findings": [], "verdict": "faithful"}])
+        self.assertTrue(row["verdict_inconsistent"] or json.loads(
+            (self.locale_root / "reviews" / "CH-0001.json").read_text())["convergence"]["verdict_inconsistent"])
+        self.assertGreaterEqual(provider.calls.count("translator"), 1, "the finding is still acted on")
+
+    def test_the_cap_ends_a_chapter_that_never_converges(self):
+        self.bf.REVIEW_PASS_CAP = 3
+        answers = [
+            {"findings": [self.finding(i) for i in range(1, 5)], "verdict": "repairable"},
+            {"findings": [self.finding(i) for i in range(5, 8)], "verdict": "repairable"},
+            {"findings": [self.finding(i) for i in range(8, 10)], "verdict": "repairable"},
+        ]
+        row, _ = self.run_until_clean(answers)
+        self.assertEqual(row["ended"], "cap")
+        self.assertEqual(row["passes"], 3)
+        self.assertFalse(row["converged"])
+
+    def test_a_single_pass_is_still_the_default(self):
+        provider = self.Cycling(self, [{"findings": [self.finding(1)], "verdict": "repairable"}])
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        self.assertEqual(report["reviewed"][0]["passes"], 1)
+
+
 class ReadingBackWhatIsAlreadyTranslatedTests(TranslationReviewFixture):
     def setUp(self):
         super().setUp()

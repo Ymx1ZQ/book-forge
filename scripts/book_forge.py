@@ -9029,6 +9029,108 @@ def _cited_findings(findings: object) -> tuple[list[dict[str, object]], list[dic
 
 
 
+
+# How many times a chapter may be read back before the route stops on its own.
+REVIEW_PASS_CAP = 4
+ACTIONABLE_SEVERITIES = frozenset({"blocking", "warning"})
+
+
+def _finding_fingerprint(finding: dict[str, object]) -> str:
+    """What makes two findings the same finding across two passes.
+
+    The kind and the span it quotes, with spacing and case flattened: a critic
+    that reports the same defect twice will not word its `issue` identically, and
+    the quoted span is the part it cannot paraphrase without pointing elsewhere.
+    """
+    quoted = re.sub(r"\s+", " ", str(finding.get("translated") or finding.get("issue") or "")).strip().casefold()
+    return f"{finding.get('kind') or '?'}:{_sha256_bytes(quoted.encode())[:16]}"
+
+
+def _actionable(findings: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [row for row in findings if str(row.get("severity")) in ACTIONABLE_SEVERITIES]
+
+
+def _pass_state_path(root: Path, book_id: str, locale: str, chapter_id: str) -> Path:
+    """Where a pass leaves what the next pass needs to compare against.
+
+    Beside the review rather than inside it: the review is a promoted artifact
+    with a hash on its receipt, and the outcome of the repair is only known after
+    that receipt is written.
+    """
+    return root / "books" / book_id / "translations" / locale / "reviews" / f"{chapter_id}.state.json"
+
+
+def _previous_pass(root: Path, book_id: str, locale: str, chapter_id: str) -> dict[str, object]:
+    try:
+        return _read_json(_pass_state_path(root, book_id, locale, chapter_id))
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_pass_state(
+    root: Path, book_id: str, locale: str, chapter_id: str, convergence: dict[str, object], repaired: bool, text: str
+) -> None:
+    _write_json(
+        _pass_state_path(root, book_id, locale, chapter_id),
+        {
+            "schema": 1,
+            "chapter": chapter_id,
+            "state": convergence["state"],
+            "reason": convergence["reason"],
+            "actionable": convergence["actionable"],
+            "fingerprints": convergence["fingerprints"],
+            "repaired": bool(repaired),
+            "text_sha256": _sha256_bytes(text.encode()),
+            "verdict_inconsistent": convergence["verdict_inconsistent"],
+            "not_landed": convergence["not_landed"],
+        },
+    )
+
+
+def _convergence(
+    previous: dict[str, object], findings: list[dict[str, object]], verdict: str, repaired_before: bool
+) -> dict[str, object]:
+    """What this pass learned by being compared with the one before it.
+
+    A route that always finds something needs a way to tell a chapter that is
+    finished from one that still has defects, or the decision of when to stop
+    reading falls to whoever is watching — by feel, which is the judgement this
+    engine exists to remove. CH-0001 was read four times and returned 17 findings,
+    then 6, then 12, and nobody could say whether that was three improvements or
+    three inventions.
+    """
+    fingerprints = {_finding_fingerprint(row) for row in _actionable(findings)}
+    before = {str(value) for value in previous.get("fingerprints", [])}
+    before_count = int(previous.get("actionable", -1))
+    count = len(fingerprints)
+    repeated = sorted(fingerprints & before)
+    state = "more-to-do"
+    reason = f"{count} finding(s) to act on"
+    if not count:
+        state, reason = "clean", "nothing left to act on"
+    elif before_count >= 0 and count >= before_count:
+        state = "no-progress"
+        reason = f"{count} finding(s), and the pass before found {before_count}"
+    # A repair that said it applied a finding, and the same finding coming back,
+    # is worse than a repair that refused: the refusal was at least recorded.
+    not_landed = sorted(repeated) if repaired_before else []
+    inconsistent = bool(
+        str(verdict).casefold() == "faithful"
+        and any(str(row.get("severity")) == "blocking" or str(row.get("kind")) == "meaning" for row in findings)
+    )
+    return {
+        "state": state,
+        "reason": reason,
+        "actionable": count,
+        "repeated": len(repeated),
+        "new": len(fingerprints - before),
+        "gone": len(before - fingerprints),
+        "not_landed": not_landed,
+        "verdict_inconsistent": inconsistent,
+        "fingerprints": sorted(fingerprints),
+    }
+
+
 def _score_machine_findings(
     machine: list[dict[str, object]], verdicts: object
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
@@ -9122,6 +9224,7 @@ def _review_translation(
     set_aside: list[dict[str, object]] = []
     verdict = "unread"
     machine_score = {"raised": len(findings), "held": len(findings), "mistaken": 0}
+    convergence = _convergence({}, findings, verdict, False)
     task_id = f"TRANSCRIT-{book_id}-{chapter_id}-{locale}"
     review_path = f"books/{book_id}/translations/{locale}/reviews/{chapter_id}.json"
     plan = _load_plan(root)
@@ -9200,10 +9303,25 @@ def _review_translation(
             findings.extend(cited)
             set_aside.extend(aside)
             verdict = str(value.get("verdict") or "repairable")
+            previous = _previous_pass(root, book_id, locale, chapter_id)
+            convergence = _convergence(previous, findings, verdict, bool(previous.get("repaired")))
+            if convergence["verdict_inconsistent"]:
+                print(
+                    f"[translation-critic] {chapter_id}: the verdict says faithful beside findings that change "
+                    "meaning; the findings stand and the verdict is recorded as inconsistent",
+                    file=sys.stderr,
+                )
+            if convergence["not_landed"]:
+                print(
+                    f"[translation-critic] {chapter_id}: {len(convergence['not_landed'])} finding(s) came back "
+                    "after a repair that claimed to apply them",
+                    file=sys.stderr,
+                )
             manifest = stage_outputs(root, claim["attempt"], {review_path: _json_bytes(
                 {
                     "schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings,
                     "set_aside": set_aside, "machine_findings": machine_score, "mistaken": mistaken,
+                    "convergence": convergence,
                 }
             )})
             record_execution(
@@ -9235,7 +9353,13 @@ def _review_translation(
             f"[translation-critic] {chapter_id}: {len(set_aside)} finding(s) set aside, cited nothing that resolves",
             file=sys.stderr,
         )
-    return {"findings": findings, "set_aside": set_aside, "verdict": verdict, "machine": machine_score}
+    return {
+        "findings": findings,
+        "set_aside": set_aside,
+        "verdict": verdict,
+        "machine": machine_score,
+        "convergence": convergence,
+    }
 
 
 
@@ -9552,6 +9676,7 @@ def review_translation(
     *,
     provider=None,
     chapter_id: str | None = None,
+    until_clean: bool = False,
 ) -> dict[str, object]:
     """Read an existing translation back against its source, and repair what is cited.
 
@@ -9582,33 +9707,69 @@ def review_translation(
             continue
         contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter}.json")
         source = source_path.read_text(encoding="utf-8")
-        translated = path.read_text(encoding="utf-8")
-        review = _review_translation(root, book_id, canonical, chapter, contract, source, translated, runner=runner)
-        actionable = [row for row in review["findings"] if str(row.get("severity")) in {"blocking", "warning"}]
+        review = {}
         repaired = None
-        if actionable:
-            repaired = _repair_translation(
-                root, book_id, canonical, chapter, contract, source,
-                {"translated_markdown": translated}, actionable, runner=runner,
+        ended = "cap"
+        passes = 0
+        # Sticky across the passes: a critic that contradicted itself once did so,
+        # and the pass that followed cannot unsay it. Reporting only the last pass
+        # hid it exactly where it mattered.
+        inconsistent_seen = False
+        not_landed_seen = 0
+        for _pass in range(1, (REVIEW_PASS_CAP if until_clean else 1) + 1):
+            passes += 1
+            # Re-read: the pass before this one may have rewritten the chapter.
+            translated = path.read_text(encoding="utf-8")
+            review = _review_translation(root, book_id, canonical, chapter, contract, source, translated, runner=runner)
+            actionable = _actionable(review["findings"])
+            repaired = None
+            if actionable:
+                repaired = _repair_translation(
+                    root, book_id, canonical, chapter, contract, source,
+                    {"translated_markdown": translated}, actionable, runner=runner,
+                )
+            if repaired is None and actionable:
+                _record_unapplied(root, book_id, canonical, chapter, actionable)
+            if repaired is not None:
+                _execute_materialized_task(
+                    root,
+                    f"TRANSFIX-{book_id}-{chapter}-{canonical}",
+                    {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": str(repaired["translated_markdown"]).rstrip() + "\n"},
+                )
+            _record_pass_state(
+                root, book_id, canonical, chapter, review["convergence"], repaired is not None, translated
             )
-        if repaired is None and actionable:
-            _record_unapplied(root, book_id, canonical, chapter, actionable)
-        if repaired is not None:
-            task_id = f"TRANSFIX-{book_id}-{chapter}-{canonical}"
-            _execute_materialized_task(
-                root,
-                task_id,
-                {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": str(repaired["translated_markdown"]).rstrip() + "\n"},
-            )
+            inconsistent_seen = inconsistent_seen or bool(review["convergence"]["verdict_inconsistent"])
+            not_landed_seen = max(not_landed_seen, len(review["convergence"]["not_landed"] or []))
+            state = str(review["convergence"]["state"])
+            if str(review["verdict"]) == "unread":
+                ended = "unread"
+                break
+            if state in {"clean", "no-progress"}:
+                ended = state
+                break
+            if repaired is None:
+                # Nothing was applied, so the next pass would read the same text and
+                # ask the same question.
+                ended = "nothing-applied"
+                break
         machine = review.get("machine") or {}
+        convergence = review.get("convergence") or {}
         reviewed.append({
             "chapter": chapter,
-            "verdict": review["verdict"],
+            "verdict": review.get("verdict"),
             "machine_checks": machine,
-            "findings": len(review["findings"]),
-            "by_kind": {kind: sum(1 for row in review["findings"] if str(row.get("kind")) == kind) for kind in sorted({str(row.get("kind") or "?") for row in review["findings"]})},
-            "set_aside": len(review["set_aside"]),
+            "findings": len(review.get("findings", [])),
+            "by_kind": {kind: sum(1 for row in review.get("findings", []) if str(row.get("kind")) == kind) for kind in sorted({str(row.get("kind") or "?") for row in review.get("findings", [])})},
+            "set_aside": len(review.get("set_aside", [])),
             "repaired": repaired is not None,
+            "passes": passes,
+            "ended": ended,
+            "converged": ended == "clean",
+            "why": convergence.get("reason"),
+            "repeated": convergence.get("repeated"),
+            "not_landed": not_landed_seen,
+            "verdict_inconsistent": inconsistent_seen,
         })
     raised = sum(int((row.get("machine_checks") or {}).get("raised", 0)) for row in reviewed)
     held = sum(int((row.get("machine_checks") or {}).get("held", 0)) for row in reviewed)
@@ -10757,6 +10918,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate = commands.add_parser("translate")
     translate.add_argument("action", choices=("add", "next", "run", "status", "review"))
     translate.add_argument("--chapter", help="With review: read back one chapter instead of every translated one")
+    translate.add_argument("--until-clean", action="store_true", help="With review: keep reading a chapter back until it converges, makes no progress, or hits the pass cap")
     translate.add_argument("book")
     translate.add_argument("locale")
     audit = commands.add_parser("audit")
@@ -10912,7 +11074,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "translate" and args.action == "add":
             print(json.dumps(add_translation(args.project, args.book, args.locale), sort_keys=True))
         elif args.command == "translate" and args.action == "review":
-            print(json.dumps(review_translation(args.project, args.book, args.locale, chapter_id=args.chapter), sort_keys=True))
+            print(json.dumps(review_translation(args.project, args.book, args.locale, chapter_id=args.chapter, until_clean=args.until_clean), sort_keys=True))
         elif args.command == "translate" and args.action == "status":
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
