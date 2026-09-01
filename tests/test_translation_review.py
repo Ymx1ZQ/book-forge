@@ -384,6 +384,66 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         self.assertEqual(provider.calls, ["translator"])
 
 
+class TheChecksAreScoredByTheReaderTheyFeedTests(TranslationReviewFixture):
+    """On landfall's three chapters the glossary check raised twelve findings and
+    was right about five, and that number was counted by hand."""
+
+    def review(self, machine_verdicts, translated_body=CALQUE_BODY):
+        self.translate(ScriptedProvider([translation(translated_body)], critic={"findings": [], "verdict": "faithful"}))             if False else None
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {"review": False}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.translate(ScriptedProvider([translation(translated_body)]))
+        config.pop("translation")
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)],
+            critic={"findings": [], "machine_findings": machine_verdicts, "verdict": "faithful"},
+        )
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return report, provider
+
+    def test_a_finding_the_critic_calls_mistaken_never_reaches_the_repair(self):
+        """`trestle` is a work stand in one sentence and a jetty in the row that
+        fixes it: a string rule cannot tell the senses apart and the reader can."""
+        report, provider = self.review([
+            {"id": "G-01", "verdict": "mistaken", "why": "il termine c'e', in altra forma"},
+            {"id": "G-02", "verdict": "mistaken", "why": "la riga fissa un altro senso della parola"},
+        ])
+        self.assertEqual(provider.calls, ["translation-critic"], "no repair was asked for")
+        self.assertFalse(report["reviewed"][0]["repaired"])
+
+    def test_a_finding_the_critic_upholds_still_drives_the_repair(self):
+        report, provider = self.review([{"id": "G-01", "verdict": "holds", "why": "manca davvero"}])
+        self.assertEqual(provider.calls, ["translation-critic", "translator"])
+        self.assertTrue(report["reviewed"][0]["repaired"])
+
+    def test_silence_on_a_finding_is_not_a_refutation(self):
+        report, provider = self.review([])
+        self.assertEqual(report["reviewed"][0]["machine_checks"]["mistaken"], 0)
+        self.assertEqual(
+            report["reviewed"][0]["machine_checks"]["held"],
+            report["reviewed"][0]["machine_checks"]["raised"],
+        )
+
+    def test_the_counts_land_in_the_review_file_and_in_the_report(self):
+        report, _ = self.review([{"id": "G-01", "verdict": "mistaken", "why": "c'e' gia'"}])
+        row = report["reviewed"][0]
+        self.assertEqual(row["machine_checks"]["mistaken"], 1)
+        self.assertEqual(report["machine_checks"]["raised"], row["machine_checks"]["raised"])
+        review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
+        self.assertEqual(review["machine_findings"]["mistaken"], 1)
+        self.assertEqual(review["mistaken"][0]["why"], "c'e' gia'")
+
+    def test_the_scorer_holds_what_nobody_ruled_on(self):
+        machine = [{"id": "G-01", "rule": "r", "issue": "i"}, {"id": "G-02", "rule": "r", "issue": "i"}]
+        held, mistaken, score = self.bf._score_machine_findings(machine, [{"id": "G-01", "verdict": "mistaken"}])
+        self.assertEqual([row["id"] for row in held], ["G-02"])
+        self.assertEqual(score, {"raised": 2, "held": 1, "mistaken": 1})
+        held, mistaken, score = self.bf._score_machine_findings(machine, "not a list at all")
+        self.assertEqual(len(held), 2, "an answer nobody can read refutes nothing")
+
+
 class ReadingBackWhatIsAlreadyTranslatedTests(TranslationReviewFixture):
     def setUp(self):
         super().setUp()

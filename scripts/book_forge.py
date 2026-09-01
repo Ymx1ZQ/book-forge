@@ -9028,6 +9028,40 @@ def _cited_findings(findings: object) -> tuple[list[dict[str, object]], list[dic
     return kept, aside
 
 
+
+def _score_machine_findings(
+    machine: list[dict[str, object]], verdicts: object
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
+    """Split the mechanical findings by what the reader they feed made of them.
+
+    The checks are cheap and sometimes wrong, and nothing here knew how often.
+    On landfall's three Italian chapters the glossary check raised twelve and was
+    right about five, and that number was counted by hand — so the next time it
+    drifted, the person who found out would have been whoever read the book.
+
+    The critic has both texts open and the cited rule in front of it, which the
+    check did not, so its verdict is the cheapest true measurement available:
+    it is already producing an answer, and this is a few tokens more of it.
+    Silence is not a refutation — an unanswered finding holds.
+    """
+    ruling = {}
+    for row in verdicts if isinstance(verdicts, list) else []:
+        if isinstance(row, dict) and str(row.get("id") or "").strip():
+            ruling[str(row["id"]).strip()] = row
+    held, mistaken = [], []
+    for finding in machine:
+        row = ruling.get(str(finding.get("id")))
+        if row and str(row.get("verdict") or "").strip().casefold() == "mistaken":
+            mistaken.append({**finding, "verdict": "mistaken", "why": str(row.get("why") or "")})
+        else:
+            held.append(finding)
+    return held, mistaken, {
+        "raised": len(machine),
+        "held": len(held),
+        "mistaken": len(mistaken),
+    }
+
+
 def _review_translation(
     root: Path,
     book_id: str,
@@ -9087,6 +9121,7 @@ def _review_translation(
     )
     set_aside: list[dict[str, object]] = []
     verdict = "unread"
+    machine_score = {"raised": len(findings), "held": len(findings), "mistaken": 0}
     task_id = f"TRANSCRIT-{book_id}-{chapter_id}-{locale}"
     review_path = f"books/{book_id}/translations/{locale}/reviews/{chapter_id}.json"
     plan = _load_plan(root)
@@ -9120,6 +9155,11 @@ def _review_translation(
                 "translated_markdown": translated,
                 "locale_style": style,
                 "glossary": glossary,
+                # Labelled as the machine's, not mixed into the critic's own, so it
+                # judges them instead of inheriting them.
+                "machine_findings": [
+                    {"id": row["id"], "rule": row["rule"], "issue": row["issue"]} for row in findings
+                ],
             }
             if unreadable:
                 capsule["retry"] = {
@@ -9141,12 +9181,30 @@ def _review_translation(
             result = runner("translation-critic", envelope, attempt_dir)
             mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
             value = _parse_contract_json(str(result["text"]))
+            held, mistaken, machine_score = _score_machine_findings(findings, value.get("machine_findings"))
+            if mistaken:
+                print(
+                    f"[translation-critic] {chapter_id}: {len(mistaken)} of {machine_score['raised']} machine "
+                    f"finding(s) called mistaken and dropped before the repair",
+                    file=sys.stderr,
+                )
+            if machine_score["raised"] >= 4 and machine_score["held"] * 2 < machine_score["raised"]:
+                print(
+                    f"[translation-critic] {chapter_id}: the mechanical checks were right "
+                    f"{machine_score['held']} time(s) out of {machine_score['raised']} — a check that is mostly "
+                    "wrong is a defect in the check",
+                    file=sys.stderr,
+                )
+            findings = held
             cited, aside = _cited_findings(value.get("findings"))
             findings.extend(cited)
             set_aside.extend(aside)
             verdict = str(value.get("verdict") or "repairable")
             manifest = stage_outputs(root, claim["attempt"], {review_path: _json_bytes(
-                {"schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings, "set_aside": set_aside}
+                {
+                    "schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings,
+                    "set_aside": set_aside, "machine_findings": machine_score, "mistaken": mistaken,
+                }
             )})
             record_execution(
                 root,
@@ -9177,7 +9235,7 @@ def _review_translation(
             f"[translation-critic] {chapter_id}: {len(set_aside)} finding(s) set aside, cited nothing that resolves",
             file=sys.stderr,
         )
-    return {"findings": findings, "set_aside": set_aside, "verdict": verdict}
+    return {"findings": findings, "set_aside": set_aside, "verdict": verdict, "machine": machine_score}
 
 
 
@@ -9542,15 +9600,26 @@ def review_translation(
                 task_id,
                 {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": str(repaired["translated_markdown"]).rstrip() + "\n"},
             )
+        machine = review.get("machine") or {}
         reviewed.append({
             "chapter": chapter,
             "verdict": review["verdict"],
+            "machine_checks": machine,
             "findings": len(review["findings"]),
             "by_kind": {kind: sum(1 for row in review["findings"] if str(row.get("kind")) == kind) for kind in sorted({str(row.get("kind") or "?") for row in review["findings"]})},
             "set_aside": len(review["set_aside"]),
             "repaired": repaired is not None,
         })
-    return {"book": book_id, "locale": canonical, "reviewed": reviewed}
+    raised = sum(int((row.get("machine_checks") or {}).get("raised", 0)) for row in reviewed)
+    held = sum(int((row.get("machine_checks") or {}).get("held", 0)) for row in reviewed)
+    return {
+        "book": book_id,
+        "locale": canonical,
+        "reviewed": reviewed,
+        # How often the cheap checks were right, across the pass. Nothing measured
+        # this before, so a check that drifted was found by whoever read the book.
+        "machine_checks": {"raised": raised, "held": held, "mistaken": raised - held},
+    }
 
 
 def translation_impact(project: Path | str, book_id: str, locale: str) -> dict[str, object]:

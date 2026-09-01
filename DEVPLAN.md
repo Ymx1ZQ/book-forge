@@ -3683,17 +3683,17 @@ A sampling audit would cost a call per sample and measure the check by asking a 
 **Fix.** The deterministic findings go to the critic labelled as such, and its contract gains a verdict on each. The engine records, per chapter, how many machine findings held and how many were mistaken, and a finding the critic calls mistaken never reaches the repair — today a false positive costs a repair call and risks a needless edit. `translate review` reports the rate, and a check whose findings are mostly mistaken says so in its own output instead of waiting to be noticed.
 
 **Tasks:**
-- [ ] The critic's capsule carries the deterministic findings, labelled as machine findings rather than mixed into its own
-- [ ] Its contract gains `machine_findings: [{id, verdict: holds|mistaken, why}]`
-- [ ] A finding the critic calls mistaken is dropped before the repair and recorded with the reason
-- [ ] The review file records the counts: raised, held, mistaken, and the rate
-- [ ] `translate review` reports the rate per chapter and across the pass
-- [ ] A rate below half prints a line naming the check, because a check that is mostly wrong is a defect in the check
-- [ ] Test: a finding the critic calls mistaken never reaches the repair
-- [ ] Test: the counts land in the review file and in the route's report
-- [ ] Test: a critic that does not answer on the machine findings leaves them all standing, since silence is not a refutation
-- [ ] Test: the `trestle` case — a polysemous term the translation renders correctly — is marked mistaken and drops out
+- [x] The critic's capsule carries the deterministic findings, labelled as machine findings rather than mixed into its own
+- [x] Its contract gains `machine_findings: [{id, verdict: holds|mistaken, why}]`
+- [x] A finding the critic calls mistaken is dropped before the repair and recorded with the reason
+- [x] The review file records the counts: raised, held, mistaken, and the rate
+- [x] `translate review` reports the rate per chapter and across the pass
+- [x] A rate below half prints a line naming the check, because a check that is mostly wrong is a defect in the check
+- [x] Test: a finding the critic calls mistaken never reaches the repair
+- [x] Test: the counts land in the review file and in the route's report
+- [x] Test: a critic that does not answer on the machine findings leaves them all standing, since silence is not a refutation
+- [x] Test: the `trestle` case — a polysemous term the translation renders correctly — is marked mistaken and drops out
 - [x] Suite green: 639 passed, 354 subtests (era 632). Reinstall, commit & push
-- [ ] Run it over landfall's three chapters and report the measured rate
+- [~] Run it over landfall's three chapters and report the measured rate
 
 **Done when:** The pipeline reports how often its own checks are wrong, and stops acting on the ones that are.

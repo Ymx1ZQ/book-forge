@@ -28,3 +28,11 @@ The other half is the `translation-critic` role: source and translation side by 
 `translate review <book> <locale>` runs the same pass over a translation already on disk, for chapters translated before any of this existed. `--chapter CH-0001` reads back one. It reports, per chapter, the verdict, how many findings by kind, how many were set aside, and whether a repair was applied.
 
 Nothing here stops a run. A critic that cannot be reached, an answer that will not parse, a repair that comes back worse: each is recorded beside the chapter and the run goes on.
+
+### How often the cheap checks are right
+
+The deterministic checks cost nothing and are sometimes wrong: a string rule cannot tell one sense of a word from another, and a glossary row that fixes `trestle` as a jetty has nothing to say about a trestle table. So the findings go to the critic labelled as the machine's, and its answer carries a verdict on each — `holds` when the translation really is missing what the check says, `mistaken` when the check is wrong.
+
+A finding called mistaken is dropped before the repair, so a false positive no longer costs a repair call or risks a needless edit. Silence is not a refutation: a finding the critic does not rule on holds.
+
+`translate review` reports the counts per chapter and across the pass — raised, held, mistaken — and the review file beside each chapter records them with the reason given for each dismissal. When four or more findings are raised and fewer than half hold, the run says so by name, because a check that is mostly wrong is a defect in the check rather than in the book.

@@ -17,7 +17,17 @@ Do not report a rendering merely because you would have chosen another word. A s
 
 For each finding, `fix` proposes the exact replacement text, not a description of it. It must be a string the translator can substitute for `translated` as it stands.
 
-Return one JSON object and no fences: `{"findings":[{"id":"01","severity":"blocking|warning|note","kind":"meaning|calque|glossary|style|voice|agreement","source":"the source text, quoted","translated":"the translation as delivered, quoted","rule":"the style section, glossary row, or property of the target language","issue":"what is wrong and what it costs the reader","fix":"the exact replacement text"}],"verdict":"faithful|repairable|unfaithful"}`.
+Return one JSON object and no fences: `{"findings":[{"id":"01","severity":"blocking|warning|note","kind":"meaning|calque|glossary|style|voice|agreement","source":"the source text, quoted","translated":"the translation as delivered, quoted","rule":"the style section, glossary row, or property of the target language","issue":"what is wrong and what it costs the reader","fix":"the exact replacement text"}],"machine_findings":[{"id":"G-01","verdict":"holds|mistaken","why":"one clause"}],"verdict":"faithful|repairable|unfaithful"}`.
+
+`machine_findings` is empty when the capsule carried none.
+
+## The machine findings
+
+The capsule may carry `machine_findings`: things a mechanical check raised before you were asked — a glossary term whose agreed rendering it could not find, a form the locale forbids. They are cheap and they are sometimes wrong, because a string rule cannot tell one sense of a word from another.
+
+Judge each one. You have both texts open and the rule in front of you, which the check did not. Return `machine_findings` with a verdict per id: `holds` when the translation really is missing what the check says, `mistaken` when the check is wrong — the term is there in a form it did not recognise, or the row it cites fixes a different sense of the word than this sentence uses. Say why in one clause.
+
+A finding you call `mistaken` is dropped and never reaches the repair, so do not use it to excuse a rendering you simply prefer: `mistaken` means the check was wrong, not that the translation is defensible anyway. If you are unsure, it holds.
 
 Report **at most twelve findings**, most severe first. A chapter has more defects than that only if the translation is unusable, and in that case say so in `verdict` and report the twelve that matter — an answer cut off mid-sentence is an answer nobody can act on, and the whole pass is lost.
 
