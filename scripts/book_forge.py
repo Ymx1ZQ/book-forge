@@ -9113,6 +9113,20 @@ def _review_translation(
 
 
 
+
+def _record_unapplied(root: Path, book_id: str, locale: str, chapter_id: str, findings: list[dict[str, object]]) -> None:
+    """What the repair could not apply, beside the chapter rather than in a log line.
+
+    A finding the pipeline raised and could not act on is the one thing a person
+    might still want to see, and a line on stderr is gone the moment the terminal
+    scrolls.
+    """
+    _write_json(
+        root / "books" / book_id / "translations" / locale / "reviews" / f"{chapter_id}.unapplied.json",
+        {"schema": 1, "chapter": chapter_id, "unapplied": findings},
+    )
+
+
 def _repair_translation(
     root: Path,
     book_id: str,
@@ -9138,52 +9152,72 @@ def _repair_translation(
         add_task(root, task_id, "translator", priority=84, chapter_order=int(contract.get("order", 0)))
     else:
         _reopen_task(root, task_id)
-    capsule = {
-        "book": book_id,
-        "chapter": chapter_id,
-        "source_language": _read_json(root / "book-forge.yaml")["source_language"],
-        "target_locale": locale,
-        "source_markdown": source,
-        "contract": contract,
-        "locale_style": (locale_root / "style.md").read_text(encoding="utf-8"),
-        "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
-        "metadata": _read_json(locale_root / "metadata.yaml"),
-        "repair": {
-            "reason": "a critic read this translation against its source",
-            "previous_output": str(value["translated_markdown"]),
-            "findings": findings,
-            "instruction": (
-                "Apply every finding whose fix you accept and leave the rest of the chapter untouched. "
-                "Return the whole chapter, not a diff."
-            ),
-        },
-    }
-    claim = None
-    try:
-        envelope = build_envelope(
-            root,
-            role="translator",
-            task_capsule=capsule,
-            imports=list(contract.get("imports", [])),
-            state={},
-            tools=[],
-            max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
-        )
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        attempt_dir = Path(claim["capsule"]).parent
-        result = runner("translator", envelope, attempt_dir)
-        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-        repaired = _parse_contract_json(str(result["text"]))
-        problems = _translation_validation(source, {**repaired, "_locale": locale}, _locale_checks(locale_root))
-        if problems:
-            raise BookForgeError("; ".join(problems))
-    except BookForgeError as exc:
-        print(f"[translation-critic] {chapter_id}: the repair was refused and the accepted translation kept: {exc}", file=sys.stderr)
-        if claim is not None:
-            _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc))
-        return None
-    _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
-    return repaired
+    # Everything else here that produces text is told what was wrong with it and
+    # asked again. The repair was the one call that was judged and never answered:
+    # landfall's CH-0003 came back carrying a forbidden form, was rightly refused,
+    # and took thirteen findings — ten of them meaning — down with it.
+    refused = ""
+    for attempt_number in (1, 2):
+        capsule = {
+            "book": book_id,
+            "chapter": chapter_id,
+            "source_language": _read_json(root / "book-forge.yaml")["source_language"],
+            "target_locale": locale,
+            "source_markdown": source,
+            "contract": contract,
+            "locale_style": (locale_root / "style.md").read_text(encoding="utf-8"),
+            "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
+            "metadata": _read_json(locale_root / "metadata.yaml"),
+            "repair": {
+                "reason": "a critic read this translation against its source",
+                "previous_output": str(value["translated_markdown"]),
+                "findings": findings,
+                "instruction": (
+                    "Apply every finding whose fix you accept and leave the rest of the chapter untouched. "
+                    "Return the whole chapter, not a diff."
+                ),
+            },
+        }
+        if refused:
+            capsule["repair"]["refused"] = {
+                "attempt": attempt_number,
+                "why_the_last_repair_was_rejected": refused,
+                "instruction": "Apply the findings without introducing what was rejected.",
+            }
+        claim = None
+        try:
+            envelope = build_envelope(
+                root,
+                role="translator",
+                task_capsule=capsule,
+                imports=list(contract.get("imports", [])),
+                state={},
+                tools=[],
+                max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+            )
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            attempt_dir = Path(claim["capsule"]).parent
+            result = runner("translator", envelope, attempt_dir)
+            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            repaired = _parse_contract_json(str(result["text"]))
+            problems = _translation_validation(source, {**repaired, "_locale": locale}, _locale_checks(locale_root))
+            if problems:
+                raise BookForgeError("; ".join(problems))
+        except BookForgeError as exc:
+            refused = str(exc)
+            if claim is not None:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=refused)
+            if attempt_number == 2:
+                print(
+                    f"[translation-critic] {chapter_id}: the repair was refused twice and the accepted "
+                    f"translation kept: {refused}",
+                    file=sys.stderr,
+                )
+                return None
+            continue
+        _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
+        return repaired
+    return None
 
 
 def _translate_one(
@@ -9297,6 +9331,8 @@ def _translate_one(
                 if repaired is not None:
                     calls += 1
                     value = repaired
+                else:
+                    _record_unapplied(root, book_id, locale, chapter_id, actionable)
             calls += 1
         glossary = _append_glossary((locale_root / "glossary.md").read_text(encoding="utf-8"), list(value["glossary_updates"]))
         completed = list(state.get("completed_chapters", []))
@@ -9427,6 +9463,8 @@ def review_translation(
                 root, book_id, canonical, chapter, contract, source,
                 {"translated_markdown": translated}, actionable, runner=runner,
             )
+        if repaired is None and actionable:
+            _record_unapplied(root, book_id, canonical, chapter, actionable)
         if repaired is not None:
             task_id = f"TRANSFIX-{book_id}-{chapter}-{canonical}"
             _execute_materialized_task(

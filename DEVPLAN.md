@@ -3618,3 +3618,25 @@ And it asks once. The translator gets a repair, the audit halves a window and th
 - [~] Re-run the review over landfall's three chapters and report what each one got
 
 **Done when:** No chapter goes unread because of what happened to another one.
+
+## A refused repair is told why and asked again 🔄
+
+**Status: 🔄 In progress — 2026-09-01**
+
+**Found on landfall's CH-0003, in the pass that fixed the layer above.** The critic returned thirteen findings, ten of them meaning, and the repair that carried them came back containing `volle` — a form the locale forbids. The gate held: the repair is validated exactly as the translation was, so the worse text was refused and the accepted translation kept. Then the pass stopped, and thirteen findings, ten of which are meaning changed or lost, stayed unapplied.
+
+The refusal is right and the giving up is not. Everything else here that produces text gets told what was wrong with it and asked again — the translator does, the writer does, the critic does as of an hour ago. The repair is the one call that is judged and never answered.
+
+**Fix.** A repair refused by validation is asked once more, carrying the reason it was refused, in the same shape the translator's own repair loop already uses. Two refusals and the accepted translation stands, recorded with what could not be applied — the run does not stop and nobody is asked.
+
+**Tasks:**
+- [x] A repair refused by validation is re-asked once with the refusal reason in its capsule
+- [x] Two refusals leave the accepted translation in place and record the findings that could not be applied
+- [x] The unapplied findings are written to the chapter's review file, so what the repair failed to fix is on disk rather than in a log line
+- [x] Test: a repair refused once and correct the second time is applied
+- [x] Test: a repair refused twice leaves the translation untouched and records the findings
+- [x] Test: the second ask carries the reason the first was refused
+- [x] Suite green: 632 passed, 354 subtests (era 630). Reinstall, commit & push
+- [~] Re-run CH-0003 and report whether its thirteen findings land
+
+**Done when:** The only text this pipeline refuses to improve is text it would make worse twice.

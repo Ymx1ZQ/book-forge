@@ -223,13 +223,49 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         self.translate(provider)
         self.assertEqual(provider.calls, ["translator", "translation-critic"])
 
-    def test_a_repair_that_will_not_validate_leaves_the_accepted_translation(self):
+    def test_a_repair_refused_once_is_asked_again_and_the_second_one_lands(self):
+        """CH-0003's repair came back carrying a forbidden form, was rightly refused,
+        and took thirteen findings — ten of them meaning — down with it."""
+        self.checks([{"pattern": r"\bvolle\b", "reason": "forma che ferma il lettore"}])
+        bad = translation("Volle il gesso di marea e la Fede contava. " * 12)
+        provider = ScriptedProvider(
+            [translation(CALQUE_BODY), bad, translation(GOOD_BODY)],
+            critic=self.critic([self.calque_finding()]),
+        )
+        self.translate(provider)
+        self.assertEqual(provider.calls.count("translator"), 3, "one translation and two repair attempts")
+        text = (self.locale_root / "chapters" / "CH-0001.md").read_text()
+        self.assertIn("gesso di marea", text)
+        self.assertNotIn("Volle", text)
+
+    def test_the_second_ask_carries_why_the_first_was_refused(self):
+        self.checks([{"pattern": r"\bvolle\b", "reason": "forma che ferma il lettore"}])
+        captured = []
+
+        class Capturing(ScriptedProvider):
+            def __call__(self, role, envelope, attempt_dir):
+                captured.append(envelope["payload"]["task"])
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = Capturing(
+            [translation(CALQUE_BODY), translation("Volle il gesso di marea e la Fede contava. " * 12), translation(GOOD_BODY)],
+            critic=self.critic([self.calque_finding()]),
+        )
+        self.translate(provider)
+        last = captured[-1]
+        self.assertIn("refused", last["repair"])
+        self.assertIn("olle", last["repair"]["refused"]["why_the_last_repair_was_rejected"].lower())
+
+    def test_a_repair_refused_twice_leaves_the_translation_and_records_the_findings(self):
         kept = translation(GOOD_BODY)
-        provider = ScriptedProvider([kept, "not a contract at all"], critic=self.critic([self.calque_finding()]))
+        provider = ScriptedProvider([kept, "not a contract at all", "still not a contract"], critic=self.critic([self.calque_finding()]))
         self.translate(provider)
         text = (self.locale_root / "chapters" / "CH-0001.md").read_text()
         self.assertIn("gesso di marea", text)
         self.assertNotIn("not a contract", text)
+        unapplied = json.loads((self.locale_root / "reviews" / "CH-0001.unapplied.json").read_text())
+        self.assertEqual(len(unapplied["unapplied"]), 1)
+        self.assertEqual(unapplied["unapplied"][0]["kind"], "calque")
 
     def test_an_unreadable_answer_is_asked_again_and_the_second_one_counts(self):
         """The critic's output is the most structured this engine asks for, so it is
