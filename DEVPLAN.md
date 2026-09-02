@@ -966,9 +966,9 @@ blocks.
 - Suite `pytest -q` verde
 
 **Tasks:**
-- [ ] Patch `assets/prompts/canon-auditor.md`
-- [ ] `./install.sh --force`
-- [ ] Verifica Margherita: audit universe chiude
+- [x] Patch `assets/prompts/canon-auditor.md` — landed: the prompt lists the resolvable universe-scope locations and forbids `CNT-*`, `UNI-*`, `unresolved_questions` and `design_scope.*` by name
+- [x] `./install.sh --force`
+- [x] Verifica Margherita: audit universe chiude — **verificato 2026-09-02**: `AUDIT-UNI-0001` e `AUDIT-BOOK-0001` sono entrambi `succeeded`. L'unico task non riuscito del progetto è un advisor di stile, che è advisory per costruzione
 
 ## Fix: reviser ROLE_BUDGETS output budget 6000→8000 (autobloccante b7939dd) ✅
 
@@ -2589,7 +2589,7 @@ Two entries above this one recorded conclusions this contradicts, and both need 
 - [x] Test: a pass that returns no JSON is halved
 - [x] Correct the two entries above that record the wrong cause
 - [x] Suite green: 385 passed, 23 subtests (era 370). Reinstall, commit & push
-- [ ] Margherita's audit clears, and the first three chapters are written
+- [x] Margherita's audit clears, and the first three chapters are written — **verified 2026-09-02**, and both halves were already true before anyone looked: `AUDIT-UNI-0001` and `AUDIT-BOOK-0001` succeeded, and `manuscript/chapters` holds three chapters. The work was done and the box was never ticked, which is the failure this plan keeps finding in itself
 
 **Done when:** The auditor is asked a question it can finish answering.
 
@@ -2972,14 +2972,24 @@ Leave the constant as the opening width only, and make it the width the engine s
 And the reason is not payload size. The fold envelopes measured 11.0k tokens at chapters 1-4, 13.9k at 9-16, 15.4k at 17-24, 12.5k at 21-22 — against a ceiling of 32k, with the open-promise ledger growing 0 → 37 rows and contributing little, since the shared capsule dominates. An eight-chapter fold fails at 13.9k while a two-chapter fold succeeds at 11.4k: 2.5k of input apart. What varies is how much the model has to reason about, which tracks the number of chapters in the slice and their density — so sizing a slice by its byte count would be measuring the wrong thing, and the telemetry to size it by is the output the slice produced, not the input it carried.
 
 **Tasks:**
-- [ ] Read this run's `chunk_telemetry`: output tokens per chapter contract, and the spread between the lightest and heaviest slice
-- [ ] The audit's widths come from the same measurement: an eight-chapter fold has never answered on a book this dense
-- [ ] Decide the opening width from that measurement, with headroom stated in the comment beside it
-- [ ] Size later slices from what the first ones actually cost, rather than from the constant
-- [ ] Narrow a slice that contains a chapter the withheld rows reveal in, or that the outline marks as carrying an arc turn, before calling rather than after failing
-- [ ] Test: a book whose chapters answer heavily gets narrower slices without any slice failing first
-- [ ] Test: a book of light chapters is not split more than it needs to be
-- [ ] Suite green. Reinstall, commit & push
+- [x] Read this run's `chunk_telemetry`: output tokens per chapter contract, and the spread between the lightest and heaviest slice
+- [x] The audit's widths come from the same measurement: an eight-chapter fold has never answered on a book this dense
+- [x] Decide the opening width from that measurement, with headroom stated in the comment beside it
+- [x] Size later slices from what the first ones actually cost, rather than from the constant
+- [x] Narrow a slice that contains a chapter the withheld rows reveal in, or that the outline marks as carrying an arc turn, before calling rather than after failing
+- [x] Test: a book whose chapters answer heavily gets narrower slices without any slice failing first
+- [x] Test: a book of light chapters is not split more than it needs to be
+- [x] Suite green: 675 passed, 405 subtests. Reinstall, commit & push
+
+**Measured on landfall's own `chunk_telemetry`, which is what this entry was waiting for.** Output tokens per chapter contract: 788 at chapters 1-4, 933 at 5-8, 958 at 9-12, 1003 at 13-16, 897 at 17-20, 1210 at 21-22, 1558 at 23-24, 1329 at 25-26. **A factor of two inside one book**, and the heavy end is where the reveals are.
+
+And the same shape as everything else measured this week: the input barely moves — every slice sat around 50000 tokens — while reasoning ran 12922 to 28513 against a ceiling of 32000. A two-chapter slice reached 28513. So a slice sized by its byte count would be measuring the wrong thing, which is why the width comes from the output the finished slices produced.
+
+**Three changes, each with its number.** The opening width drops from 8 to 4, because every four-chapter slice answered and the eight-chapter ones were halved. Every later slice is sized from the heaviest chapter measured so far rather than the average, because the chapter that overruns is the one that had most to say. And a slice holding a chapter the withheld rows reveal in is built narrow before it is called: on landfall that produces `17-18` immediately, which is where the engine arrived after three empty calls.
+
+`SCHEDULE_WINDOW_SIZE` drops from 8 to 4 on the same evidence — across two full runs of landfall an eight-chapter fold never once answered, so eight bought three empty calls and then made the narrow calls anyway.
+
+**Six existing tests assumed the width was eight.** They were made independent of the constant rather than re-pointed at the new number, so the next person who tunes it does not have to find them: the schedule tests derive their windows from `SCHEDULE_WINDOW_SIZE`, the cache test derives its slug from `BOOK_DESIGN_SLICE_SIZE`, and the coverage assertions check that every chapter is accounted for exactly once however the slices came out.
 
 **Done when:** A slice is the width the book's own chapters turned out to need.
 
@@ -3621,9 +3631,9 @@ And it asks once. The translator gets a repair, the audit halves a window and th
 
 **Done when:** No chapter goes unread because of what happened to another one.
 
-## A refused repair is told why and asked again 🔄
+## A refused repair is told why and asked again ✅
 
-**Status: 🔄 In progress — 2026-09-01**
+**Status: ✅ Done — 2026-09-02**
 
 **Found on landfall's CH-0003, in the pass that fixed the layer above.** The critic returned thirteen findings, ten of them meaning, and the repair that carried them came back containing `volle` — a form the locale forbids. The gate held: the repair is validated exactly as the translation was, so the worse text was refused and the accepted translation kept. Then the pass stopped, and thirteen findings, ten of which are meaning changed or lost, stayed unapplied.
 
@@ -3639,9 +3649,11 @@ The refusal is right and the giving up is not. Everything else here that produce
 - [x] Test: a repair refused twice leaves the translation untouched and records the findings
 - [x] Test: the second ask carries the reason the first was refused
 - [x] Suite green: 632 passed, 354 subtests (era 630). Reinstall, commit & push
-- [~] Re-run CH-0003 and report whether its thirteen findings land — **it could not be asked.** Two separate runs, three attempts each: six answers, none containing a JSON object. The thirteen findings were never re-raised, so whether the second ask applies them is still unmeasured, and the obstacle is not this entry's
+- [x] ~~Re-run CH-0003 and report whether its thirteen findings land~~ — **replaced, because it stopped being reproducible.** Those thirteen findings were one critic answer on one version of one chapter, and both have moved: CH-0003 has since been read and repaired, and the finding bound is now four. A verification that requires a state the project can no longer reach is not a verification, and re-running it would report on a different question while looking like it reported on this one.
+- [x] Measured instead: has the refusal retry fired on real work, and did it hold — **twice, and it held both times.** `ATT-0146` on CH-0002 was refused for `forbidden form stette: passato remoto di stare su un verbo di stato`, `ATT-0148` on CH-0003 for `forbidden form dovette: forma che ferma il lettore`. Both were re-asked carrying the refusal, both came back acceptable, and both are the exact defects that started this whole line of work — `Binta stette` is the sentence that opened it.
+- [x] The review's repair has never been refused in this project, so its own retry has not fired outside the tests. That is the honest state: the mechanism is one function used by both paths, the path that runs has run, and the path that has not is covered by three tests and nothing else.
 
-**Blocked on a defect of its own.** CH-0003 is the chapter with the largest envelope of the three, and it is the only one whose critic has never once answered readably. Six unusable answers out of six is not variance. Until that is fixed this task cannot be run, and the entry stays open rather than being ticked on a run that produced nothing.
+**Corrected.** An earlier note in this entry called CH-0003 the chapter with the largest envelope. It is the smallest of the three at 14488 input tokens, against CH-0002's 16376. The size was inferred from the failure rather than measured, and the reason it failed was never its size.
 
 **Done when:** The only text this pipeline refuses to improve is text it would make worse twice.
 
@@ -3878,3 +3890,49 @@ So the check would refuse one true finding in 140 and catch nothing, because the
 **And the run this came from did the opposite of what was reported.** All three chapters were rewritten and committed by it — CH-0001 and CH-0002 two lines each, CH-0003 one. The claim that no chapter changed was read off `git status` after the engine had committed, which shows a clean tree precisely when the run has done the most.
 
 **Done when:** withdrawn.
+
+
+## The reviser writes in the hand the writer chose ✅
+
+**Status: ✅ Done — 2026-09-02**
+
+**Left open deliberately when the bake-off was decided, and never taken.** `roles.writer` decides who writes the book — landfall chose `glm-5.3-flash` at `high` by reading three drafts of CH-0001. The reviser also writes prose: it applies the cold reader's and the technical editor's findings to a chapter, sentence by sentence. It is not pinned, so it runs on the project default, which on landfall is `deepseek-v4-flash-0731` at `low`.
+
+So every chapter is written by one model and repaired by another, at a different effort. Both read the same style preset, which makes the register nominally shared and does not make the hand the same. The bake-off existed to decide that hand by reading, and half the prose escapes the decision.
+
+**Fix.** A project that pins the writer and says nothing about the reviser gets the writer's pin for the reviser, because that is what choosing a writer meant. An explicit `roles.reviser` still wins, so a project that wants two hands can have them and has to say so.
+
+**Tasks:**
+- [x] `_role_pin` resolves `reviser` to the writer's pin when the project pins a writer and does not pin a reviser
+- [x] An explicit `roles.reviser` overrides it, and a project pinning neither is unchanged
+- [x] Test: a project pinning only the writer resolves both roles to that model and variant
+- [x] Test: a project pinning both keeps them apart
+- [x] Test: a project pinning neither resolves as it does today
+- [x] The generated agents reflect it, so the runtime guard does not fire on a project that never edited its config
+- [x] Suite green: 675 passed, 405 subtests (era 661). Reinstall, commit & push
+- [x] Landfall resolves both roles to `glm-5.3-flash` at `high`, confirmed by `runtime sync`
+
+**One test came out of building it that was not in the plan.** Pinning the writer must move the reviser and *nothing else* — a rule that quietly dragged the cold reader or the auditor onto the writer's model would be a worse defect than the one being fixed, and harder to see.
+
+**Done when:** The model chosen by reading three drafts writes every sentence of the book, including the repaired ones.
+
+## An edition says who wrote it ✅
+
+**Status: ✅ Done — 2026-09-02**
+
+**Four editions have been published from this engine and none carries an author.** `book.yaml` holds `title`, `id`, `order` and `continuity`, and the epub and PDF are built from it. An epub with no author is a file a reader's library files under nothing, and the field is part of the metadata the format already has room for.
+
+**Fix.** An optional `author` on the book, threaded into both edition formats. Optional because a book that has not decided is a real state and should not be blocked from exporting; absent, the editions build exactly as they do today.
+
+**Tasks:**
+- [x] `author` is an allowed key of `book.yaml`, optional, and `add-book --author` accepts it
+- [x] The epub carries it as its creator, and the PDF as its author
+- [x] A book without one exports as it does now, with no placeholder invented for it
+- [x] Test: a book with an author has it in both editions; a book without one has neither the field nor a placeholder
+- [x] Suite green: 675 passed, 405 subtests. Reinstall, commit & push
+
+**Found while building it, and it changes what this entry was for.** The project-level `author` already existed in `book-forge.yaml` and was already threaded into both formats — `dc:creator` in the epub, the author field in the PDF. Four editions shipped with none because nobody had a reason to set one for a whole universe. So the work was not adding the field but making it addressable at the level a book is actually written at: a universe can hold books by different hands, and now the book's own value wins where it has one.
+
+**Left unset on landfall, deliberately.** An author is a name, and naming one is not a default this can pick. The mechanism is there and the value is one word away.
+
+**Done when:** An edition names its author when the book has one.

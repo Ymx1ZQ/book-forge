@@ -263,6 +263,16 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
         return _translation_critic_pin(config, _role_pin(config, "translator")[0])
     model, variant = MODEL, ROLE_SPECS[role][1]
     override = _role_overrides(config).get(role)
+    if role == "reviser" and not override:
+        # The reviser writes prose: it applies the cold reader's and the technical
+        # editor's findings to a chapter, sentence by sentence. Choosing a writer by
+        # reading three drafts of a chapter and then leaving the repairs to the
+        # project default is two hands on the same paragraph — landfall wrote on
+        # `glm-5.3-flash` at `high` and repaired on `deepseek-v4-flash-0731` at
+        # `low`. A project that wants two hands still gets them, by saying so.
+        writer = _role_overrides(config).get("writer")
+        if writer:
+            return _role_pin(config, "writer")
     if not override:
         return model, variant
     requested_model = str(override.get("model") or "").strip()
@@ -1120,7 +1130,9 @@ def add_continuity(
     return row
 
 
-def add_book(project: Path | str, title: str, *, continuity: str = "CNT-0001") -> dict[str, object]:
+def add_book(
+    project: Path | str, title: str, *, continuity: str = "CNT-0001", author: str = ""
+) -> dict[str, object]:
     root = _project_root(project)
     continuity_ids = {str(row["id"]) for row in _continuities(root)["continuities"]}
     if continuity not in continuity_ids:
@@ -1128,6 +1140,8 @@ def add_book(project: Path | str, title: str, *, continuity: str = "CNT-0001") -
     books = list_books(root)
     book_id = _next_id([str(book["id"]) for book in books], "BOOK-")
     book = {"schema": SCHEMA_VERSION, "id": book_id, "title": title, "continuity": continuity, "order": len(books) + 1}
+    if str(author).strip():
+        book["author"] = str(author).strip()
     directory = root / "books" / book_id
     if directory.exists():
         raise BookForgeError(f"Book path collision: {directory}")
@@ -3605,7 +3619,24 @@ def _run_with_length_retry(root, task_id: str, role: str, envelope: dict[str, ob
 # (each call well inside the per-response output budget), then merges.
 # Chapters per book-design call. Small enough that a heavy reasoning burn still
 # leaves room for the slice's own output.
-BOOK_DESIGN_SLICE_SIZE = 8
+BOOK_DESIGN_SLICE_SIZE = 4
+# The width the engine starts from before it knows anything about this book, and
+# not the width it uses all the way through. Four rather than eight because eight
+# is what landfall measured as too wide: its four-chapter slices all answered,
+# producing 3151, 3732, 3833, 4011 and 3588 tokens of output, while eight-chapter
+# slices had to be halved. Every later slice is sized from what the finished ones
+# actually cost — see `_design_slice_width`.
+#
+# What a slice may spend on output before it is narrowed. Landfall's answering
+# slices came in between 2420 and 4011 tokens, so this is the top of the band that
+# worked rather than a ceiling nobody has reached.
+DESIGN_SLICE_OUTPUT_TARGET = 4000
+# A slice holding a chapter where something is revealed is narrowed before it is
+# called rather than after it fails. Measured on landfall: 17-24 split to 17-20,
+# then to 17-18, because CH-0017 and CH-0018 carry the first two withheld layers
+# and their contracts hold far heavier plants and reveals than a chapter of
+# crossing does. Three empty calls to discover what the withheld rows already said.
+DESIGN_REVEAL_SLICE_SIZE = 2
 # Measured in production, not on a probe: ten chapters failed at 9508 tokens of
 # input with reasoning 31999 and no output, and five answered at 7638 with 16816 of
 # reasoning. The first request has to be the size that answers.
@@ -3628,7 +3659,12 @@ AUDIT_NEIGHBOURS = 4
 # A schedule pass reads this many chapters and carries forward what they left
 # open, so a promise made in chapter three is still checked at chapter forty
 # without any one call reading the whole book.
-SCHEDULE_WINDOW_SIZE = 8
+# Measured across two full runs of landfall: an eight-chapter fold never once
+# answered on this book. 1-8, 5-8, 17-24, 17-20, 21-24 and 25-26 all came back
+# empty in both runs and were halved anyway, so eight bought three empty calls and
+# then the narrow calls it would have made regardless. Four is the width that
+# answered.
+SCHEDULE_WINDOW_SIZE = 4
 MAX_OPEN_PROMISES = 60
 # What a promise looks like when it names the chapter it falls due in.
 CHAPTER_REFERENCE = re.compile(r"CH-\d+", re.IGNORECASE)
@@ -4061,13 +4097,67 @@ class DesignChunkTruncated(BookForgeError):
         self.results = results
 
 
-def _book_design_chunks(chapter_count: int) -> list[dict[str, object]]:
-    """One chunk per slice of full chapter contracts, in order."""
+def _ranged_chunks(
+    category: str, first: int, last: int, width: int, reveal_orders: frozenset[int] = frozenset()
+) -> list[dict[str, object]]:
+    """Chunks of `width` over a range, narrowed where something is revealed.
+
+    A slice that holds a reveal chapter is built narrow rather than discovered to
+    be too wide: the withheld rows name the chapter each layer surfaces in, and the
+    engine has them before it calls.
+    """
+    width = max(1, int(width))
     chunks: list[dict[str, object]] = []
-    for start in range(1, chapter_count + 1, BOOK_DESIGN_SLICE_SIZE):
-        end = min(start + BOOK_DESIGN_SLICE_SIZE - 1, chapter_count)
-        chunks.append({"category": "chapters", "part": f"{start}-{end}", "first_order": start, "last_order": end})
+    start = int(first)
+    while start <= int(last):
+        end = min(start + width - 1, int(last))
+        if reveal_orders and any(order in reveal_orders for order in range(start, end + 1)):
+            end = min(start + max(1, DESIGN_REVEAL_SLICE_SIZE) - 1, int(last))
+        chunks.append({"category": category, "part": f"{start}-{end}", "first_order": start, "last_order": end})
+        start = end + 1
     return chunks
+
+
+def _design_slice_width(measured: list[tuple[int, int]]) -> int | None:
+    """How wide the next slice may be, from what the finished ones actually cost.
+
+    Sized by the heaviest chapter seen and not by the average, because the chapter
+    that overruns a slice is the one that had most to say, and an average lets it
+    hide behind the light chapters beside it. Landfall's per-chapter output ran
+    788 tokens at chapters 1-4 and 1558 at 23-24 — a factor of two inside one book,
+    which is why no single typed number is right for the next one.
+    """
+    heaviest = 0.0
+    for span, output in measured:
+        if span > 0 and output > 0:
+            heaviest = max(heaviest, output / span)
+    if heaviest <= 0:
+        return None
+    return max(1, min(BOOK_DESIGN_SLICE_SIZE, int(DESIGN_SLICE_OUTPUT_TARGET // heaviest)))
+
+
+def _reveal_orders(spine: dict[str, object], outline: list[object]) -> frozenset[int]:
+    """The chapter orders the withheld rows say something is revealed in."""
+    by_id: dict[str, int] = {}
+    for row in outline:
+        if isinstance(row, dict) and row.get("id") and row.get("order"):
+            by_id[str(row["id"]).upper()] = int(row["order"])
+    orders: set[int] = set()
+    for row in spine.get("withheld", []) if isinstance(spine.get("withheld"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        for match in CHAPTER_REFERENCE.findall(str(row.get("revealed_in") or "")):
+            order = by_id.get(str(match).upper())
+            if order:
+                orders.add(order)
+    return frozenset(orders)
+
+
+def _book_design_chunks(
+    chapter_count: int, *, width: int = BOOK_DESIGN_SLICE_SIZE, reveal_orders: frozenset[int] = frozenset()
+) -> list[dict[str, object]]:
+    """One chunk per slice of full chapter contracts, in order."""
+    return _ranged_chunks("chapters", 1, chapter_count, width, reveal_orders)
 
 
 def _book_outline_chunks(chapter_count: int) -> list[dict[str, object]]:
@@ -4147,6 +4237,7 @@ def _run_ranged_chunks(
     results: list[dict[str, object]],
     telemetry: list[dict[str, object]],
     on_unhalvable,
+    resize=None,
 ) -> None:
     """Run a list of ranged chunks, asking for less from any that does not fit.
 
@@ -4174,6 +4265,10 @@ def _run_ranged_chunks(
         results.extend(chunk_results)
         telemetry.append(chunk_telemetry)
         collect(parsed, chunk)
+        if resize is not None and pending:
+            # What the slice just finished cost is the only measurement of this
+            # book there is, and it arrives before the slices that would fail.
+            pending = resize(pending, chunk, chunk_telemetry)
 
 
 def _run_book_design_chunked(
@@ -4284,8 +4379,40 @@ def _run_book_design_chunked(
     # slice receives — and a designer handed thirty-two chapters inside the field
     # meant to hold the book's spine stops writing and tries to re-read its envelope.
     spine_snapshot = json.loads(json.dumps(merged))
+    # The withheld rows name the chapter each layer surfaces in, so the slices that
+    # carry a reveal are built narrow instead of being discovered to be too wide.
+    reveal_orders = _reveal_orders(spine_core, outline)
+    if reveal_orders:
+        print(
+            f"[designer] narrowing the slices holding chapters "
+            f"{', '.join(str(order) for order in sorted(reveal_orders))}: the withheld rows reveal there",
+            file=sys.stderr,
+        )
+    measured: list[tuple[int, int]] = []
+
+    def resize(pending, chunk, row):
+        if str(chunk.get("category")) != "chapters" or not pending:
+            return pending
+        span = int(chunk["last_order"]) - int(chunk["first_order"]) + 1
+        output = int(((row.get("tokens") or {}) or {}).get("output") or 0)
+        if span > 0 and output > 0:
+            measured.append((span, output))
+        width = _design_slice_width(measured)
+        if width is None:
+            return pending
+        rebuilt = _ranged_chunks(
+            "chapters", int(pending[0]["first_order"]), int(pending[-1]["last_order"]), width, reveal_orders
+        )
+        if [(_chunk_slug(one)) for one in rebuilt] != [(_chunk_slug(one)) for one in pending]:
+            print(
+                f"[designer] {span} chapter(s) cost {output} output token(s); "
+                f"the rest of the book goes {width} at a time",
+                file=sys.stderr,
+            )
+        return rebuilt
+
     _run_ranged_chunks(
-        _book_design_chunks(chapter_count),
+        _book_design_chunks(chapter_count, reveal_orders=reveal_orders),
         run=run,
         capsule_for=lambda chunk: {
             **base_capsule,
@@ -4299,6 +4426,7 @@ def _run_book_design_chunked(
         results=results,
         telemetry=chunk_telemetry,
         on_unhalvable=unhalvable,
+        resize=resize,
     )
     return claim, merged, results, chunk_telemetry
 
@@ -10317,7 +10445,12 @@ def assemble_edition(project: Path | str, book_id: str, language: str, draft: bo
         "universe": config["universe"],
         "book": book_id,
         "title": title,
-        "author": str(config.get("author", "")),
+        # The project's author, unless this book names one. A universe can hold books
+        # by different hands — a collection, an anthology, a pseudonym for one of them
+        # — and four editions have shipped from here with no author at all because
+        # the project-level field was the only one and nobody had a reason to set it
+        # for the whole universe.
+        "author": str(book.get("author") or config.get("author") or ""),
         "language": canonical,
         "identifier": identity,
         "source_epoch": 946684800,
@@ -10968,6 +11101,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_book_command = commands.add_parser("add-book")
     add_book_command.add_argument("title")
     add_book_command.add_argument("--continuity", default="CNT-0001")
+    add_book_command.add_argument("--author", default="", help="Who wrote it; the project's author stands in when a book names none")
     relate = commands.add_parser("relate")
     relate.add_argument("books", nargs="+")
     relate.add_argument("--type", required=True)
@@ -11080,7 +11214,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reset":
             print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale), sort_keys=True))
         elif args.command == "add-book":
-            print(json.dumps(add_book(args.project, args.title, continuity=args.continuity), sort_keys=True))
+            print(json.dumps(add_book(args.project, args.title, continuity=args.continuity, author=args.author), sort_keys=True))
         elif args.command == "relate":
             print(json.dumps(add_relation(args.project, args.type, args.books, imports=args.imports, obligations=args.obligation), sort_keys=True))
         elif args.command == "collection" and args.collection_command == "add":

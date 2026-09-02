@@ -235,5 +235,30 @@ class TheSameChapterAskedOfSeveralModelsTests(WriterPinFixture):
         self.assertIn("Book Forge writer role", (agents / f"writer-{self.bf._chorus_slug(GLM)}.md").read_text())
 
 
+class TheReviserFollowsTheWriterTests(WriterPinFixture):
+    """The bake-off chose landfall's writer by reading three drafts of CH-0001. The
+    reviser writes prose too — it applies the cold reader's and the technical
+    editor's findings sentence by sentence — and it was never pinned, so the book
+    was written on `glm-5.3-flash` at `high` and repaired on the project default at
+    `low`: two hands on the same paragraph."""
+
+    def test_a_project_that_pins_only_the_writer_gets_that_hand_for_both(self):
+        config = {"roles": {"writer": {"model": GLM, "variant": "high"}}}
+        self.assertEqual(self.bf._role_pin(config, "reviser"), self.bf._role_pin(config, "writer"))
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (GLM, "high"))
+
+    def test_a_project_that_pins_both_keeps_them_apart(self):
+        config = {"roles": {"writer": {"model": GLM, "variant": "high"}, "reviser": {"variant": "low"}}}
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (MODEL, "low"), "saying so is how you get two hands")
+
+    def test_a_project_that_pins_neither_is_unchanged(self):
+        self.assertEqual(self.bf._role_pin({}, "reviser"), (MODEL, self.bf.ROLE_SPECS["reviser"][1]))
+
+    def test_pinning_the_writer_does_not_move_any_other_role(self):
+        config = {"roles": {"writer": {"model": GLM, "variant": "high"}}}
+        for role in ("cold-reader", "technical-editor", "canon-auditor", "judge"):
+            self.assertEqual(self.bf._role_pin(config, role), (MODEL, self.bf.ROLE_SPECS[role][1]))
+
+
 if __name__ == "__main__":
     unittest.main()

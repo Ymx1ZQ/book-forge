@@ -110,11 +110,13 @@ class SliceBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
 
-    def test_forty_chapters_split_into_slices_of_eight(self):
+    def test_forty_chapters_open_at_the_width_that_answered(self):
+        """Eight was the opening width and landfall measured it as too wide: its
+        four-chapter slices all answered, its eight-chapter slices were halved."""
         chunks = self.bf._book_design_chunks(40)
-        self.assertEqual(len(chunks), 5)
-        self.assertEqual([(c["first_order"], c["last_order"]) for c in chunks], [(1, 8), (9, 16), (17, 24), (25, 32), (33, 40)])
-        self.assertEqual([self.bf._chunk_slug(c) for c in chunks][:2], ["chapters-1-8", "chapters-9-16"])
+        self.assertEqual(len(chunks), 10)
+        self.assertEqual([(c["first_order"], c["last_order"]) for c in chunks][:3], [(1, 4), (5, 8), (9, 12)])
+        self.assertEqual([self.bf._chunk_slug(c) for c in chunks][:2], ["chapters-1-4", "chapters-5-8"])
 
     def test_a_short_book_gets_one_slice_and_a_ragged_tail_is_kept(self):
         self.assertEqual([(c["first_order"], c["last_order"]) for c in self.bf._book_design_chunks(3)], [(1, 3)])
@@ -187,7 +189,9 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         categories = [chunk["category"] for chunk in provider.chunks]
         self.assertEqual(categories[0], "spine")
-        self.assertEqual(categories[1:], ["outline"] * 4 + ["chapters"] * 5)
+        self.assertEqual(categories[1:5], ["outline"] * 4)
+        self.assertEqual(set(categories[5:]), {"chapters"})
+        self.assertGreaterEqual(categories.count("chapters"), 5)
         for chunk in provider.chunks[1:]:
             width = int(chunk["last_order"]) - int(chunk["first_order"]) + 1
             ceiling = self.bf.BOOK_OUTLINE_SLICE_SIZE if chunk["category"] == "outline" else self.bf.BOOK_DESIGN_SLICE_SIZE
@@ -221,7 +225,8 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         spines = [capsule["spine"] for capsule in provider.capsules[1:]]
-        self.assertEqual(len(spines), 9)
+        chapter_slices = [row for row in provider.capsules[1:] if row["chunk"]["category"] == "chapters"]
+        self.assertEqual(len(spines), len(chapter_slices) + 4, "one spine per chapter slice plus the four outline slices")
         for spine in spines:
             self.assertNotIn("chapters", spine)
             self.assertEqual(spine, spines[0])
@@ -255,7 +260,9 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         provider = SliceProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
         slices = [row for row in provider.capsules[1:] if row["chunk"]["category"] == "chapters"]
-        self.assertEqual([len(capsule["written_so_far"]) for capsule in slices], [0, 4, 4, 4, 4])
+        window = [len(capsule["written_so_far"]) for capsule in slices]
+        self.assertEqual(window[0], 0, "the first slice has nothing written before it")
+        self.assertTrue(all(size == self.bf.DESIGN_NEIGHBOURS for size in window[1:]), window)
         for capsule in slices:
             seen = {row["id"] for row in capsule["written_so_far"]}
             first = int(capsule["chunk"]["first_order"])
@@ -294,10 +301,18 @@ class BookDesignSliceTests(BookDesignSliceFixture):
         receipts = [json.loads(path.read_text()) for path in (self.project / ".book-forge" / "runs").rglob("execution-receipt.json")]
         chunked = [row["chunk_telemetry"] for row in receipts if row.get("chunk_telemetry")]
         self.assertEqual(len(chunked), 1)
-        self.assertEqual([row["chunk"] for row in chunked[0]], [
+        slugs = [row["chunk"] for row in chunked[0]]
+        self.assertEqual(slugs[:5], [
             "spine", "outline-1-12", "outline-13-24", "outline-25-36", "outline-37-40",
-            "chapters-1-8", "chapters-9-16", "chapters-17-24", "chapters-25-32", "chapters-33-40",
         ])
+        # Every chapter accounted for once, however the slices came out: the width
+        # is decided from what this book's own slices cost, so the count is not a
+        # constant a test may hard-code.
+        covered = []
+        for slug in slugs[5:]:
+            first, last = (int(part) for part in slug.removeprefix("chapters-").split("-"))
+            covered.extend(range(first, last + 1))
+        self.assertEqual(covered, list(range(1, CHAPTER_COUNT + 1)))
 
 
 
@@ -328,6 +343,64 @@ class WrappedAnswerTests(BookDesignSliceFixture):
     def test_a_capsule_that_legitimately_carries_a_spine_field_is_untouched(self):
         value = {"spine": {"premise": "p"}, "chapters": [{"id": "CH-0001"}]}
         self.assertEqual(self.bf._unwrap_chunk(value, "spine"), value)
+
+
+class ASliceIsTheWidthTheBookTurnedOutToNeedTests(unittest.TestCase):
+    """Landfall's per-chapter output ran 788 tokens at chapters 1-4 and 1558 at
+    23-24 — a factor of two inside one book. Any single typed width is a guess that
+    is wrong for the next book, and being wrong costs three empty calls per slice
+    to find out."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_light_chapters_buy_a_wider_slice_than_heavy_ones(self):
+        light = self.bf._design_slice_width([(4, 3151)])
+        heavy = self.bf._design_slice_width([(2, 3116)])
+        self.assertGreater(light, heavy)
+        self.assertEqual((light, heavy), (4, 2))
+
+    def test_the_heaviest_chapter_decides_and_not_the_average(self):
+        """The chapter that overruns a slice is the one that had most to say, and
+        an average lets it hide behind the light chapters beside it."""
+        self.assertEqual(
+            self.bf._design_slice_width([(4, 3151), (2, 3116)]),
+            self.bf._design_slice_width([(2, 3116)]),
+        )
+
+    def test_nothing_measured_yet_leaves_the_opening_width_alone(self):
+        self.assertIsNone(self.bf._design_slice_width([]))
+        self.assertIsNone(self.bf._design_slice_width([(4, 0)]))
+
+    def test_the_width_never_exceeds_the_opening_one_however_light_the_book(self):
+        self.assertEqual(self.bf._design_slice_width([(8, 8)]), self.bf.BOOK_DESIGN_SLICE_SIZE)
+
+    def test_a_slice_holding_a_reveal_is_narrowed_before_it_is_called(self):
+        """Landfall split 17-24 to 17-20 and then to 17-18, because CH-0017 and
+        CH-0018 carry the first two withheld layers. The withheld rows said so
+        before any of those three calls was made."""
+        plain = [c["part"] for c in self.bf._book_design_chunks(26)]
+        self.assertIn("17-20", plain)
+        narrowed = [c["part"] for c in self.bf._book_design_chunks(26, reveal_orders=frozenset({17, 18}))]
+        self.assertIn("17-18", narrowed)
+        self.assertNotIn("17-20", narrowed)
+
+    def test_a_book_of_light_chapters_is_not_split_more_than_it_needs(self):
+        chunks = self.bf._ranged_chunks("chapters", 1, 12, self.bf._design_slice_width([(4, 2000)]))
+        self.assertEqual([c["part"] for c in chunks], ["1-4", "5-8", "9-12"])
+
+    def test_the_reveal_orders_come_from_the_withheld_rows(self):
+        outline = [{"id": "CH-0001", "order": 1}, {"id": "CH-0017", "order": 17}, {"id": "CH-0018", "order": 18}]
+        spine = {"withheld": [{"revealed_in": "CH-0017"}, {"revealed_in": "CH-0018"}, {"revealed_in": ""}]}
+        self.assertEqual(self.bf._reveal_orders(spine, outline), frozenset({17, 18}))
+        self.assertEqual(self.bf._reveal_orders({}, outline), frozenset())
+
+    def test_every_chapter_is_covered_exactly_once_however_it_is_narrowed(self):
+        for width in (1, 2, 3, 4):
+            for reveals in (frozenset(), frozenset({5}), frozenset({1, 26})):
+                chunks = self.bf._ranged_chunks("chapters", 1, 26, width, reveals)
+                covered = [o for c in chunks for o in range(c["first_order"], c["last_order"] + 1)]
+                self.assertEqual(covered, list(range(1, 27)), f"width={width} reveals={sorted(reveals)}")
 
 
 if __name__ == "__main__":

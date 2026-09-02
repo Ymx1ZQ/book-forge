@@ -112,7 +112,9 @@ class PassBoundaryTests(unittest.TestCase):
         schedule = [(c["first_order"], c["last_order"]) for c in chunks if c["category"] == "schedule"]
         self.assertEqual(windows, [(n, n + 1) for n in range(1, 26, 2)])
         self.assertEqual(len(windows), 13)
-        self.assertEqual(schedule, [(1, 8), (9, 16), (17, 24), (25, 26)])
+        width = self.bf.SCHEDULE_WINDOW_SIZE
+        self.assertEqual(schedule, [(n, min(n + width - 1, 26)) for n in range(1, 27, width)])
+        self.assertEqual([o for f, l in schedule for o in range(f, l + 1)], list(range(1, 27)))
 
     def test_no_pass_reads_more_than_a_fixed_number_of_chapters(self):
         """The width of a pass is a constant, so a longer book buys more passes
@@ -497,10 +499,12 @@ class SlicedAuditTests(AuditFixture):
         provider = AuditProvider(self.bf)
         result = self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
-        # Forty chapters: twenty windows of two, and a walk of five.
-        self.assertEqual(provider.calls.count("canon-auditor"), 25)
+        # Forty chapters: twenty windows of two, and a walk of however many the
+        # schedule width comes to. One finding per pass, one record.
+        walk = -(-40 // self.bf.SCHEDULE_WINDOW_SIZE)
+        self.assertEqual(provider.calls.count("canon-auditor"), 20 + walk)
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
-        self.assertEqual(len(record["findings"]), 25)
+        self.assertEqual(len(record["findings"]), 20 + walk)
 
     def test_no_pass_is_handed_the_staging_or_the_wiring(self):
         provider = AuditProvider(self.bf)
@@ -518,18 +522,30 @@ class SlicedAuditTests(AuditFixture):
         ids = [row["id"] for row in record["findings"]]
         self.assertEqual(len(set(ids)), len(ids))
         self.assertIn("A-window-1-2-F-001", ids)
-        self.assertIn("A-schedule-1-8-F-001", ids)
+        self.assertIn(f"A-schedule-1-{self.bf.SCHEDULE_WINDOW_SIZE}-F-001", ids)
+        width = self.bf.SCHEDULE_WINDOW_SIZE
         self.assertEqual({row["pass"] for row in record["findings"]}, {
             *(f"window-{n}-{n + 1}" for n in range(1, 40, 2)),
-            "schedule-1-8", "schedule-9-16", "schedule-17-24", "schedule-25-32", "schedule-33-40",
+            *(f"schedule-{n}-{min(n + width - 1, 40)}" for n in range(1, 41, width)),
         })
 
     def test_a_pass_that_returns_no_answer_is_asked_for_half_as_much(self):
-        provider = AuditProvider(self.bf, schedule_ceiling=4)
+        """The ceiling is set below the schedule width on purpose: a pass at the
+        opening width comes back empty and is asked for half rather than for the
+        same thing again."""
+        ceiling = self.bf.SCHEDULE_WINDOW_SIZE // 2
+        self.assertGreaterEqual(ceiling, 1, "the opening width must leave room to be halved")
+        provider = AuditProvider(self.bf, schedule_ceiling=ceiling)
         result = self.bf.execute_book_design(self.project, self.book, provider=provider)
         self.assertEqual(result["state"], "design_clean")
         schedule = [len(s["proposal"]["chapters"]) for s in provider.audit_scopes if "neighbourhood_digest" not in s]
-        self.assertEqual(schedule, [8, 4, 4, 8, 4, 4, 8, 4, 4, 8, 4, 4, 8, 4, 4])
+        self.assertIn(self.bf.SCHEDULE_WINDOW_SIZE, schedule, "the wide pass was asked for first")
+        self.assertTrue(
+            any(width <= ceiling for width in schedule),
+            f"and then asked for less: {schedule}",
+        )
+        answered = [width for width in schedule if width <= ceiling]
+        self.assertEqual(sum(answered), 40, "every chapter is still walked exactly once")
 
     def test_a_window_of_one_chapter_is_asked_about_it_alone_before_the_audit_dies(self):
         """Landfall's first audit ended on window-11-11: a window of one chapter
@@ -552,7 +568,8 @@ class SlicedAuditTests(AuditFixture):
         provider = AuditProvider(self.bf)
         self.bf.execute_book_design(self.project, self.book, provider=provider)
         carried = [s["open_promises"] for s in provider.audit_scopes if "neighbourhood_digest" not in s]
-        self.assertEqual([len(rows) for rows in carried], [0, 8, 16, 24, 32])
+        width = self.bf.SCHEDULE_WINDOW_SIZE
+        self.assertEqual([len(rows) for rows in carried], [width * n for n in range(len(carried))])
         self.assertEqual(carried[-1][0]["chapter"], "CH-0001")
 
 

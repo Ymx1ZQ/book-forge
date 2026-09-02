@@ -118,3 +118,23 @@ class NavigationTests(EpubTests):
         result = self.bf.export_epub(self.base, self.book, "en")
         with zipfile.ZipFile(Path(result["path"])) as archive:
             self.assertNotIn("<dc:creator></dc:creator>", archive.read("OEBPS/content.opf").decode())
+
+    def test_a_book_names_its_own_author_over_the_project_s(self):
+        """A universe can hold books by different hands. Four editions shipped from
+        this engine with no author at all, because the project-level field was the
+        only one and nobody had a reason to set it for a whole universe."""
+        config = json.loads((self.base / "book-forge.yaml").read_text())
+        config["author"] = "The Universe's Hand"
+        (self.base / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(self.bf.assemble_edition(self.base, self.book, "en")["author"], "The Universe's Hand")
+
+        book_path = self.base / "books" / self.book / "book.yaml"
+        book = json.loads(book_path.read_text())
+        book["author"] = "This Book's Hand"
+        book_path.write_text(json.dumps(book, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(self.bf.assemble_edition(self.base, self.book, "en")["author"], "This Book's Hand")
+
+    def test_add_book_records_an_author_when_given_one_and_omits_the_key_otherwise(self):
+        named = self.bf.add_book(self.base, "Named", author="A Hand")
+        self.assertEqual(named["author"], "A Hand")
+        self.assertNotIn("author", self.bf.add_book(self.base, "Unnamed"))

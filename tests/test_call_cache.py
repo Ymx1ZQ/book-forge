@@ -112,10 +112,12 @@ class AResumedRunPaysOnlyForWhatIsMissingTests(CacheFixture):
         self.assertEqual(second.designer_calls(), [])
 
     def test_a_design_that_died_halfway_calls_only_for_what_is_missing(self):
-        broken = CountingProvider(self.bf, fail_on="chapters-1-8")
+        # The first slice of chapter contracts, whatever width the engine opens at.
+        first_slice = f"chapters-1-{self.bf.BOOK_DESIGN_SLICE_SIZE}"
+        broken = CountingProvider(self.bf, fail_on=first_slice)
         with self.assertRaises(RuntimeError):
             self.design(broken)
-        paid = [slug for slug in broken.designer_calls() if slug != "chapters-1-8"]
+        paid = [slug for slug in broken.designer_calls() if slug != first_slice]
         self.assertIn("spine", paid)
         self.assertIn("outline-1-9", paid)
         self.reopen()
@@ -123,7 +125,7 @@ class AResumedRunPaysOnlyForWhatIsMissingTests(CacheFixture):
         self.design(resumed)
         for slug in paid:
             self.assertNotIn(slug, resumed.designer_calls(), f"{slug} was paid for once and asked again")
-        self.assertIn("chapters-1-8", resumed.designer_calls())
+        self.assertIn(first_slice, resumed.designer_calls())
 
     def test_the_chapters_are_the_same_whether_they_came_from_the_cache_or_the_call(self):
         self.design(CountingProvider(self.bf))
