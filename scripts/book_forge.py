@@ -8146,21 +8146,61 @@ def _chorus_telemetry(result: dict[str, object], envelope: dict[str, object]) ->
     return telemetry
 
 
-def _validate_findings(value: dict[str, object], *, technical: bool) -> list[dict[str, object]]:
+REVIEW_FINDING_FIELDS = frozenset({"id", "dimension", "severity", "evidence", "issue", "fix_required"})
+
+
+def _validate_findings(
+    value: dict[str, object], *, technical: bool
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """The findings this review can be acted on, and the ones it cannot.
+
+    Raising on the first unreadable finding threw away the readable ones with it.
+    Measured on CH-0004, the first chapter written after the writer and the reviser
+    were put on one hand: the cold reader answered in well-formed JSON with several
+    usable findings, one of them carrying `evidence` as a sentence instead of the
+    object the contract asks for and no `fix_required`. That one field discarded the
+    review, then the chapter, then a run of twenty-six.
+
+    This is the rule the rest of the engine already follows — what a model returns
+    that cannot be used is set aside and recorded, and the run goes on. The critic
+    does it for a finding that cites nothing, the auditor for evidence it cannot
+    resolve. A review where *nothing* survives is still a failure, because that is
+    an answer nobody can act on and the retry exists for it.
+    """
     findings = value.get("findings")
     if not isinstance(findings, list):
         raise BookForgeError("Review output has no findings list")
+    usable: list[dict[str, object]] = []
+    set_aside: list[dict[str, object]] = []
     seen = set()
-    for finding in findings:
-        required = {"id", "dimension", "severity", "evidence", "issue", "fix_required"}
-        if not isinstance(finding, dict) or not required <= finding.keys():
-            raise BookForgeError("Review finding is missing required evidence fields")
-        if finding["id"] in seen or finding["severity"] not in {"blocking", "warning", "note"}:
-            raise BookForgeError("Review finding has duplicate ID or invalid severity")
+    for index, finding in enumerate(findings, start=1):
+        if not isinstance(finding, dict):
+            set_aside.append({"position": index, "why": "the finding is not an object", "finding": finding})
+            continue
+        missing = sorted(REVIEW_FINDING_FIELDS - finding.keys())
         if technical and "objective" not in finding:
-            raise BookForgeError("Technical finding must declare objective status")
+            missing.append("objective")
+        if missing:
+            set_aside.append({
+                "position": index,
+                "id": finding.get("id"),
+                "why": f"missing {', '.join(missing)}",
+                "finding": finding,
+            })
+            continue
+        if finding["id"] in seen or finding["severity"] not in {"blocking", "warning", "note"}:
+            set_aside.append({
+                "position": index,
+                "id": finding.get("id"),
+                "why": "duplicate id or invalid severity",
+                "finding": finding,
+            })
+            continue
         seen.add(finding["id"])
-    return findings
+        usable.append(finding)
+    if findings and not usable:
+        raise BookForgeError("Review finding is missing required evidence fields")
+    return usable, set_aside
 
 
 def _materialize_review_result(
@@ -8258,8 +8298,19 @@ def _call_parallel_reviews(
     receipts = []
     for role, task_id, envelope, claim, result in results:
         mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        _refuse_empty_answer(role, task_id, result)
         value = _parse_contract_json(str(result["text"]))
-        _validate_findings(value, technical=role == "technical-editor")
+        usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
+        if set_aside:
+            print(
+                f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
+                f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
+                file=sys.stderr,
+            )
+        # The review is acted on through what survived, and what did not is carried
+        # beside it rather than dropped on the floor.
+        value["findings"] = usable
+        value["set_aside"] = set_aside
         if role == "technical-editor" and not isinstance(value.get("consequences"), list):
             raise BookForgeError("Technical review has no independent consequence extraction")
         parsed[role] = value

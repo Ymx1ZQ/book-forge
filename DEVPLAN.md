@@ -3936,3 +3936,30 @@ So every chapter is written by one model and repaired by another, at a different
 **Left unset on landfall, deliberately.** An author is a name, and naming one is not a default this can pick. The mechanism is there and the value is one word away.
 
 **Done when:** An edition names its author when the book has one.
+
+
+## A malformed finding is set aside, not fatal 🔄
+
+**Status: 🔄 In progress — 2026-09-02**
+
+**Found by running the book.** `advance` reached CH-0004, the first chapter written since the writer and reviser were put on one hand, and died: `chapters failed and nothing could be recovered: Review finding is missing required evidence fields`. The cold reader had answered — 707 output tokens, well formed JSON, several usable findings — and one of them carried `evidence` as a sentence instead of the object the contract asks for, and lacked `fix_required`. `_validate_findings` raises on the first finding it cannot read, so the whole review was discarded, then the chapter, then the run. A book of twenty-six chapters stopped on one field of one finding.
+
+This is the boundary principle, which this engine already applies everywhere else: what a model returns that the engine cannot use is set aside and recorded, the run continues, and a person is never asked. The critic does it for a finding that cites nothing. The canon auditor does it for unverifiable evidence. The two reviewers that gate every chapter do not.
+
+**And the same call turned up the second half.** The technical editor beside it answered `output: 0` after `reasoning: 31999` — the third failure class, named this morning for the translation critic and not yet recognised anywhere else. It is worth fixing in one place rather than per role: any role whose answer is empty after a spent ceiling should be told apart from one that answered badly, because the two need opposite remedies and the wrong one is expensive.
+
+**Fix.** A finding that does not satisfy the contract is dropped from the list, recorded beside the chapter with what was wrong with it, and the review proceeds on the findings that do. A review where **nothing** survives is a review that failed, and keeps the retry it has today. `_refuse_empty_answer` moves to every role that parses a contract, so a spent ceiling is never re-asked with the identical envelope anywhere.
+
+**Tasks:**
+- [x] `_validate_findings` returns the findings it can read and the ones it cannot, instead of raising on the first bad one
+- [x] The set-aside findings are recorded beside the chapter, with the field that was missing
+- [x] A review whose findings are all unusable still fails, since that is an answer nobody can act on
+- [x] The count is reported on stderr, so a reviewer that is drifting is visible without reading files
+- [x] `_refuse_empty_answer` guards the chapter reviews as it guards the translation critic
+- [x] Test: a review with one malformed finding among good ones proceeds on the good ones and records the bad one
+- [x] Test: a review with only malformed findings fails as it does today
+- [x] Test: a reviewer that spends its ceiling is not re-asked with the same envelope
+- [x] Suite green: 681 passed, 405 subtests (era 675). Reinstall, commit & push
+- [~] `advance` gets past CH-0004
+
+**Done when:** One field of one finding cannot stop a book.

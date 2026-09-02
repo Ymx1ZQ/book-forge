@@ -364,5 +364,67 @@ class StylePassLengthTests(unittest.TestCase):
         self.assertIn("1400", str(caught.exception))
 
 
+
+class OneBadFindingCannotStopABookTests(unittest.TestCase):
+    """`advance` reached CH-0004 and died on `Review finding is missing required
+    evidence fields`. The cold reader had answered well — 707 output tokens, valid
+    JSON, several usable findings — and one of them carried `evidence` as a sentence
+    instead of the object the contract asks for, with no `fix_required`. That one
+    field discarded the review, then the chapter, then a run of twenty-six."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def good(self, index, **extra):
+        return {
+            "id": f"F-{index:04d}", "dimension": "clarity", "severity": "note",
+            "evidence": {"quote": "the lamp stood as a debt"}, "issue": "unclear",
+            "fix_required": False, **extra,
+        }
+
+    def test_a_readable_finding_survives_an_unreadable_one_beside_it(self):
+        loose = {"id": "F-0002", "dimension": "clarity", "severity": "note",
+                 "evidence": "a sentence rather than the object", "issue": "unclear"}
+        usable, aside = self.bf._validate_findings({"findings": [self.good(1), loose]}, technical=False)
+        self.assertEqual([row["id"] for row in usable], ["F-0001"])
+        self.assertEqual(len(aside), 1)
+        self.assertIn("fix_required", aside[0]["why"], "the record names the field that was missing")
+        self.assertEqual(aside[0]["id"], "F-0002")
+
+    def test_a_review_where_nothing_survives_still_fails(self):
+        """That is an answer nobody can act on, and the retry exists for it."""
+        loose = {"id": "F-0002", "dimension": "clarity", "severity": "note", "issue": "unclear"}
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._validate_findings({"findings": [loose]}, technical=False)
+
+    def test_a_review_that_found_nothing_is_not_a_review_that_failed(self):
+        self.assertEqual(self.bf._validate_findings({"findings": []}, technical=False), ([], []))
+
+    def test_a_duplicate_id_is_set_aside_rather_than_fatal(self):
+        usable, aside = self.bf._validate_findings(
+            {"findings": [self.good(1), self.good(1)]}, technical=False
+        )
+        self.assertEqual(len(usable), 1)
+        self.assertIn("duplicate", aside[0]["why"])
+
+    def test_a_technical_finding_without_its_objective_flag_is_set_aside(self):
+        usable, aside = self.bf._validate_findings(
+            {"findings": [self.good(1, objective=True), self.good(2)]}, technical=True
+        )
+        self.assertEqual([row["id"] for row in usable], ["F-0001"])
+        self.assertIn("objective", aside[0]["why"])
+
+    def test_a_reviewer_that_spends_its_ceiling_is_told_apart_from_one_that_answered_badly(self):
+        """The technical editor beside that cold reader answered `output: 0` after
+        `reasoning: 31999` — the third failure class, which needs the question
+        changed rather than repeated."""
+        spent = {"text": "", "tokens": {"input": 13185, "output": 0, "reasoning": 31999}}
+        with self.assertRaises(self.bf.ReasoningCeilingSpent):
+            self.bf._refuse_empty_answer("technical-editor", "CH-0004", spent)
+        # An empty answer with nothing spent on reasoning is the other failure and
+        # keeps the retry that was built for it.
+        self.bf._refuse_empty_answer("technical-editor", "CH-0004", {"text": "", "tokens": {"output": 0}})
+
+
 if __name__ == "__main__":
     unittest.main()
