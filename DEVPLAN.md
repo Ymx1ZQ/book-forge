@@ -3756,8 +3756,8 @@ It is also not the biggest chapter that fails most, which is what was assumed be
 **Fix, cheapest lever first.** The critic is pinned to `deepseek-v4-pro-0813` at `high`, and `high` is what buys the 32000 tokens of reasoning. Whether `medium` leaves room to write is one call to find out, and it would be built over if the structural work went first. If effort alone does not settle it, the question gets smaller the way it does everywhere else here: the chapter is read in halves, each half carrying the style, the glossary and its own machine findings, and the findings merge. What a half cannot see — a formula rendered two ways across the chapter — is what the glossary check already covers deterministically, so the split gives up something that is already covered elsewhere.
 
 **Tasks:**
-- [~] Measure `medium` against `high` on CH-0001 and CH-0003: reasoning, output, and whether the answer parses
-- [ ] Record the measurement in this entry before any code is written, since the structural half is only justified if the cheap lever fails
+- [x] Measure `medium` against `high` on CH-0001 and CH-0003: reasoning, output, and whether the answer parses
+- [x] Record the measurement in this entry before any code is written, since the structural half is only justified if the cheap lever fails
 - [x] A critic answer with zero output tokens is its own failure, distinguished in the message and in the review file from an answer that came back malformed
 - [x] It is never retried with the identical envelope: an unchanged question that exhausted the ceiling exhausts it again
 - [x] `_is_silence` does not claim it, so the backoff never waits out a provider that answered
@@ -3769,6 +3769,40 @@ It is also not the biggest chapter that fails most, which is what was assumed be
 - [ ] Test: findings from two segments merge without duplicating a finding that quotes across the boundary
 - [ ] Suite green. Reinstall, commit & push
 - [ ] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here
+
+**`medium` measured, and it settles less than it looks like it does.** Four calls, the pin moved to `deepseek-v4-pro-0813` at `medium` and the runtime resynced:
+
+| chapter | ask | reasoning | output | outcome |
+|---|---|---|---|---|
+| CH-0001 | 1 | 32000 | 0 | nothing |
+| CH-0001 | 2 | 32000 | 0 | nothing |
+| CH-0001 | 3 | 30410 | 1155 | 6 findings |
+| CH-0003 | 1 | 26217 | 909 | 5 findings |
+
+Both chapters were read, and CH-0003 was read for the first time in this project's history — it had gone unread through two full `--until-clean` runs. But CH-0001 still spent the ceiling twice, and four calls against a forty-call baseline cannot carry a rate. No rate is claimed here.
+
+**What forty-four calls do establish.** Reasoning at exactly 32000 and output at 0 occur together every time, and every call that finished reasoning under the cap wrote an answer. The ceiling is hard and the outcome is binary, so the question is not why the model fails but what makes its reasoning finish sooner.
+
+**And the premise this entry was written on is contradicted by its own numbers.** The fix above says the question is too big, meaning the input. The input is anti-correlated with failure: CH-0002 has the largest envelope at 16376 tokens and the best rate at 2 of 7, CH-0003 the smallest at 14488 and the worst at 10 of 13. Slicing the chapter on that basis would repeat the reasoning that produced "the chapter with the largest envelope" about the smallest one.
+
+**So one lever is varied at a time before anything is built.** Three arms on CH-0003, four repetitions each, run against the provider directly — envelopes built and called with no claim, no plan write and no chapter rewritten, so the arms leave nothing behind but scratch directories. **A** is the question as it is asked today. **B** changes only the size of the answer requested, at most four findings instead of twelve. **C** changes only the size of the question, half the chapter at twelve findings. Whichever arm raises the answer rate names the lever, and if it is B the remedy is a line of the prompt and the segmentation below is not built at all.
+
+- [~] Run the three arms and record which lever moves the answer rate — **paused at six of twelve calls, 2026-09-02, at the user's request**
+
+| arm | rep | reasoning | output | outcome | seconds |
+|---|---|---|---|---|---|
+| A-whole-12 | 1 | 32000 | 0 | nothing | 626.7 |
+| A-whole-12 | 2 | 32000 | 0 | nothing | 543.8 |
+| B-whole-4 | 1 | 28966 | 716 | answered | 584.1 |
+| B-whole-4 | 2 | 26425 | 609 | answered | 629.2 |
+| C-half-12 | 1 | 28520 | 1421 | answered | 570.5 |
+| C-half-12 | 2 | 14837 | 583 | answered | 319.0 |
+
+**A is 0 of 2, B is 2 of 2, C is 2 of 2**, and every A call stopped at 32000 exactly. Both interventions came in three to five thousand tokens under the cap and both were read; the baseline hit it twice. What six calls cannot yet separate is B from C, since they did the same thing here, nor rule out that two successes apiece are the 23% CH-0003 already answers at. Six more calls finish it.
+
+**One thing the arms show that neither was designed to ask.** C's two calls reasoned 28520 and 14837 on the same half-chapter: the spread inside one arm is wider than the gap between the arms. Whatever is decided here has to survive that, which argues for whichever remedy buys the most headroom rather than the one that wins by a few hundred tokens.
+
+**What to resume with.** The harness is thirty lines and is not kept here, because the version that was run carries a machine's paths and a book's name. What it does is the part worth keeping: it loads the engine as a module, builds a `translation-critic` envelope for each arm with `build_envelope`, calls `run_opencode_role` with an attempt directory inside the project, and records the provider's token counts and whether `_parse_contract_json` accepts the answer. It takes no claim, writes no plan and rewrites no chapter, so an arm can be repeated as often as the question needs and leaves only its attempt directories behind.
 
 **Named rather than inferred.** `ReasoningCeilingSpent` is recognised from the counters the provider returns — empty text while reasoning tokens were spent — and not from the message, which is how the case was being read as a malformed answer. An empty answer with **no** reasoning behind it is left alone: nothing on the wire is the case the existing retry was built for, and it keeps its three asks. The saving is two calls of every three on this failure, at roughly $0.12 each.
 
