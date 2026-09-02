@@ -7811,10 +7811,11 @@ def advance_book(
                 # first ask, on a role that answers 15 times in 18 and once answered
                 # the identical envelope that had just come back empty.
                 how = "recovered and retrying" if state["recovered"] else "retrying"
-                print(
-                    f"[advance] {name} failed ({last}); {how} {attempt + 2}/{MAX_STAGE_ATTEMPTS}",
-                    file=sys.stderr,
-                )
+                if attempt + 2 <= MAX_STAGE_ATTEMPTS:
+                    print(
+                        f"[advance] {name} failed ({last}); {how} {attempt + 2}/{MAX_STAGE_ATTEMPTS}",
+                        file=sys.stderr,
+                    )
         raise AdvanceHalted(
             f"{name} failed {MAX_STAGE_ATTEMPTS} times in a row: {last}. "
             "Read the attempt's raw output before spending another call."
