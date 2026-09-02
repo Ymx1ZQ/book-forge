@@ -4004,3 +4004,30 @@ Its contract asks for a findings list with no limit on it. The twelve-arm measur
 - [~] Measured on the chapters after it: how often a reviewer spends its ceiling, against twice in two
 
 **Done when:** The role that gates a chapter is asked a question it can finish answering.
+
+
+## A stage retries because the run is healthy, not because something broke 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**Found on the third stop in three chapters, and it corrects a generalisation made this morning.** The technical editor spent its reasoning ceiling on CH-0005 with the answer bound in the question — verified in the envelope, `Report at most 6 findings`, and in the prompt — and the run stopped. The bound is the lever the twelve arms measured on the translation critic, and **it did not transfer.**
+
+**What the role's own history says, across all eighteen calls it has ever made on this book.** Fourteen answered with reasoning between 13398 and 30433; three came back empty at 31999 or 32000; and the decisive pair is `ATT-0260` and `ATT-0262`: **the same input of 13185 tokens, one empty and one answering with 27269 of reasoning and 1145 of output.** Input is not the driver either — `ATT-0064` and `ATT-0068` answered at 16091 and 16523, larger than every failure.
+
+So this role sits at a mean near enough to the ceiling that variance decides, and **asking again works**: 15 of 18. That is the opposite of the translation critic, whose unbounded question came back empty 4 times out of 4 identical asks. The sentence this engine has repeated since the designer — *the question is not made easier by being asked again* — is true there and **false here**, and this morning it was applied to every role at once on the strength of one role's measurement.
+
+**And the reason the engine did not simply ask again is its own.** `stage()` retries only when `recover_before_dispatch` reports that it recovered something. A failure that settles cleanly — the better-behaved case, and the one this engine works hard to produce — leaves nothing to recover, so `recovered` is false and the stage gives up on the first try. **Recovery is being used as the licence to retry, and it is the wrong licence.** What makes a retry safe is that the run is healthy and no person is needed, which `_halt_if_a_person_is_needed` already decides one line above.
+
+**Fix.** A stage that fails retries while the run is healthy, whether or not recovery had anything to do, bounded by `MAX_STAGE_ATTEMPTS` as it is today. With the per-role resume shipped an hour ago, a retry re-calls only what actually failed, so a second ask costs one call and not a pass.
+
+**Tasks:**
+- [x] `stage()` retries on a clean failure, not only on a recovered one, while no person is needed
+- [x] The message says which it was, so a run that is retrying a clean failure does not look like one that is recovering a broken claim
+- [x] The cap stays at `MAX_STAGE_ATTEMPTS`, so a deterministic failure still ends
+- [x] Test: a stage that fails cleanly once and succeeds on the second ask completes
+- [x] Test: a stage that fails cleanly every time still ends at the cap
+- [x] Test: a failure that needs a person still halts without retrying — already covered by `test_a_halt_always_says_what_to_do_next`, which is the case `_halt_if_a_person_is_needed` decides before any retry is considered
+- [x] Suite green: 692 passed, 405 subtests (era 690). Reinstall, commit & push
+- [~] `advance` gets past CH-0005
+
+**Done when:** A run that is healthy asks again, and only a run that needs a person stops.

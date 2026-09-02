@@ -156,6 +156,46 @@ class StageRetryTests(AdvanceFixture):
         self.assertIn("design", message)
         self.assertTrue("DESIGN" in message or "failed" in message)
 
+    def test_a_clean_failure_is_asked_again_rather_than_being_fatal(self):
+        """Recovery used to be the licence to retry, so a failure that settled
+        cleanly — the better-behaved case — gave up on the first ask. The technical
+        editor spent its ceiling on CH-0005 and stopped a book, on a role that
+        answers 15 times in 18 and once answered the identical envelope that had
+        just come back empty."""
+        calls = {"n": 0}
+        real = self.bf.recover_before_dispatch
+
+        def nothing_to_recover(root, **kwargs):
+            state = dict(real(root, **kwargs))
+            state["recovered"] = False
+            calls["n"] += 1
+            return state
+
+        self.bf.recover_before_dispatch = nothing_to_recover
+        self.addCleanup(setattr, self.bf, "recover_before_dispatch", real)
+        provider = ScriptedProvider(self.bf, fail={"designer": 3})
+        result = self.bf.advance_book(self.project, self.book, until="design", provider=provider)
+        self.assertEqual(result["stages"], ["design"])
+        self.assertGreaterEqual(calls["n"], 1, "the stage went through recovery and retried anyway")
+
+    def test_a_clean_failure_still_ends_at_the_cap(self):
+        real = self.bf.recover_before_dispatch
+
+        def nothing_to_recover(root, **kwargs):
+            state = dict(real(root, **kwargs))
+            state["recovered"] = False
+            return state
+
+        self.bf.recover_before_dispatch = nothing_to_recover
+        self.addCleanup(setattr, self.bf, "recover_before_dispatch", real)
+        with self.assertRaises(self.bf.AdvanceHalted) as caught:
+            self.bf.advance_book(
+                self.project, self.book, until="design",
+                provider=ScriptedProvider(self.bf, fail={"designer": 999}),
+            )
+        self.assertIn("times in a row", str(caught.exception))
+        self.assertIn("raw output", str(caught.exception), "a halt still says what to do next")
+
     def test_a_halt_always_says_what_to_do_next(self):
         self.bf.add_task(self.project, "DRAFT-Q", "writer", deps=[], priority=50, outputs=[])
         plan = self.plan()

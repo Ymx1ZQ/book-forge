@@ -7804,13 +7804,21 @@ def advance_book(
                 last = str(exc)
                 state = recover_before_dispatch(root)
                 _halt_if_a_person_is_needed(state, context=f"{name} failed: {last}")
-                if not state["recovered"]:
-                    raise AdvanceHalted(
-                        f"{name} failed and nothing could be recovered: {last}. "
-                        "Read the attempt's raw output before spending another call."
-                    ) from exc
-                print(f"[advance] {name} failed ({last}); recovered and retrying {attempt + 2}/{MAX_STAGE_ATTEMPTS}", file=sys.stderr)
-        raise AdvanceHalted(f"{name} failed {MAX_STAGE_ATTEMPTS} times in a row: {last}")
+                # Recovery is not the licence to retry — a healthy run is. A failure
+                # that settles cleanly leaves nothing to recover, which is the
+                # better-behaved case and used to be the fatal one: the technical
+                # editor spent its ceiling on CH-0005 and the stage gave up on the
+                # first ask, on a role that answers 15 times in 18 and once answered
+                # the identical envelope that had just come back empty.
+                how = "recovered and retrying" if state["recovered"] else "retrying"
+                print(
+                    f"[advance] {name} failed ({last}); {how} {attempt + 2}/{MAX_STAGE_ATTEMPTS}",
+                    file=sys.stderr,
+                )
+        raise AdvanceHalted(
+            f"{name} failed {MAX_STAGE_ATTEMPTS} times in a row: {last}. "
+            "Read the attempt's raw output before spending another call."
+        )
 
     if "design" in wanted and _advance_needs_design(root, book_id):
         _log_step(1, len(wanted), "design", "→")
