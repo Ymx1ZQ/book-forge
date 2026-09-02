@@ -29,6 +29,6 @@ Judge each one. You have both texts open and the rule in front of you, which the
 
 A finding you call `mistaken` is dropped and never reaches the repair, so do not use it to excuse a rendering you simply prefer: `mistaken` means the check was wrong, not that the translation is defensible anyway. If you are unsure, it holds.
 
-Report **at most twelve findings**, most severe first. A chapter has more defects than that only if the translation is unusable, and in that case say so in `verdict` and report the twelve that matter — an answer cut off mid-sentence is an answer nobody can act on, and the whole pass is lost.
+The capsule carries `answer_bound`, and it is a hard limit: report **at most that many findings**, most severe first. A chapter usually has more defects than the bound allows, and that is expected — the review runs again and the next pass takes the next ones. Reporting past the bound is measured to cost the whole answer: on the chapter this role failed most, the unbounded question returned nothing at all in four attempts out of four, having spent its entire reasoning ceiling before writing a character. Report fewer findings and be read, rather than more and be lost. When the translation is unusable, say so in `verdict` and still report only the worst ones.
 
 `blocking` is for meaning changed or lost, and for nothing else. Everything a reader would survive is `warning` or `note`.

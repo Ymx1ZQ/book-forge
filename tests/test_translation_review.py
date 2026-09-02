@@ -772,5 +772,55 @@ class WhenTheCriticSpendsItsCeilingTests(TranslationReviewFixture):
         )
 
 
+class TheAnswerBoundTests(TranslationReviewFixture):
+    """Measured on CH-0003, the chapter this role failed most: twelve calls at
+    `medium`, three arms of four. The question as asked answered 0 of 4 and
+    stopped at exactly 32000 reasoning tokens every time. The same question with
+    the bound lowered to four answered 4 of 4. Half the chapter at twelve
+    answered 3 of 4, and its failure was at 31999 — on half the text. The size of
+    the answer decides, not the size of the question."""
+
+    class Watching:
+        """Keeps the capsule it was asked with, so the bound can be read off the
+        envelope rather than off the prompt."""
+
+        def __init__(self):
+            self.capsules = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            payload = envelope["payload"]
+            if role == "translation-critic":
+                self.capsules.append(payload["task"])
+                text = json.dumps({"findings": [], "verdict": "faithful"})
+            else:
+                text = translation(GOOD_BODY)
+            return {
+                "text": text, "provider": "openrouter", "model": payload["model"],
+                "variant": payload["variant"], "session_id": "ses-1",
+                "tokens": {"input": 1, "output": 1}, "cost": 0.0, "latency_ms": 1, "finish": "stop",
+            }
+
+    def test_the_capsule_carries_the_bound_the_engine_owns(self):
+        provider = self.Watching()
+        self.translate(provider)
+        self.assertEqual(len(provider.capsules), 1)
+        bound = str(provider.capsules[0].get("answer_bound") or "")
+        self.assertIn(str(self.bf.CRITIC_MAX_FINDINGS), bound)
+
+    def test_the_prompt_does_not_carry_a_number_of_its_own(self):
+        """The bound the model is told and the bound the engine owns have to be one
+        value, or tuning one silently leaves the other behind."""
+        prompt = (
+            Path(self.bf.__file__).resolve().parent.parent
+            / "assets" / "prompts" / "translation-critic.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("answer_bound", prompt)
+        for word in ("twelve findings", "at most twelve"):
+            self.assertNotIn(word, prompt)
+
+    def test_the_bound_is_small_enough_to_have_been_measured(self):
+        self.assertLessEqual(self.bf.CRITIC_MAX_FINDINGS, 4, "four is the value four repetitions answered on")
+
+
 if __name__ == "__main__":
     unittest.main()

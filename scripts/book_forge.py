@@ -8990,6 +8990,17 @@ def _translation_review_enabled(config: dict[str, object]) -> bool:
 SILENCE_RETRY_DELAYS = {1: 60.0, 2: 180.0}
 # Three asks: a dead provider costs four minutes of waiting, not a night.
 CRITIC_ATTEMPTS = 3
+# How many findings one critic call may return. Not a preference — measured.
+# Twelve calls on the chapter this role failed most, four repetitions of three
+# arms, every call at `medium` on the same model: the question as it was asked
+# answered 0 of 4 and stopped at exactly 32000 reasoning tokens every time; the
+# same question with this bound lowered to four answered 4 of 4; half the chapter
+# at twelve answered 3 of 4 and the failure was at 31999, on half the text. So it
+# is the size of the answer demanded that decides whether the model reaches the
+# ceiling, and not the size of the text it is given — which is why the chapter is
+# still read whole. Raising this buys more findings per call and, past some point
+# this measurement does not locate, buys none at all.
+CRITIC_MAX_FINDINGS = 4
 
 
 def _is_silence(exc: BaseException) -> bool:
@@ -9344,6 +9355,9 @@ def _review_translation(
                 "machine_findings": [
                     {"id": row["id"], "rule": row["rule"], "issue": row["issue"]} for row in findings
                 ],
+                # In the question rather than only in the prompt, so the bound the
+                # engine enforces and the bound the model is told are one value.
+                "answer_bound": f"Report at most {CRITIC_MAX_FINDINGS} findings, most severe first.",
             }
             if unreadable:
                 capsule["retry"] = {

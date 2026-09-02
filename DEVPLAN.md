@@ -3755,20 +3755,27 @@ It is also not the biggest chapter that fails most, which is what was assumed be
 
 **Fix, cheapest lever first.** The critic is pinned to `deepseek-v4-pro-0813` at `high`, and `high` is what buys the 32000 tokens of reasoning. Whether `medium` leaves room to write is one call to find out, and it would be built over if the structural work went first. If effort alone does not settle it, the question gets smaller the way it does everywhere else here: the chapter is read in halves, each half carrying the style, the glossary and its own machine findings, and the findings merge. What a half cannot see — a formula rendered two ways across the chapter — is what the glossary check already covers deterministically, so the split gives up something that is already covered elsewhere.
 
+**How this Fix ended, written here rather than rewritten above.** Its cheap lever was measured and did not settle it; its structural half was measured and refused. What replaced both is a third thing the paragraph never considered — the size of the answer asked for — and it was found by varying one lever at a time instead of reasoning about which was likelier.
+
 **Tasks:**
 - [x] Measure `medium` against `high` on CH-0001 and CH-0003: reasoning, output, and whether the answer parses
 - [x] Record the measurement in this entry before any code is written, since the structural half is only justified if the cheap lever fails
 - [x] A critic answer with zero output tokens is its own failure, distinguished in the message and in the review file from an answer that came back malformed
 - [x] It is never retried with the identical envelope: an unchanged question that exhausted the ceiling exhausts it again
 - [x] `_is_silence` does not claim it, so the backoff never waits out a provider that answered
-- [ ] The chapter is read in segments sized by a constant, each carrying the style, the glossary and the machine findings that fall inside it
-- [ ] Findings from the segments merge, and a fingerprint stays stable whichever segment raised it
-- [ ] Test: a critic that exhausts its ceiling on a whole chapter answers on the segments
 - [x] Test: a zero-output answer is not re-asked with the same envelope
 - [x] Test: a zero-output answer is not treated as silence and costs no wait
-- [ ] Test: findings from two segments merge without duplicating a finding that quotes across the boundary
-- [ ] Suite green. Reinstall, commit & push
-- [ ] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here
+- [x] The bound is a constant the engine owns, `CRITIC_MAX_FINDINGS`, carried in the capsule as `answer_bound` so the bound enforced and the bound stated are one value
+- [x] The prompt carries no number of its own, and a test refuses one, since tuning the constant would otherwise leave the prompt behind
+- [x] The measurement is written beside the constant, so whoever raises it knows what it buys and what it costs
+- [x] Test: the capsule carries the bound the engine owns
+- [x] Test: the prompt defers to `answer_bound` instead of naming a count
+- [x] ~~The chapter is read in segments sized by a constant~~ — **not built.** Arm C measured it: half a chapter still reached the ceiling
+- [x] ~~Findings from the segments merge, and a fingerprint stays stable whichever segment raised it~~ — **not built**, with the segmentation
+- [x] ~~Test: a critic that exhausts its ceiling on a whole chapter answers on the segments~~ — **not built**; the arms are the measurement that would have justified it, and they refuse
+- [x] ~~Test: findings from two segments merge without duplicating a finding that quotes across the boundary~~ — **not built**
+- [x] Suite green: 661 passed, 354 subtests (era 658). Reinstall, commit & push
+- [~] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here
 
 **`medium` measured, and it settles less than it looks like it does.** Four calls, the pin moved to `deepseek-v4-pro-0813` at `medium` and the runtime resynced:
 
@@ -3787,24 +3794,25 @@ Both chapters were read, and CH-0003 was read for the first time in this project
 
 **So one lever is varied at a time before anything is built.** Three arms on CH-0003, four repetitions each, run against the provider directly — envelopes built and called with no claim, no plan write and no chapter rewritten, so the arms leave nothing behind but scratch directories. **A** is the question as it is asked today. **B** changes only the size of the answer requested, at most four findings instead of twelve. **C** changes only the size of the question, half the chapter at twelve findings. Whichever arm raises the answer rate names the lever, and if it is B the remedy is a line of the prompt and the segmentation below is not built at all.
 
-- [~] Run the three arms and record which lever moves the answer rate — **paused at six of twelve calls, 2026-09-02, at the user's request**
+- [x] Run the three arms and record which lever moves the answer rate
 
-| arm | rep | reasoning | output | outcome | seconds |
-|---|---|---|---|---|---|
-| A-whole-12 | 1 | 32000 | 0 | nothing | 626.7 |
-| A-whole-12 | 2 | 32000 | 0 | nothing | 543.8 |
-| B-whole-4 | 1 | 28966 | 716 | answered | 584.1 |
-| B-whole-4 | 2 | 26425 | 609 | answered | 629.2 |
-| C-half-12 | 1 | 28520 | 1421 | answered | 570.5 |
-| C-half-12 | 2 | 14837 | 583 | answered | 319.0 |
+**Twelve calls on CH-0003, four repetitions of three arms, every one at `medium` on `deepseek-v4-pro-0813`.**
 
-**A is 0 of 2, B is 2 of 2, C is 2 of 2**, and every A call stopped at 32000 exactly. Both interventions came in three to five thousand tokens under the cap and both were read; the baseline hit it twice. What six calls cannot yet separate is B from C, since they did the same thing here, nor rule out that two successes apiece are the 23% CH-0003 already answers at. Six more calls finish it.
+| arm | answered | reasoning | output | cost |
+|---|---|---|---|---|
+| A — the question as asked | **0 / 4** | 32000, 32000, 32000, 32000 | 0, 0, 0, 0 | $0.39 |
+| B — at most four findings | **4 / 4** | 28966, 26425, 28939, 22909 | 716, 609, 724, 604 | $0.35 |
+| C — half the chapter, twelve | **3 / 4** | 28520, 14837, 31999, 30307 | 1421, 583, 0, 679 | $0.32 |
 
-**The critic is pinned to `medium` on landfall, on the user's decision and with the evidence stated.** Four calls read both chapters and read CH-0003 for the first time; four calls are not a rate and the entry says so. What makes the pin safe to take now rather than later is that it is reversible in one line and that the six arm calls were all made under it, so the arms and the book are on the same operating point — reverting it would have made the remaining arms incomparable with the ones already run.
+A returned exactly 32000 four times out of four. That is not variance around a mean, it is a question that reaches the ceiling every time it is asked.
 
-**One thing the arms show that neither was designed to ask.** C's two calls reasoned 28520 and 14837 on the same half-chapter: the spread inside one arm is wider than the gap between the arms. Whatever is decided here has to survive that, which argues for whichever remedy buys the most headroom rather than the one that wins by a few hundred tokens.
+**What decides is the size of the answer demanded, and the arms separate it cleanly.** C failed on **half** the chapter, at 31999 — if the text were what exhausted the model, that call could not have failed. B kept the whole chapter and lowered only the bound, and answered every time, with the narrowest spread of the three arms.
 
-**What to resume with.** The harness is thirty lines and is not kept here, because the version that was run carries a machine's paths and a book's name. What it does is the part worth keeping: it loads the engine as a module, builds a `translation-critic` envelope for each arm with `build_envelope`, calls `run_opencode_role` with an attempt directory inside the project, and records the provider's token counts and whether `_parse_contract_json` accepts the answer. It takes no claim, writes no plan and rewrites no chapter, so an arm can be repeated as often as the question needs and leaves only its attempt directories behind.
+**So the segmentation below is not built, and the reason is measured rather than argued.** It would have been new code, two calls per chapter instead of one, and C says it does not fix the failure it was proposed for. The premise it rested on — the question is too big, meaning the input — was contradicted twice: first by the rate across chapters, where the largest envelope failed least, and now directly by C's failure on half a text.
+
+**The cost of the bound, stated rather than buried.** Four findings a pass instead of twelve means more passes to exhaust a chapter, and finding counts from before this change are not comparable with counts after it. That is affordable now and was not yesterday, because the pass loop only learned this morning how to tell a chapter that is finished from one that still has defects. And four findings from a call that answers beat twelve from a call that returned nothing in 22 of 40 attempts.
+
+**What the arms found that no arm was asked.** Two calls of the same arm on the same half-chapter reasoned 28520 and 14837. The spread inside an arm is wider than the gap between the arms, so the bound does not remove the failure — it moves the whole distribution far enough below the ceiling that four repetitions did not reach it. A denser chapter will take some of that margin back, and the honest reading of `CRITIC_MAX_FINDINGS = 4` is a margin bought, not a defect closed.
 
 **Named rather than inferred.** `ReasoningCeilingSpent` is recognised from the counters the provider returns — empty text while reasoning tokens were spent — and not from the message, which is how the case was being read as a malformed answer. An empty answer with **no** reasoning behind it is left alone: nothing on the wire is the case the existing retry was built for, and it keeps its three asks. The saving is two calls of every three on this failure, at roughly $0.12 each.
 
