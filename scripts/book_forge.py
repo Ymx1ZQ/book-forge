@@ -8326,25 +8326,45 @@ def _call_parallel_reviews(
             results.append((*metadata, future.result()))
     parsed: dict[str, dict[str, object]] = dict(materialized)
     receipts = []
-    for role, task_id, envelope, claim, result in results:
-        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-        _refuse_empty_answer(role, task_id, result)
-        value = _parse_contract_json(str(result["text"]))
-        usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
-        if set_aside:
-            print(
-                f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
-                f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
-                file=sys.stderr,
-            )
-        # The review is acted on through what survived, and what did not is carried
-        # beside it rather than dropped on the floor.
-        value["findings"] = usable
-        value["set_aside"] = set_aside
-        if role == "technical-editor" and not isinstance(value.get("consequences"), list):
-            raise BookForgeError("Technical review has no independent consequence extraction")
-        parsed[role] = value
-        receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
+    # Every claim this pass holds, dropped as each one is promoted. Whatever is left
+    # when the pass raises is settled before the exception leaves: an answer that
+    # came back and could not be used is a *failed* attempt, and the sibling role's
+    # claim — accepted and never looked at, because the loop raised before reaching
+    # it — is not an unknown outcome either. Left unsettled, both become
+    # `outcome_unknown` and halt the run for a person, which is right only when the
+    # engine does not know what happened. Here it does.
+    unsettled = {task_id: claim for _, task_id, _, claim, _ in results}
+    try:
+        for role, task_id, envelope, claim, result in results:
+            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+            _refuse_empty_answer(role, task_id, result)
+            value = _parse_contract_json(str(result["text"]))
+            usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
+            if set_aside:
+                print(
+                    f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
+                    f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
+                    file=sys.stderr,
+                )
+            # The review is acted on through what survived, and what did not is
+            # carried beside it rather than dropped on the floor.
+            value["findings"] = usable
+            value["set_aside"] = set_aside
+            if role == "technical-editor" and not isinstance(value.get("consequences"), list):
+                raise BookForgeError("Technical review has no independent consequence extraction")
+            parsed[role] = value
+            receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
+            unsettled.pop(task_id, None)
+    except BookForgeError as unusable:
+        for task_id, claim in unsettled.items():
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unusable))
+            except BookForgeError:
+                # Already settled by something closer to the failure. Nothing to do,
+                # and nothing here may raise on the way out: the caller must see the
+                # failure that actually happened.
+                pass
+        raise
     return parsed["cold-reader"], parsed["technical-editor"], receipts
 
 

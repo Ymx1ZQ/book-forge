@@ -494,5 +494,54 @@ class TheReviewersAreBoundedTests(unittest.TestCase):
             self.assertIn("answer_bound", text, name)
 
 
+
+class AReviewerThatCannotBeReadSettlesItsOwnClaimTests(ReviewTests):
+    """A person was needed twice in one night, both times for this. The review
+    marks the provider accepted and then raises with the claim unsettled, so
+    recovery finds an accepted claim with a session id and declares
+    `outcome_unknown` — correct when the engine does not know what happened, and
+    here it does: the answer came back, was read, and could not be used."""
+
+    def state_of(self, task_id):
+        plan = json.loads((self.project / ".book-forge" / "plan.json").read_text())
+        return next(row["state"] for row in plan["tasks"] if row["id"] == task_id)
+
+    def run_reviews(self, provider):
+        """Through the route, so the tasks exist the way a real run creates them."""
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+
+    def test_an_unreadable_answer_leaves_the_task_failed_and_not_unknown(self):
+        class Unreadable:
+            calls = []
+
+            def __call__(self, role, envelope, attempt_dir):
+                self.calls.append(role)
+                return {
+                    "text": "I could not settle on an answer.", "provider": "openrouter",
+                    "model": MODEL, "variant": "low", "session_id": "ses-1",
+                    "tokens": {"input": 10, "output": 20}, "cost": 0.0, "latency_ms": 1, "finish": "stop",
+                }
+
+        self.run_reviews(Unreadable())
+        for task in (f"REVIEW-COLD-{self.book}-CH-0001", f"REVIEW-TECH-{self.book}-CH-0001"):
+            self.assertIn(self.state_of(task), {"pending", "failed"},
+                          f"{task} still holds its claim and would become outcome_unknown")
+
+    def test_a_spent_ceiling_leaves_the_task_failed_so_the_retry_can_ask_again(self):
+        class Spent:
+            def __call__(self, role, envelope, attempt_dir):
+                return {
+                    "text": "", "provider": "openrouter", "model": MODEL, "variant": "low",
+                    "session_id": "ses-1", "tokens": {"input": 15000, "output": 0, "reasoning": 32000},
+                    "cost": 0.1, "latency_ms": 1, "finish": "stop",
+                }
+
+        self.run_reviews(Spent())
+        for task in (f"REVIEW-COLD-{self.book}-CH-0001", f"REVIEW-TECH-{self.book}-CH-0001"):
+            self.assertIn(self.state_of(task), {"pending", "failed"},
+                          f"{task} still holds its claim and would become outcome_unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

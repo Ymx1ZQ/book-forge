@@ -3938,9 +3938,9 @@ So every chapter is written by one model and repaired by another, at a different
 **Done when:** An edition names its author when the book has one.
 
 
-## A malformed finding is set aside, not fatal 🔄
+## A malformed finding is set aside, not fatal ✅
 
-**Status: 🔄 In progress — 2026-09-02**
+**Status: ✅ Done — 2026-09-02**
 
 **Found by running the book.** `advance` reached CH-0004, the first chapter written since the writer and reviser were put on one hand, and died: `chapters failed and nothing could be recovered: Review finding is missing required evidence fields`. The cold reader had answered — 707 output tokens, well formed JSON, several usable findings — and one of them lacked `fix_required`. **Corrected:** the first version of this note also blamed `evidence` for being a sentence rather than an object. The contract asks for a sentence — *exact location and brief quote* — so that half was wrong, and one missing boolean is the whole of it. `_validate_findings` raises on the first finding it cannot read, so the whole review was discarded, then the chapter, then the run. A book of twenty-six chapters stopped on one field of one finding.
 
@@ -3985,9 +3985,9 @@ The resume this function has understands only total success — `if len(material
 
 **Done when:** A role that answered is never asked again because the role beside it did not.
 
-## The chapter reviewers are bounded like the critic 🔄
+## The chapter reviewers are bounded like the critic ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-03**
 
 **The technical editor has now spent its ceiling twice in two chapters** — `output: 0` after `reasoning: 31999` on CH-0004 and again on CH-0005. It is the fourth role in this engine to fail that way, after the designer, the canon auditor and the translation critic, and it is the first one that **gates a chapter**: the critic is advisory and can be set aside, this cannot.
 
@@ -4006,9 +4006,9 @@ Its contract asks for a findings list with no limit on it. The twelve-arm measur
 **Done when:** The role that gates a chapter is asked a question it can finish answering.
 
 
-## A stage retries because the run is healthy, not because something broke 🔄
+## A stage retries because the run is healthy, not because something broke ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-03**
 
 **Found on the third stop in three chapters, and it corrects a generalisation made this morning.** The technical editor spent its reasoning ceiling on CH-0005 with the answer bound in the question — verified in the envelope, `Report at most 6 findings`, and in the prompt — and the run stopped. The bound is the lever the twelve arms measured on the translation critic, and **it did not transfer.**
 
@@ -4031,3 +4031,29 @@ So this role sits at a mean near enough to the ceiling that variance decides, an
 - [~] `advance` gets past CH-0005
 
 **Done when:** A run that is healthy asks again, and only a run that needs a person stops.
+
+
+## A reviewer that cannot be read settles its own claim ✅
+
+**Status: ✅ Done — 2026-09-03**
+
+**Found by counting the times a person was needed tonight: twice, and both for the same reason.** The chapter review calls `mark_provider_accepted` and then, if the answer cannot be used, raises — with the claim left accepted and unsettled. Recovery finds an accepted claim with a session id on the wire and declares `outcome_unknown`, which is correct and deliberate: the provider took the call, a retry may pay twice, and that is a decision the engine refuses to make alone. So the run halts for `resume --resolve-unknown`.
+
+But the engine already knows what happened. The answer came back, it was read, and it was unusable — that is a *failed* attempt, not an unknown one, and the difference is the whole point of the two classes. The translation critic settles exactly this case with `block=False`, which is why a critic that cannot be read never stops anything. The two roles that gate a chapter do not, and they are the ones that can stop a book.
+
+**This is the fourth variation of one theme tonight** — a malformed finding treated as a failed review, a half-finished pass treated as an unstarted one, a clean failure treated as an unrecoverable one, and now a read failure treated as an unknown outcome. Each time the engine had more information than the path it took used.
+
+**Fix.** A review whose answer is unusable settles its own claim as failed before it raises. The stage retry then does its work without a person, and a genuine unknown — the provider accepted and *nothing* came back — still halts, because that one really is a decision about paying twice.
+
+**Tasks:**
+- [x] A chapter review that cannot use its answer settles the claim as failed before raising
+- [x] `block=False`, since the stage above already decides whether to retry and one chapter must not block the run
+- [x] A call that was never accepted is untouched, so a real unknown still reaches a person
+- [x] Test: a reviewer whose answer cannot be parsed leaves its task failed rather than outcome_unknown
+- [x] Test: a reviewer that spends its ceiling leaves its task failed, and the retry re-asks it
+- [x] Test: an attempt accepted with nothing back is still an unknown outcome — untouched, and covered by `test_an_unknown_outcome_is_never_recovered_because_a_retry_may_pay_twice`
+- [x] Suite green: 699 passed, 405 subtests (era 692). Reinstall, commit & push
+
+**The first version of this fix settled the wrong claim, and the test written for it was too weak to say so.** It settled only the role that raised, and asserted that the task was not `outcome_unknown` — which was true of a claim still sitting at `running`, so it passed without proving anything. Reading the real state showed what mattered: the loop raises on the first role, so the **sibling's** claim — accepted, never looked at — is the one left holding, and the one that would have become the unknown. The pass now tracks every claim it holds, drops each as it promotes, and settles whatever is left before the exception leaves. The assertion is `pending` or `failed`, which is what settled means.
+
+**Done when:** A person is asked only about paying twice, never about an answer the engine has already read.
