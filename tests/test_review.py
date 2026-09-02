@@ -426,5 +426,73 @@ class OneBadFindingCannotStopABookTests(unittest.TestCase):
         self.bf._refuse_empty_answer("technical-editor", "CH-0004", {"text": "", "tokens": {"output": 0}})
 
 
+
+class APassOfTwoRolesResumesOnTheOneThatAnsweredTests(ReviewTests):
+    """On CH-0005 the cold reader answered, validated, materialized and was
+    promoted; the technical editor beside it spent its ceiling and raised. The
+    retry re-claimed both and died on `Only a running attempt can be marked
+    accepted` for the one already promoted."""
+
+    def run_a_full_review(self):
+        cold = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
+        tech = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing", "fix_required": True, "objective": False}
+        provider = RoleProvider({
+            "cold-reader": [{"findings": [cold]}],
+            "technical-editor": [{"findings": [tech], "consequences": []}],
+            "reviser": [self.reviser([], [
+                {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
+                {"finding": "T-0001", "action": "accepted-risk", "evidence": "kept", "loss": "none", "supersedes": []},
+            ])],
+        })
+        self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+
+    def call_reviews(self, provider):
+        contract = json.loads((self.project / f"books/{self.book}/chapters/CH-0001.json").read_text())
+        draft = (self.project / f"books/{self.book}/work/CH-0001/draft.md").read_text()
+        consequences = json.loads((self.project / f"books/{self.book}/work/CH-0001/consequences.json").read_text())
+        return self.bf._call_parallel_reviews(
+            self.project, self.book, "CH-0001", contract, draft, consequences, provider
+        )
+
+    def test_only_the_role_that_did_not_answer_is_called_again(self):
+        self.run_a_full_review()
+        # Unpick the technical half, as a pass that half-succeeded leaves it. The
+        # plan is hash-protected, so the task is reopened through the engine's own
+        # function rather than by editing the file underneath it.
+        (self.project / f"books/{self.book}/reviews/CH-0001/technical-editor.json").unlink()
+        self.bf._reopen_task(self.project, f"REVIEW-TECH-{self.book}-CH-0001")
+
+        again = RoleProvider({"technical-editor": [{"verified": True, "findings": [], "consequences": []}]})
+        cold, technical, _ = self.call_reviews(again)
+        self.assertEqual(again.calls, ["technical-editor"], "the answer already paid for is reused")
+        self.assertEqual([f["id"] for f in cold["findings"]], ["F-0001"])
+        self.assertTrue(technical["verified"])
+
+    def test_a_pass_where_both_answered_calls_neither(self):
+        self.run_a_full_review()
+        nobody = RoleProvider({})
+        self.call_reviews(nobody)
+        self.assertEqual(nobody.calls, [])
+
+
+class TheReviewersAreBoundedTests(unittest.TestCase):
+    """The technical editor spent its ceiling on two chapters running. It is the
+    fourth role in this engine to fail that way and the first that gates a
+    chapter — the critic is advisory and can be set aside, this cannot."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_the_bound_is_a_constant_the_engine_owns(self):
+        self.assertIsInstance(self.bf.REVIEW_MAX_FINDINGS, int)
+        self.assertGreaterEqual(self.bf.REVIEW_MAX_FINDINGS, 1)
+
+    def test_neither_prompt_names_a_count_of_its_own(self):
+        base = Path(self.bf.__file__).resolve().parent.parent / "assets" / "prompts"
+        for name in ("cold-reader.md", "technical-editor.md"):
+            text = (base / name).read_text(encoding="utf-8")
+            self.assertIn("answer_bound", text, name)
+
+
 if __name__ == "__main__":
     unittest.main()

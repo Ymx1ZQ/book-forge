@@ -8248,6 +8248,17 @@ def _call_parallel_reviews(
     if len(materialized) == 2:
         return materialized["cold-reader"], materialized["technical-editor"], []
     jobs = []
+    # A pass of two roles can half-succeed, and the resume above only understood
+    # total success. On CH-0005 the cold reader answered, was validated and
+    # promoted, the technical editor beside it spent its ceiling and raised, and
+    # the retry re-claimed both — dying on `Only a running attempt can be marked
+    # accepted` for the one already promoted. A partial result is not no result:
+    # whatever answered is reused, and only what did not is asked again.
+    if materialized:
+        print(
+            f"[review] {chapter_id}: reusing the {', '.join(sorted(materialized))} answer already paid for",
+            file=sys.stderr,
+        )
     # Build synthetic previous-chapters summary for cold-reader — persisted artifact, not reconstructed
     previous_synthetic = ""
     try:
@@ -8269,7 +8280,18 @@ def _call_parallel_reviews(
         ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}"),
         ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}"),
     ):
-        capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft}
+        if role in materialized:
+            continue
+        capsule = {
+            "book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft,
+            # The bound the engine owns, in the question rather than only in the
+            # prompt. Measured on the translation critic across twelve calls: the
+            # unbounded question answered 0 of 4 and stopped at the reasoning
+            # ceiling every time, the bounded one answered 4 of 4, and halving the
+            # text it read did not help. This role gates a chapter, so it cannot be
+            # set aside when it fails to answer.
+            "answer_bound": f"Report at most {REVIEW_MAX_FINDINGS} findings, most severe first.",
+        }
         if role == "cold-reader":
             capsule["contract"] = _withheld_for_reader(contract)
             capsule["previous_synthetic"] = previous_synthetic
@@ -8294,7 +8316,7 @@ def _call_parallel_reviews(
         results = []
         for future, metadata in futures.items():
             results.append((*metadata, future.result()))
-    parsed: dict[str, dict[str, object]] = {}
+    parsed: dict[str, dict[str, object]] = dict(materialized)
     receipts = []
     for role, task_id, envelope, claim, result in results:
         mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
@@ -8316,6 +8338,15 @@ def _call_parallel_reviews(
         parsed[role] = value
         receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
     return parsed["cold-reader"], parsed["technical-editor"], receipts
+
+
+# What one chapter review may return. The same lever the translation critic's bound
+# came from, and the same evidence: across twelve calls the unbounded question
+# answered 0 of 4 and stopped at exactly 32000 reasoning tokens every time, the
+# bounded one answered 4 of 4, and halving the text changed nothing. The technical
+# editor spent its ceiling on two chapters running before this existed, and unlike
+# the critic it gates the chapter rather than advising it.
+REVIEW_MAX_FINDINGS = 6
 
 
 REPETITION_MIN_WORDS = 4

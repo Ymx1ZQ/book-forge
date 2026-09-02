@@ -3942,7 +3942,7 @@ So every chapter is written by one model and repaired by another, at a different
 
 **Status: 🔄 In progress — 2026-09-02**
 
-**Found by running the book.** `advance` reached CH-0004, the first chapter written since the writer and reviser were put on one hand, and died: `chapters failed and nothing could be recovered: Review finding is missing required evidence fields`. The cold reader had answered — 707 output tokens, well formed JSON, several usable findings — and one of them carried `evidence` as a sentence instead of the object the contract asks for, and lacked `fix_required`. `_validate_findings` raises on the first finding it cannot read, so the whole review was discarded, then the chapter, then the run. A book of twenty-six chapters stopped on one field of one finding.
+**Found by running the book.** `advance` reached CH-0004, the first chapter written since the writer and reviser were put on one hand, and died: `chapters failed and nothing could be recovered: Review finding is missing required evidence fields`. The cold reader had answered — 707 output tokens, well formed JSON, several usable findings — and one of them lacked `fix_required`. **Corrected:** the first version of this note also blamed `evidence` for being a sentence rather than an object. The contract asks for a sentence — *exact location and brief quote* — so that half was wrong, and one missing boolean is the whole of it. `_validate_findings` raises on the first finding it cannot read, so the whole review was discarded, then the chapter, then the run. A book of twenty-six chapters stopped on one field of one finding.
 
 This is the boundary principle, which this engine already applies everywhere else: what a model returns that the engine cannot use is set aside and recorded, the run continues, and a person is never asked. The critic does it for a finding that cites nothing. The canon auditor does it for unverifiable evidence. The two reviewers that gate every chapter do not.
 
@@ -3963,3 +3963,44 @@ This is the boundary principle, which this engine already applies everywhere els
 - [~] `advance` gets past CH-0004
 
 **Done when:** One field of one finding cannot stop a book.
+
+
+## A pass of two roles resumes on the one that answered ✅
+
+**Status: ✅ Done — 2026-09-03**
+
+**Found on CH-0005, one chapter after the last one.** The chapter review asks two roles under two claims — cold reader and technical editor — inside one function. On CH-0005 the cold reader answered, validated, materialized and **promoted**; the technical editor beside it returned `output: 0` after `reasoning: 31999` and raised. The run retried the pass, and the retry died on `Only a running attempt can be marked accepted`: it re-claimed both roles, including the one whose task had already succeeded.
+
+The resume this function has understands only total success — `if len(materialized) == 2` — so a pass that half-succeeded reads as a pass that did nothing, and the half already paid for is asked again in a state that cannot accept it. It is the same shape as the defect fixed an hour before it: **a partial result treated as no result.**
+
+**Fix.** Reuse whichever role has already succeeded and call only the ones that have not. One role's failure then costs one call rather than the pass, and never leaves a promoted task to be re-claimed.
+
+**Tasks:**
+- [x] The materialized review of a role that succeeded is reused whether or not the other one did
+- [x] Only roles without a succeeded task are claimed and called
+- [x] Test: a pass where one role succeeded and the other failed calls only the failed one on the retry
+- [x] Test: a pass where both succeeded calls neither
+- [x] Test: a pass where neither succeeded calls both, as it does today — covered by every existing review test, which all start from an empty plan
+- [x] Suite green: 690 passed, 405 subtests (era 681). Reinstall, commit & push
+
+**Done when:** A role that answered is never asked again because the role beside it did not.
+
+## The chapter reviewers are bounded like the critic 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**The technical editor has now spent its ceiling twice in two chapters** — `output: 0` after `reasoning: 31999` on CH-0004 and again on CH-0005. It is the fourth role in this engine to fail that way, after the designer, the canon auditor and the translation critic, and it is the first one that **gates a chapter**: the critic is advisory and can be set aside, this cannot.
+
+Its contract asks for a findings list with no limit on it. The twelve-arm measurement on the translation critic says what moves this failure: **the size of the answer demanded, not the size of the text**. The question as asked answered 0 of 4; bounded to four findings it answered 4 of 4; halving the text still failed at 31999. Applying that bound here is the measured lever rather than a fresh guess, and the same holds for the cold reader, unbounded for the same reason and so far spared only by luck.
+
+**Fix.** One constant for the chapter reviewers, carried in the capsule as `answer_bound` the way the critic's is, with both prompts deferring to it instead of naming a count of their own.
+
+**Tasks:**
+- [x] `REVIEW_MAX_FINDINGS`, carried into both reviewers' capsules as `answer_bound`
+- [x] Both prompts defer to it and name no count of their own
+- [x] Test: both capsules carry the bound the engine owns
+- [x] Test: neither prompt names a count
+- [x] Suite green: 690 passed, 405 subtests (era 681). Reinstall, commit & push
+- [~] Measured on the chapters after it: how often a reviewer spends its ceiling, against twice in two
+
+**Done when:** The role that gates a chapter is asked a question it can finish answering.

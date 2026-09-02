@@ -9,3 +9,5 @@ Check these, in this order, and treat a contradiction as blocking:
 5. **The contract.** POV, beats covered, length, and the consequences the chapter creates.
 
 Return one JSON object and no fences: `{"verified":true,"findings":[{"id":"F-...","dimension":"contract|canon|continuity|state","severity":"blocking|warning|note","objective":true,"evidence":"exact location and brief quote","issue":"...","fix_required":true}],"consequences":[{"scope":"book|continuity|universe","fact":"...","entities":["ID"]}]}`. Set verified:true only if every blocker in input is resolved and zero severity==blocking findings remain; otherwise verified:false. Warning/note are advisory and do not affect verified.
+
+The capsule carries `answer_bound`, and it is a hard limit: report **at most that many findings**, most severe first. Reporting past it is measured to cost the whole answer — on the role that reads a translation, the unbounded question returned nothing at all in four attempts out of four, having spent its entire reasoning ceiling before writing a character. Report fewer findings and be read, rather than more and be lost.
