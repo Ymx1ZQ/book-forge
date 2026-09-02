@@ -3739,9 +3739,9 @@ The signals cost nothing and are already produced. A pass with no actionable fin
 **Done when:** The pipeline says why it stopped reading, and a person never decides that it has read enough.
 
 
-## The critic's answer has room to be written 🔄
+## The critic's answer has room to be written ✅
 
-**Status: 🔄 In progress — 2026-09-02**
+**Status: ✅ Done — 2026-09-02**
 
 **Measured over every translation-critic call this book has ever made.** Forty calls; **twenty-two returned `output: 0`** after spending **exactly 32000 tokens on reasoning**. That is $1.91 of the $3.36 the critic has cost — 57% of the spend — for zero characters. It is not one chapter's defect: CH-0001 ten empty of twenty, CH-0003 ten of thirteen, CH-0002 two of seven.
 
@@ -3820,9 +3820,9 @@ A returned exactly 32000 four times out of four. That is not variance around a m
 
 **Done when:** A critic call that is paid for produces an answer, and a finding set ends because the critic ran out of findings rather than out of room.
 
-## A chapter that was not read is not a chapter that is clean 🔄
+## A chapter that was not read is not a chapter that is clean ✅
 
-**Status: 🔄 In progress — 2026-09-02**
+**Status: ✅ Done — 2026-09-02**
 
 **Found by reading the artifact instead of the route's report.** Two consecutive reviews of CH-0001 failed completely: three critic asks each, every one `Model output contains no JSON object`, nothing read. The route said so exactly — `"verdict": "unread"`, `"ended": "unread"`, `"converged": false`, `"set_aside": 1`. The convergence state written to disk beside the chapter said something else:
 
@@ -3853,50 +3853,28 @@ The cause is that `clean` is computed from the count of actionable findings, and
 **Done when:** The record beside a chapter distinguishes a chapter with no defects from a chapter nobody managed to read.
 
 
-## A finding has to quote the text it is about ⏸️
+## A finding has to quote the text it is about ❌
 
-**Status: ⏸️ Proposed — 2026-09-02, not started**
+**Status: ❌ Withdrawn — 2026-09-02, refuted before any code was written**
 
-**Found in the verification run of the entry above, by reading the findings against the chapter.** CH-0003's critic returned three findings. The first quotes, as the translation delivered, `La pratica era in piedi: *misread*, misurato da strumento, denunciato all'ora ambrata.` That sentence is not in the chapter. What is in the chapter is `La pratica recitava: …` — which is the finding's own proposed `fix`, verbatim. The critic reported a defect that was not there and proposed as its cure the text already standing.
+**The case that opened this entry was not what it looked like.** CH-0003's critic quoted `La pratica era in piedi: *misread*, …` as the translation delivered, and that sentence was reported here as absent from the chapter. It was not absent. It was in the chapter the critic read, the repair changed it to `La pratica recitava: …`, and the engine committed that change as `book-forge: promote TXN-0149` before the check was made. The finding was true, the repair was correct, and the reading that called it invented was made against a working tree the engine had already updated and committed.
 
-The prompt is explicit that a finding quoting nothing is discarded unread, and `_cited_findings` enforces it — but only against an empty field. A quote that is populated and wrong passes, becomes actionable, and is carried into a repair call. The engine's own boundary principle is the rule being missed: what a model returns that the engine cannot use is set aside and recorded. A span the engine can look for and not find is exactly that, and it is checkable with `in`, at no cost and with no model.
+**The measurement the entry demanded is what refuted it, which is why it was demanded.** Every promoted critic answer was paired with the exact text its own envelope carried — the chapter as it was then, not as it is now. **140 cited findings: 4 quote something not literally present, and 3 of those 4 are one citation style.** A critic quoting two non-contiguous spans joins them with ` / ` or an internal `…`, and each part is a real quote. Understanding the joiners leaves **1 of 140, 0.7%** — `Still mud gave nothing.` where the source says `mud gave nothing.`, a quote with a word added rather than a quote of nothing.
 
-**Fix.** A finding whose `translated` span does not occur in the translation is set aside with the reason, alongside the ones that quote nothing. The same for `source` against the source text. Neither reaches the repair, and both are recorded beside the chapter where the unapplied findings already go.
+So the check would refuse one true finding in 140 and catch nothing, because there is nothing to catch. Building it would have thrown away findings — including, on the naive version, the `«Sua» disse Cinder` finding that is the most important defect this pipeline has ever found, whose quote joins two lines with a slash.
 
-**One thing to get right rather than fast.** The comparison has to tolerate what a quote legitimately loses — surrounding whitespace, a trailing ellipsis, the newlines a paragraph carries — or a true finding gets thrown away, which is worse than the false one that prompted this. The glossary matcher was measured wrong seven times out of twelve for exactly that kind of over-strictness, and the same discipline applies: measure the rejections on landfall's real findings before the check becomes a gate.
+**What is worth keeping is the method, not the entry.** The reference for what a model was given is its own envelope. A chapter file read after the run has moved, and in this project it has moved *and been committed*, because promotion commits. `git status` came back clean and `git diff` empty on three chapters that had all just been rewritten.
 
-**Tasks:**
-- [ ] A finding whose `translated` span is absent from the translation is set aside, with the span and the reason
-- [ ] The same for `source` against the source chapter
-- [ ] The comparison normalises whitespace and tolerates a truncating ellipsis, and does nothing cleverer than that
-- [ ] Set-aside findings from this cause are counted separately in the review file, so the rate is visible rather than inferred
-- [ ] Test: a finding quoting a sentence not in the chapter never reaches the repair
-- [ ] Test: a finding quoting the chapter with different surrounding whitespace still stands
-- [ ] Measured on landfall's existing review artifacts: how many recorded findings would this have refused, and were any of them true
-- [ ] Suite green. Reinstall, commit & push
+**Done when:** withdrawn.
 
-**Done when:** A finding the engine cannot locate in the text is not a finding the repair is asked to act on.
+## A repair that changes nothing is not a repair ❌
 
-## A repair that changes nothing is not a repair ⏸️
+**Status: ❌ Withdrawn — 2026-09-02, refuted before any code was written**
 
-**Status: ⏸️ Proposed — 2026-09-02, not started**
+**Same mistake, same run.** The staged repair for CH-0003 was compared against the chapter on disk, found byte-identical, and reported here as a repair that changed nothing. It is identical because the repair had already been promoted *and committed*: the file on disk was the repair's output, not its input. Diffed against the text the model was actually given — `previous_output` in its own envelope — the repair changed exactly the line the finding cited.
 
-**Found in the same run, by comparing the staged output with the file it replaced.** CH-0003's repair call was made, its answer passed validation, it was staged, promoted, and reported as `repaired: true` in the route's output and in the pass state. Its staged chapter is byte-identical to the chapter it was given — `9cd6d3e2ac41d160` on both sides, zero lines of difference.
+**Measured across the project:** 21 promoted repairs paired with the call that produced them. **None returned its input unchanged.** The state this entry proposed to add, `nothing-applied` for a no-op answer, would never have fired.
 
-The convergence work already has the state this belongs in. `nothing-applied` exists precisely because a pass whose repair changed nothing would have the next pass read identical text and ask an identical question, and it is reached only when `_repair_translation` returns `None` — a repair that refused. A repair that answers and changes nothing is the same event with a different shape, and it is invisible: it costs a call, reports success, and lets the loop spend another pass on the same text.
+**And the run this came from did the opposite of what was reported.** All three chapters were rewritten and committed by it — CH-0001 and CH-0002 two lines each, CH-0003 one. The claim that no chapter changed was read off `git status` after the engine had committed, which shows a clean tree precisely when the run has done the most.
 
-It also corrupts the signal shipped this morning. `not_landed` is computed when the previous pass repaired, so a finding that comes back after a no-op repair is reported as a repair that did not land — true in words and wrong in attribution, because nothing was ever applied for it to land.
-
-**Fix.** The repair is compared with what it was given. Identical text is not a repair: the pass records `nothing-applied` with the finding count it was carrying, the call is recorded as spent, and `repaired` is false everywhere it is reported. Whether the translator should then be asked again with the refusal explained — the way a repair refused by validation already is — is a second question, and it is not answered here without measuring how often this happens.
-
-**Tasks:**
-- [ ] `_repair_translation` returns None when its answer is byte-identical to the translation it was given
-- [ ] The pass records `nothing-applied` and the findings it was carrying, so what went unapplied is on disk
-- [ ] `repaired` is false in the route's report and in the pass state when nothing changed
-- [ ] The call is still recorded as spent, since it was paid for
-- [ ] Test: a repair returning its input unchanged reports `nothing-applied` and does not report a repair
-- [ ] Test: `not_landed` is not attributed to a repair that never applied anything
-- [ ] Measure on landfall how often the repair returns its input unchanged, before deciding whether it is re-asked
-- [ ] Suite green. Reinstall, commit & push
-
-**Done when:** The pipeline reports a repair when the chapter changed, and reports a wasted call when it did not.
+**Done when:** withdrawn.
