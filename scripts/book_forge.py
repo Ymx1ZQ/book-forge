@@ -355,6 +355,21 @@ class ProviderOutcomeUnknown(BookForgeError):
         super().__init__(message)
 
 
+class ReasoningCeilingSpent(BookForgeError):
+    """The model answered, was charged for it, and left no text to read.
+
+    Measured over every translation-critic call landfall has made: 40 calls, 22 of
+    which returned `output: 0` after exactly 32000 tokens of reasoning — $1.91 of
+    the $3.36 the role has cost, for no characters. It is a third failure class,
+    and the two remedies this engine already has are both wrong for it. Re-asking
+    with what was wrong about the last answer is right for a malformed one and
+    empty here, because there is no answer to say anything about. Waiting is right
+    for a provider that went quiet and wrong here, because the provider replied and
+    billed. The remedy is to change the question — which is what the designer, the
+    audit and `_audit_proposal` each concluded before this.
+    """
+
+
 class ProviderProducedNothing(BookForgeError):
     """The call passed its clock with nothing accepted on the wire.
 
@@ -8979,10 +8994,35 @@ CRITIC_ATTEMPTS = 3
 
 def _is_silence(exc: BaseException) -> bool:
     """Whether the provider gave nothing, as opposed to something unusable."""
+    if isinstance(exc, ReasoningCeilingSpent):
+        # It answered and it billed. Waiting out a window that never opened would
+        # add four minutes to a failure that is the same every time.
+        return False
     if isinstance(exc, (ProviderProducedNothing, ProviderOutcomeUnknown)):
         return True
     text = str(exc)
     return "produced no result" in text or "no observable text" in text
+
+
+def _refuse_empty_answer(role: str, subject: str, result: dict[str, object]) -> None:
+    """Raise when a paid-for call came back with nothing written in it.
+
+    Told apart from a malformed answer by the counters the provider returns: text
+    that is empty while reasoning tokens were spent is a model that thought until
+    it had no room left to speak, and asking it again spends the same amount to be
+    told the same nothing.
+    """
+    if str(result.get("text") or "").strip():
+        return
+    tokens = result.get("tokens") if isinstance(result.get("tokens"), dict) else {}
+    reasoning = int(tokens.get("reasoning") or 0)
+    output = int(tokens.get("output") or 0)
+    if not reasoning:
+        return
+    raise ReasoningCeilingSpent(
+        f"{role} answered {subject} with {output} output token(s) after spending {reasoning} on reasoning: "
+        "the ceiling went on thinking and left no room to write"
+    )
 
 
 def _wait_before_retry(role: str, subject: str, failed_attempt: int, exc: BaseException, runner=None) -> float:
@@ -9070,25 +9110,49 @@ def _previous_pass(root: Path, book_id: str, locale: str, chapter_id: str) -> di
 def _record_pass_state(
     root: Path, book_id: str, locale: str, chapter_id: str, convergence: dict[str, object], repaired: bool, text: str
 ) -> None:
-    _write_json(
-        _pass_state_path(root, book_id, locale, chapter_id),
-        {
-            "schema": 1,
-            "chapter": chapter_id,
-            "state": convergence["state"],
-            "reason": convergence["reason"],
-            "actionable": convergence["actionable"],
-            "fingerprints": convergence["fingerprints"],
-            "repaired": bool(repaired),
-            "text_sha256": _sha256_bytes(text.encode()),
-            "verdict_inconsistent": convergence["verdict_inconsistent"],
-            "not_landed": convergence["not_landed"],
-        },
-    )
+    """What this pass leaves for the next one, and what it must not take away.
+
+    A pass whose critic never answered knows nothing about the chapter, so it
+    writes down that it did not read it and leaves the previous reading's
+    fingerprints and count where they are. Overwriting them with the empty set a
+    failed pass produces would tell the next pass that a chapter it has never
+    seen read has nothing in it — which is how `unread` came to be recorded as
+    `clean` in the first place.
+    """
+    record = {
+        "schema": 1,
+        "chapter": chapter_id,
+        "state": convergence["state"],
+        "reason": convergence["reason"],
+        "actionable": convergence["actionable"],
+        "fingerprints": convergence["fingerprints"],
+        "repaired": bool(repaired),
+        "text_sha256": _sha256_bytes(text.encode()),
+        "verdict_inconsistent": convergence["verdict_inconsistent"],
+        "not_landed": convergence["not_landed"],
+    }
+    if not convergence.get("read", True):
+        previous = _previous_pass(root, book_id, locale, chapter_id)
+        record["asks"] = int(convergence.get("asks", 0))
+        # Which failure it was, in the file that survives the run: the review
+        # artifact is only written by a pass that succeeded, so a pass that failed
+        # outright has nowhere else to say what happened to it.
+        record["unread_because"] = str(convergence.get("unread_because") or "")
+        record["actionable"] = previous.get("actionable", convergence["actionable"])
+        record["fingerprints"] = previous.get("fingerprints", convergence["fingerprints"])
+        # Whose reading those fingerprints came from, so the carry-over is legible
+        # on disk rather than looking like this pass produced them.
+        record["carried_from"] = str(previous.get("state") or "no earlier pass")
+    _write_json(_pass_state_path(root, book_id, locale, chapter_id), record)
 
 
 def _convergence(
-    previous: dict[str, object], findings: list[dict[str, object]], verdict: str, repaired_before: bool
+    previous: dict[str, object],
+    findings: list[dict[str, object]],
+    verdict: str,
+    repaired_before: bool,
+    *,
+    asks: int = 0,
 ) -> dict[str, object]:
     """What this pass learned by being compared with the one before it.
 
@@ -9104,9 +9168,20 @@ def _convergence(
     before_count = int(previous.get("actionable", -1))
     count = len(fingerprints)
     repeated = sorted(fingerprints & before)
+    # A reading that did not happen and a reading that found nothing both arrive
+    # here with an empty finding set, and they are opposite outcomes: one says the
+    # chapter is finished, the other says the pass failed. Two consecutive reviews
+    # of landfall's CH-0001 failed all three asks apiece and were recorded as
+    # `clean`, reason `nothing left to act on` — on a chapter nobody had read.
+    read = str(verdict).casefold() != "unread"
     state = "more-to-do"
     reason = f"{count} finding(s) to act on"
-    if not count:
+    if not read:
+        state = "unread"
+        reason = (
+            f"the critic was not read in {asks} ask(s)" if asks else "the critic has not been asked yet"
+        )
+    elif not count:
         state, reason = "clean", "nothing left to act on"
     elif before_count >= 0 and count >= before_count:
         state = "no-progress"
@@ -9121,11 +9196,13 @@ def _convergence(
     return {
         "state": state,
         "reason": reason,
+        "read": read,
+        "asks": asks,
         "actionable": count,
         "repeated": len(repeated),
         "new": len(fingerprints - before),
         "gone": len(before - fingerprints),
-        "not_landed": not_landed,
+        "not_landed": not_landed if read else [],
         "verdict_inconsistent": inconsistent,
         "fingerprints": sorted(fingerprints),
     }
@@ -9224,7 +9301,11 @@ def _review_translation(
     set_aside: list[dict[str, object]] = []
     verdict = "unread"
     machine_score = {"raised": len(findings), "held": len(findings), "mistaken": 0}
-    convergence = _convergence({}, findings, verdict, False)
+    # Read once, before the asks: every convergence below is measured against the
+    # last pass that actually read this chapter, and a pass that fails must not be
+    # the one that decides what the next pass compares with.
+    previous = _previous_pass(root, book_id, locale, chapter_id)
+    convergence = _convergence(previous, findings, verdict, False)
     task_id = f"TRANSCRIT-{book_id}-{chapter_id}-{locale}"
     review_path = f"books/{book_id}/translations/{locale}/reviews/{chapter_id}.json"
     plan = _load_plan(root)
@@ -9283,6 +9364,7 @@ def _review_translation(
             attempt_dir = Path(claim["capsule"]).parent
             result = runner("translation-critic", envelope, attempt_dir)
             mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            _refuse_empty_answer("translation-critic", chapter_id, result)
             value = _parse_contract_json(str(result["text"]))
             held, mistaken, machine_score = _score_machine_findings(findings, value.get("machine_findings"))
             if mistaken:
@@ -9303,7 +9385,6 @@ def _review_translation(
             findings.extend(cited)
             set_aside.extend(aside)
             verdict = str(value.get("verdict") or "repairable")
-            previous = _previous_pass(root, book_id, locale, chapter_id)
             convergence = _convergence(previous, findings, verdict, bool(previous.get("repaired")))
             if convergence["verdict_inconsistent"]:
                 print(
@@ -9340,12 +9421,23 @@ def _review_translation(
                 # a chapter without advice, and it must not be a run that stops for
                 # every chapter after it. Landfall lost two that way.
                 _set_attempt_failure(root, claim["attempt"], block=False, reason=unreadable)
-            if attempt_number == CRITIC_ATTEMPTS:
+            # An identical envelope that exhausted the ceiling exhausts it again, so
+            # the remaining asks are not spent. Two of every three calls on this
+            # failure bought nothing before this line existed.
+            spent = isinstance(exc, ReasoningCeilingSpent)
+            if spent or attempt_number == CRITIC_ATTEMPTS:
                 print(
-                    f"[translation-critic] {chapter_id} was not read, asked {CRITIC_ATTEMPTS} times: {unreadable}",
+                    f"[translation-critic] {chapter_id} was not read, asked {attempt_number} time(s): {unreadable}",
                     file=sys.stderr,
                 )
-                set_aside.append({"id": "C-unread", "severity": "note", "kind": "critic", "issue": unreadable})
+                set_aside.append({
+                    "id": "C-exhausted" if spent else "C-unread",
+                    "severity": "note",
+                    "kind": "critic",
+                    "issue": unreadable,
+                })
+                convergence = _convergence(previous, findings, "unread", False, asks=attempt_number)
+                convergence["unread_because"] = unreadable
                 break
             _wait_before_retry("translation-critic", chapter_id, attempt_number, exc, runner)
     if set_aside:

@@ -605,5 +605,172 @@ class ReadingBackWhatIsAlreadyTranslatedTests(TranslationReviewFixture):
             self.bf.review_translation(self.project, self.book, "fr", provider=ScriptedProvider([]))
 
 
+class AChapterThatWasNotReadTests(TranslationReviewFixture):
+    """Two consecutive reviews of landfall's CH-0001 failed all three asks apiece.
+    The route said so — `verdict: unread`, `converged: false`, `set_aside: 1` — and
+    the state file written beside the chapter said `clean`, reason `nothing left to
+    act on`, about a chapter nobody had read. That file is what the next pass
+    compares against and what anyone reading the repository is told."""
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {"review": False}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        config.pop("translation")
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def finding(self, index):
+        return {
+            "id": f"{index:02d}", "severity": "warning", "kind": "calque",
+            "source": f"source span {index}", "translated": f"resa numero {index}",
+            "rule": "Contro il calco", "issue": "resa parola per parola", "fix": "una resa migliore",
+        }
+
+    class Answering:
+        """Critic answers in order. A plain string is returned verbatim, which is
+        what a model that spent its whole ceiling on reasoning leaves behind."""
+
+        def __init__(self, critic_answers):
+            self.critic_answers = list(critic_answers)
+            self.calls = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            payload = envelope["payload"]
+            self.calls.append(role)
+            if role == "translation-critic":
+                answer = self.critic_answers.pop(0) if self.critic_answers else {"findings": [], "verdict": "faithful"}
+                text = answer if isinstance(answer, str) else json.dumps(answer)
+            else:
+                text = translation(GOOD_BODY + "Ancora. " * (len(self.calls) % 3))
+            return {
+                "text": text, "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                "session_id": f"ses-{len(self.calls)}", "tokens": {"input": 1, "output": 1},
+                "cost": 0.0, "latency_ms": 1, "finish": "stop",
+            }
+
+    NOTHING = "Ho riletto a lungo il capitolo e non sono arrivato a una conclusione."
+
+    def review(self, critic_answers):
+        provider = self.Answering(critic_answers)
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return report["reviewed"][0], provider
+
+    def state(self):
+        return json.loads((self.locale_root / "reviews" / "CH-0001.state.json").read_text())
+
+    def test_three_failed_asks_leave_unread_on_disk_and_the_earlier_fingerprints(self):
+        self.review([{"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}])
+        read = self.state()
+        self.assertEqual(len(read["fingerprints"]), 2)
+
+        row, provider = self.review([self.NOTHING, self.NOTHING, self.NOTHING])
+        self.assertEqual(row["verdict"], "unread")
+        self.assertEqual(provider.calls.count("translation-critic"), 3)
+
+        after = self.state()
+        self.assertEqual(after["state"], "unread", "a chapter nobody read is not a chapter that is clean")
+        self.assertEqual(after["asks"], 3)
+        self.assertIn("not read", after["reason"])
+        self.assertEqual(after["fingerprints"], read["fingerprints"], "a failed reading erases nothing")
+        self.assertEqual(after["actionable"], read["actionable"])
+
+    def test_a_genuine_zero_finding_answer_still_records_clean(self):
+        row, _ = self.review([{"findings": [], "verdict": "faithful"}])
+        self.assertEqual(row["ended"], "clean")
+        self.assertEqual(self.state()["state"], "clean")
+
+    def test_a_pass_after_a_failed_one_compares_against_the_last_reading_that_worked(self):
+        both = {"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}
+        self.review([both])
+        self.review([self.NOTHING, self.NOTHING, self.NOTHING])
+        row, _ = self.review([both])
+        self.assertEqual(row["repeated"], 2, "compared against the pass that read, not the one that failed")
+        self.assertEqual(self.state()["state"], "no-progress")
+
+    def test_a_first_pass_that_fails_records_unread_with_no_earlier_reading(self):
+        row, _ = self.review([self.NOTHING, self.NOTHING, self.NOTHING])
+        self.assertEqual(row["ended"], "unread")
+        read = self.state()
+        self.assertEqual(read["state"], "unread")
+        self.assertEqual(read["carried_from"], "no earlier pass")
+        self.assertEqual(read["fingerprints"], [])
+
+
+class WhenTheCriticSpendsItsCeilingTests(TranslationReviewFixture):
+    """40 translation-critic calls on landfall, 22 of them `output: 0` after exactly
+    32000 reasoning tokens — $1.91 of $3.36 for no characters. The engine asked
+    each one three times, because an empty answer looked to it like a malformed
+    one."""
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {"review": False}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        config.pop("translation")
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    class Exhausted:
+        """A model that reasons to its ceiling and writes nothing, which is an
+        answer the provider charges for."""
+
+        def __init__(self, reasoning=32000):
+            self.reasoning = reasoning
+            self.calls = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            payload = envelope["payload"]
+            self.calls.append(role)
+            if role == "translation-critic":
+                return {
+                    "text": "", "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                    "session_id": f"ses-{len(self.calls)}",
+                    "tokens": {"input": 15000, "output": 0, "reasoning": self.reasoning},
+                    "cost": 0.12, "latency_ms": 50, "finish": "stop",
+                }
+            return {
+                "text": translation(GOOD_BODY), "provider": "openrouter", "model": payload["model"],
+                "variant": payload["variant"], "session_id": f"ses-{len(self.calls)}",
+                "tokens": {"input": 1, "output": 1}, "cost": 0.0, "latency_ms": 1, "finish": "stop",
+            }
+
+    def test_an_answer_with_no_room_left_to_write_is_not_asked_again(self):
+        provider = self.Exhausted()
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        row = report["reviewed"][0]
+        self.assertEqual(row["verdict"], "unread")
+        self.assertEqual(
+            provider.calls.count("translation-critic"), 1,
+            "an identical envelope that exhausted the ceiling exhausts it again",
+        )
+
+    def test_it_is_told_apart_from_an_answer_that_came_back_malformed(self):
+        self.bf.review_translation(self.project, self.book, "it", provider=self.Exhausted())
+        state = json.loads((self.locale_root / "reviews" / "CH-0001.state.json").read_text())
+        self.assertEqual(state["state"], "unread")
+        self.assertEqual(state["asks"], 1)
+        self.assertIn("no room to write", state["unread_because"])
+        self.assertNotIn("no JSON object", state["unread_because"])
+
+    def test_an_empty_answer_that_did_no_reasoning_is_still_a_malformed_one(self):
+        provider = self.Exhausted(reasoning=0)
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        self.assertEqual(
+            provider.calls.count("translation-critic"), self.bf.CRITIC_ATTEMPTS,
+            "nothing on the wire is the case the retry was built for",
+        )
+
+    def test_a_spent_ceiling_is_not_silence_and_costs_no_wait(self):
+        spent = self.bf.ReasoningCeilingSpent("translation-critic answered CH-0001 with 0 output token(s)")
+        self.assertFalse(self.bf._is_silence(spent), "the provider answered and billed for it")
+        self.assertEqual(
+            self.bf._wait_before_retry("translation-critic", "CH-0001", 1, spent, self.bf.run_opencode_role),
+            0.0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3734,6 +3734,74 @@ The signals cost nothing and are already produced. A pass with no actionable fin
 
 **Measured, and it says something the entry was not built to ask.** CH-0001 stopped after three passes on `no-progress` (3 findings against the previous pass's 1), CH-0002 after two on `no-progress` (5 against 2), CH-0003 after one on `unread`. The stopping condition works: no pass ran to the cap, and no person decided when to stop.
 
-`repeated` was **0 on every chapter and every pass**. The repairs between passes are surgical — 26 words changed of 1793 on CH-0001, 33 of 2078 on CH-0002, 0 of 1666 on CH-0003 — so each pass read text that was 98.5% identical to the one before and returned a finding set disjoint from it. The hypothesis that the repair was rewriting chapters wholesale was measured and is wrong; the conclusion that replaces it is worse. **The critic's finding set is sampled, not enumerated**, so a pass with no findings does not mean a chapter with no defects, and `no-progress` reports the sampling and not the chapter. This is a defect of the reading, which this entry does not fix; it is what [A finding set that two readers agree on] is for.
+`repeated` was **0 on every chapter and every pass**. The repairs between passes are surgical — 26 words changed of 1793 on CH-0001, 33 of 2078 on CH-0002, 0 of 1666 on CH-0003 — so each pass read text that was 98.5% identical to the one before and returned a finding set disjoint from it. The hypothesis that the repair was rewriting chapters wholesale was measured and is wrong; the conclusion that replaces it is worse. **The critic's finding set is not the enumeration it is read as.** A pass with no findings does not mean a chapter with no defects, and `no-progress` reports the reading and not the chapter. This is a defect of the reading, which this entry does not fix; the cause was measured afterwards and is in [The critic's answer has room to be written].
 
 **Done when:** The pipeline says why it stopped reading, and a person never decides that it has read enough.
+
+
+## The critic's answer has room to be written 🔄
+
+**Status: 🔄 In progress — 2026-09-02**
+
+**Measured over every translation-critic call this book has ever made.** Forty calls; **twenty-two returned `output: 0`** after spending **exactly 32000 tokens on reasoning**. That is $1.91 of the $3.36 the critic has cost — 57% of the spend — for zero characters. It is not one chapter's defect: CH-0001 ten empty of twenty, CH-0003 ten of thirteen, CH-0002 two of seven.
+
+It is also not the biggest chapter that fails most, which is what was assumed before the counters were read and what they refuse: CH-0003's envelope is the **smallest** of the three at 14488 input tokens, against CH-0002's 16376. Chapter size is not the variable. The reasoning ceiling is, and every failure sits exactly on it.
+
+**What the successful calls show is the same defect, unfinished.** When the critic does answer, it answers with what reasoning left behind: 1302, 1734, 804, 574, 402, 332 output tokens. The prompt asks for up to twelve findings, each quoting a source span, a translated span and a replacement. **Twelve quoted findings do not fit in 332 tokens.** So the finding sets that looked disjoint between passes were not a critic sampling a chapter — they were a critic cut off at a different point each time, and the convergence entry above read that as the chapter's state.
+
+**This engine has met this failure three times and written the remedy down each time.** The designer's comment records 27045, 29441 and 31998 reasoning tokens against a ceiling near 32000, leaving 4955, 2559 and finally zero output. The audit's records `input 34822, reasoning 32000, output 0` five times, and the same design answering at ten chapters a time with reasoning to spare. `_audit_proposal` drops beats and imports for the same reason. The sentence beside the auditor is already the conclusion: *the question is not made easier by being asked again*. The translation critic is the only role that asks about a whole artifact in one call and, when that fails, asks the identical question again.
+
+**Both of its retries are the wrong medicine, and the run pays for three of them.** The failure surfaces as `Model output contains no JSON object`, which `_is_silence` does not match, so the critic re-asks at once carrying what was wrong with the last answer — and there is no last answer to say anything about. Had it matched, the remedy would be worse: the backoff shipped this morning would wait four minutes for a provider that answered in full and billed for it. `output: 0` on a full reasoning ceiling is a third failure class. It is deterministic on the same input, it is charged at full price, and the only thing that changes it is changing the question.
+
+**Fix, cheapest lever first.** The critic is pinned to `deepseek-v4-pro-0813` at `high`, and `high` is what buys the 32000 tokens of reasoning. Whether `medium` leaves room to write is one call to find out, and it would be built over if the structural work went first. If effort alone does not settle it, the question gets smaller the way it does everywhere else here: the chapter is read in halves, each half carrying the style, the glossary and its own machine findings, and the findings merge. What a half cannot see — a formula rendered two ways across the chapter — is what the glossary check already covers deterministically, so the split gives up something that is already covered elsewhere.
+
+**Tasks:**
+- [~] Measure `medium` against `high` on CH-0001 and CH-0003: reasoning, output, and whether the answer parses
+- [ ] Record the measurement in this entry before any code is written, since the structural half is only justified if the cheap lever fails
+- [x] A critic answer with zero output tokens is its own failure, distinguished in the message and in the review file from an answer that came back malformed
+- [x] It is never retried with the identical envelope: an unchanged question that exhausted the ceiling exhausts it again
+- [x] `_is_silence` does not claim it, so the backoff never waits out a provider that answered
+- [ ] The chapter is read in segments sized by a constant, each carrying the style, the glossary and the machine findings that fall inside it
+- [ ] Findings from the segments merge, and a fingerprint stays stable whichever segment raised it
+- [ ] Test: a critic that exhausts its ceiling on a whole chapter answers on the segments
+- [x] Test: a zero-output answer is not re-asked with the same envelope
+- [x] Test: a zero-output answer is not treated as silence and costs no wait
+- [ ] Test: findings from two segments merge without duplicating a finding that quotes across the boundary
+- [ ] Suite green. Reinstall, commit & push
+- [ ] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here
+
+**Named rather than inferred.** `ReasoningCeilingSpent` is recognised from the counters the provider returns — empty text while reasoning tokens were spent — and not from the message, which is how the case was being read as a malformed answer. An empty answer with **no** reasoning behind it is left alone: nothing on the wire is the case the existing retry was built for, and it keeps its three asks. The saving is two calls of every three on this failure, at roughly $0.12 each.
+
+**Done when:** A critic call that is paid for produces an answer, and a finding set ends because the critic ran out of findings rather than out of room.
+
+## A chapter that was not read is not a chapter that is clean 🔄
+
+**Status: 🔄 In progress — 2026-09-02**
+
+**Found by reading the artifact instead of the route's report.** Two consecutive reviews of CH-0001 failed completely: three critic asks each, every one `Model output contains no JSON object`, nothing read. The route said so exactly — `"verdict": "unread"`, `"ended": "unread"`, `"converged": false`, `"set_aside": 1`. The convergence state written to disk beside the chapter said something else:
+
+    "state": "clean",
+    "reason": "nothing left to act on",
+    "actionable": 0,
+    "fingerprints": []
+
+The route is right and the durable record is wrong. `reviews/<chapter>.state.json` is the artifact that outlives the run: it is what the next pass compares against, and it is what anyone reading the repository is told about that chapter. It says a chapter nobody could read is finished, and it gives the reason as *nothing left to act on* — which is only true in the sense that nothing was ever picked up.
+
+The cause is that `clean` is computed from the count of actionable findings, and a reading that produced no findings is indistinguishable, at that line, from a reading that found none. They are opposite outcomes: one says the chapter is done, the other says the pass failed. Collapsing them makes the failure invisible in exactly the place built to make progress visible, and a later pass reading that state computes its `new` and `gone` against an empty set it has no reason to trust.
+
+**Fix.** Convergence is not computed when the read was set aside. The state records `unread`, carries how many asks were spent, and leaves the previous pass's fingerprints in place rather than overwriting them with an empty set — a failed reading has no business erasing what the last successful one knew.
+
+**Tasks:**
+- [x] A pass whose critic was set aside records `state: "unread"` with the number of asks, and never `clean`
+- [x] Its reason names the failure rather than the empty count
+- [x] The previous pass's fingerprints survive a failed reading instead of being overwritten by an empty set
+- [x] `clean` requires a reading that happened: an answer parsed, with zero actionable findings in it
+- [x] Test: three failed asks leave `unread` on disk and the earlier fingerprints intact
+- [x] Test: a genuine zero-finding answer still records `clean`
+- [x] Test: a pass after a failed one compares against the last reading that succeeded
+- [x] Suite green: 658 passed, 354 subtests (era 650). Reinstall, commit & push
+- [~] Re-read landfall's three state files and confirm none of them claims a reading that did not happen
+
+**Two came out of building it that were not in the plan.** `unread_because` is written into the state file, because the review artifact beside it is only produced by a pass that succeeded — a pass that failed outright had nowhere to record which of the two failures it was. And a pass that fails with no earlier reading behind it records `carried_from: "no earlier pass"` rather than pretending to carry something, so an empty fingerprint list is legible as never-read rather than as read-and-empty.
+
+**Done when:** The record beside a chapter distinguishes a chapter with no defects from a chapter nobody managed to read.
