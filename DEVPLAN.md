@@ -3775,7 +3775,9 @@ It is also not the biggest chapter that fails most, which is what was assumed be
 - [x] ~~Test: a critic that exhausts its ceiling on a whole chapter answers on the segments~~ — **not built**; the arms are the measurement that would have justified it, and they refuse
 - [x] ~~Test: findings from two segments merge without duplicating a finding that quotes across the boundary~~ — **not built**
 - [x] Suite green: 661 passed, 354 subtests (era 658). Reinstall, commit & push
-- [~] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here
+- [x] Re-run the three chapters and report the empty-call rate against the 22-of-40 measured here — **it did not improve, and four calls cannot say whether that means anything.** Two of four were empty against the baseline's twenty-two of forty: 50% against 55%. CH-0003, the chapter arm B answered four times out of four, answered here too at 28602 reasoning and 560 output. CH-0001 and CH-0002 each spent the ceiling. The arms' result is neither confirmed nor contradicted by a sample this size, and the production capsule differs from the arms' in carrying the machine findings, which is the next thing to vary if this is pursued.
+
+**What did change is not a rate.** Each failure cost one call instead of three: two failures, four calls not made, $0.15 not spent. The message names the cause — `0 output token(s) after spending 32000 on reasoning` — instead of `Model output contains no JSON object`, which is what sent this investigation down the formatting path to begin with.
 
 **`medium` measured, and it settles less than it looks like it does.** Four calls, the pin moved to `deepseek-v4-pro-0813` at `medium` and the runtime resynced:
 
@@ -3844,8 +3846,57 @@ The cause is that `clean` is computed from the count of actionable findings, and
 - [x] Test: a genuine zero-finding answer still records `clean`
 - [x] Test: a pass after a failed one compares against the last reading that succeeded
 - [x] Suite green: 658 passed, 354 subtests (era 650). Reinstall, commit & push
-- [~] Re-read landfall's three state files and confirm none of them claims a reading that did not happen
+- [x] Re-read landfall's three state files and confirm none of them claims a reading that did not happen — **verified on the real files.** CH-0001 and CH-0002 record `unread`, `asks: 1`, reason `the critic was not read in 1 ask(s)`, and carry 2 and 5 fingerprints from the last pass that read them. Before this change both would have recorded `clean`, reason `nothing left to act on`, with an empty fingerprint list. CH-0003 records `no-progress` from a reading that happened.
 
 **Two came out of building it that were not in the plan.** `unread_because` is written into the state file, because the review artifact beside it is only produced by a pass that succeeded — a pass that failed outright had nowhere to record which of the two failures it was. And a pass that fails with no earlier reading behind it records `carried_from: "no earlier pass"` rather than pretending to carry something, so an empty fingerprint list is legible as never-read rather than as read-and-empty.
 
 **Done when:** The record beside a chapter distinguishes a chapter with no defects from a chapter nobody managed to read.
+
+
+## A finding has to quote the text it is about ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-02, not started**
+
+**Found in the verification run of the entry above, by reading the findings against the chapter.** CH-0003's critic returned three findings. The first quotes, as the translation delivered, `La pratica era in piedi: *misread*, misurato da strumento, denunciato all'ora ambrata.` That sentence is not in the chapter. What is in the chapter is `La pratica recitava: …` — which is the finding's own proposed `fix`, verbatim. The critic reported a defect that was not there and proposed as its cure the text already standing.
+
+The prompt is explicit that a finding quoting nothing is discarded unread, and `_cited_findings` enforces it — but only against an empty field. A quote that is populated and wrong passes, becomes actionable, and is carried into a repair call. The engine's own boundary principle is the rule being missed: what a model returns that the engine cannot use is set aside and recorded. A span the engine can look for and not find is exactly that, and it is checkable with `in`, at no cost and with no model.
+
+**Fix.** A finding whose `translated` span does not occur in the translation is set aside with the reason, alongside the ones that quote nothing. The same for `source` against the source text. Neither reaches the repair, and both are recorded beside the chapter where the unapplied findings already go.
+
+**One thing to get right rather than fast.** The comparison has to tolerate what a quote legitimately loses — surrounding whitespace, a trailing ellipsis, the newlines a paragraph carries — or a true finding gets thrown away, which is worse than the false one that prompted this. The glossary matcher was measured wrong seven times out of twelve for exactly that kind of over-strictness, and the same discipline applies: measure the rejections on landfall's real findings before the check becomes a gate.
+
+**Tasks:**
+- [ ] A finding whose `translated` span is absent from the translation is set aside, with the span and the reason
+- [ ] The same for `source` against the source chapter
+- [ ] The comparison normalises whitespace and tolerates a truncating ellipsis, and does nothing cleverer than that
+- [ ] Set-aside findings from this cause are counted separately in the review file, so the rate is visible rather than inferred
+- [ ] Test: a finding quoting a sentence not in the chapter never reaches the repair
+- [ ] Test: a finding quoting the chapter with different surrounding whitespace still stands
+- [ ] Measured on landfall's existing review artifacts: how many recorded findings would this have refused, and were any of them true
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A finding the engine cannot locate in the text is not a finding the repair is asked to act on.
+
+## A repair that changes nothing is not a repair ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-02, not started**
+
+**Found in the same run, by comparing the staged output with the file it replaced.** CH-0003's repair call was made, its answer passed validation, it was staged, promoted, and reported as `repaired: true` in the route's output and in the pass state. Its staged chapter is byte-identical to the chapter it was given — `9cd6d3e2ac41d160` on both sides, zero lines of difference.
+
+The convergence work already has the state this belongs in. `nothing-applied` exists precisely because a pass whose repair changed nothing would have the next pass read identical text and ask an identical question, and it is reached only when `_repair_translation` returns `None` — a repair that refused. A repair that answers and changes nothing is the same event with a different shape, and it is invisible: it costs a call, reports success, and lets the loop spend another pass on the same text.
+
+It also corrupts the signal shipped this morning. `not_landed` is computed when the previous pass repaired, so a finding that comes back after a no-op repair is reported as a repair that did not land — true in words and wrong in attribution, because nothing was ever applied for it to land.
+
+**Fix.** The repair is compared with what it was given. Identical text is not a repair: the pass records `nothing-applied` with the finding count it was carrying, the call is recorded as spent, and `repaired` is false everywhere it is reported. Whether the translator should then be asked again with the refusal explained — the way a repair refused by validation already is — is a second question, and it is not answered here without measuring how often this happens.
+
+**Tasks:**
+- [ ] `_repair_translation` returns None when its answer is byte-identical to the translation it was given
+- [ ] The pass records `nothing-applied` and the findings it was carrying, so what went unapplied is on disk
+- [ ] `repaired` is false in the route's report and in the pass state when nothing changed
+- [ ] The call is still recorded as spent, since it was paid for
+- [ ] Test: a repair returning its input unchanged reports `nothing-applied` and does not report a repair
+- [ ] Test: `not_landed` is not attributed to a repair that never applied anything
+- [ ] Measure on landfall how often the repair returns its input unchanged, before deciding whether it is re-asked
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** The pipeline reports a repair when the chapter changed, and reports a wasted call when it did not.
