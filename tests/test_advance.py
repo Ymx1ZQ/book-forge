@@ -381,3 +381,26 @@ class BlockedAuditStageTests(unittest.TestCase):
 
     def test_a_missing_verdict_keeps_the_stage_due(self):
         self.assertTrue(self.bf._advance_needs_design(self.project, self.book))
+
+
+class ALeaseOutlivesTheCallItProtectsTests(unittest.TestCase):
+    """`Only a running attempt can be marked accepted` appeared three times in one
+    night. The lease was 300 seconds and the call timeout 900, so a call could run
+    three times longer than the claim protecting it. Measured over 294 calls: the
+    translation critic exceeded the lease on 46 of 51, the reviser on 14 of 52, the
+    writer on 9 of 18."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_a_call_that_runs_to_its_own_limit_never_outlives_its_claim(self):
+        self.assertGreater(
+            self.bf.LEASE_SECONDS, self.bf.OPENCODE_CALL_TIMEOUT,
+            "a lease shorter than the timeout declares healthy work abandoned by arithmetic",
+        )
+
+    def test_the_lease_is_derived_and_not_typed_beside_the_timeout(self):
+        """Two independent numbers drift apart; this pair did, by a factor of three."""
+        self.assertAlmostEqual(
+            self.bf.LEASE_SECONDS / self.bf.OPENCODE_CALL_TIMEOUT, 4 / 3, places=6
+        )

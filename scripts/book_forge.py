@@ -1746,7 +1746,26 @@ def _task_of(plan: dict[str, object], attempt_ids: list[str]) -> list[str]:
     return [index[value] for value in attempt_ids if index.get(value)]
 
 
-LEASE_SECONDS = 300.0
+# A lease is not a timeout, and 300 seconds was being used as one. It exists so a
+# claim abandoned by a dead process can be reclaimed, which means it has to outlive
+# the longest a *live* call can legitimately take — and that length is not a matter
+# of opinion, it is the point at which this engine itself gives up.
+#
+# Measured over 294 calls on one book, against the 300s this used to be:
+#   translation-critic  51 calls, median 433s, max 674s — 46 over the lease
+#   reviser             52 calls, median 229s, max 609s — 14 over
+#   writer              18 calls, median 309s, max 900s —  9 over
+#   canon-auditor       24 calls, median 176s, max 900s —  5 over
+#   technical-editor    28 calls, median 251s, max 308s —  4 over
+# Half the roles ran routinely with a lapsed claim, and whether that became a
+# failure was decided by whether anything called recovery inside the window. It
+# surfaced as `Only a running attempt can be marked accepted`, three times in one
+# night, looking like an intermittent defect of one role.
+#
+# The cost of the other direction, stated: a genuinely dead process holds its claim
+# for a third longer before anyone can reclaim it. That is the right side to err on
+# — reclaiming early breaks work that is still running.
+LEASE_SECONDS = OPENCODE_CALL_TIMEOUT * 4 / 3
 
 
 def claim_task(

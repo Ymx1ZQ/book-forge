@@ -4059,9 +4059,9 @@ But the engine already knows what happened. The answer came back, it was read, a
 **Done when:** A person is asked only about paying twice, never about an answer the engine has already read.
 
 
-## The reviser is asked for a list it can finish 🔄
+## The reviser is asked for a list it can finish ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-03**
 
 **Measured on CH-0008, the first stage this run could not retry its way out of.** Three attempts, all refused by the same gate: `Revision must disposition every blocking and warning finding exactly once; missing S-glm-5-3-flash-02, -06, -07`. The reviser was handed **45 findings** and answered with 6155 output tokens, missing three of the ones it had to cover.
 
@@ -4091,6 +4091,42 @@ And the gate is right to be strict — a disposition silently skipped is a findi
 - [x] Suite green: 701 passed, 405 subtests (era 699). Reinstall, commit & push
 - [~] CH-0008 closes
 
+**A prediction made here and disproved within the hour.** This entry said the reviser could not finish a list of that size. CH-0008 was restarted carrying the same forty-five findings — its style tasks had already succeeded, so the new bound did not reach it — and the reviser finished it on the next attempt, with no retry at all. So the failure was variance, the same signature as the technical editor's, and "cannot finish" was too strong: it finishes, not always. What survives is the measurement that motivated the bound — fifteen of the twenty-one mandatory findings coming from a pass that is advisory by design — which is an imbalance worth removing whether or not the reviser sometimes copes with it.
+
 **One condition written into the test rather than left to judgement.** Four advisors at this bound must stay *more* numerous than one gating role and *fewer* than the twenty-one that broke the reviser. A chorus that says less than a single gate is not a chorus, and that is as easy to get wrong from this direction as the overflow was from the other.
 
 **Done when:** The reviser's list is the size the engine chose, not the size four advisors happened to produce.
+
+
+## A lease outlives the call it protects 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**`Only a running attempt can be marked accepted` appeared three times tonight and was twice left undiagnosed for want of data.** The data is now in: **the lease is shorter than the calls it covers.** `LEASE_SECONDS = 300.0`, and `OPENCODE_CALL_TIMEOUT = 900.0` — so a call may legitimately run three times longer than the claim protecting it, and when it does, the claim lapses while the work is still healthy. The engine then takes its own answer and finds the attempt no longer running.
+
+**Measured over 294 calls this project has made:**
+
+| role | calls | median | max | over the 300s lease |
+|---|---|---|---|---|
+| translation-critic | 51 | 433s | 674s | **46** |
+| reviser | 52 | 229s | 609s | 14 |
+| writer | 18 | 309s | 900s | 9 |
+| technical-editor | 28 | 251s | 308s | 4 |
+| canon-auditor | 24 | 176s | 900s | 5 |
+| translator | 32 | 109s | 447s | 5 |
+
+The critic exceeds its lease on **46 calls out of 51**. Half this engine's roles routinely run with a lapsed claim, and whether that becomes a failure is decided by whether anything happens to call recovery inside the window — which is why it surfaced as an intermittent error on one role rather than as the systematic condition it is.
+
+**The lease is not a timeout and was being used as one.** It exists so a claim abandoned by a dead process can be reclaimed, and for that it has to be longer than the longest a live call can legitimately take. That length is not a matter of opinion: it is `OPENCODE_CALL_TIMEOUT`, the point at which the engine itself gives up. A lease shorter than that declares healthy work abandoned by arithmetic.
+
+**Fix.** The lease is derived from the call timeout with headroom rather than typed as an independent number, so the two cannot drift apart again. The cost is stated plainly: a genuinely dead process holds its claim for longer before it can be reclaimed. That is the right side to err on — reclaiming early breaks work that is running, and tonight it did, three times.
+
+**Tasks:**
+- [x] `LEASE_SECONDS` is derived from `OPENCODE_CALL_TIMEOUT`, with the headroom stated beside it
+- [x] Test: the lease is longer than the call timeout, so a call that runs to its own limit never outlives its claim
+- [x] Test: an abandoned claim is still reclaimable once the lease has passed — unchanged and still covered by the recovery tests, which set their own lease rather than reading the constant
+- [x] The measurement above is recorded beside the constant, so the next person who shortens it knows what it costs
+- [x] Suite green: 703 passed, 405 subtests (era 701). Reinstall, commit & push
+- [~] `advance` runs a chapter without the error appearing
+
+**Done when:** A claim outlives the work it covers, and only a dead process loses it.
