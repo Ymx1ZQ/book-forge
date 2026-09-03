@@ -4158,6 +4158,10 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 
 **So the input is what is left**, and the correlation now has nothing else standing beside it: not the answer bound, which is in place; not the effort, which was just tried; not the text, which is flat while the context doubles.
 
-**What the next session should measure first:** across the technical editor's findings on chapters one to nine, how many cite an imported canon block at all, and which blocks. If the answer is a small and stable set, the fix is to send those and not the closure.
+**That measurement was made, and it rules out the obvious fix.** Across the 34 technical-editor findings this book has produced: **19 of them — 55% — cite no canon block at all**, and the 15 that do cite **17 distinct blocks**, none more than twice. The cited set is not small and stable, it is as wide and thin as the canon itself, so "send the blocks that get cited" cannot work: there is no predicting which one the next finding needs.
+
+**What it does support is splitting the question rather than trimming the input,** which is the move this engine already makes everywhere else. More than half of what this role finds needs no canon at all — contract, state and consequence checks against the prose in front of it. Those could be asked without the context that is doubling, and the canon-dependent half asked separately with it. Two calls whose sizes do not follow the book's length, in place of one that does.
+
+**Still not built, and deliberately.** That is a change to what a gating role is asked, it doubles its calls, and it needs its own measurement of whether the split halves find what the whole one found. It is a session's work with a clear head, not a patch at four in the morning — and the measurement above is what makes it designable rather than a guess.
 
 **Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got.
