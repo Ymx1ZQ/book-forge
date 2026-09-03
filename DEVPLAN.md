@@ -4166,7 +4166,21 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 
 **Still not built, and deliberately.** That is a change to what a gating role is asked, it doubles its calls, and it needs its own measurement of whether the split halves find what the whole one found. It is a session's work with a clear head, not a patch at four in the morning — and the measurement above is what makes it designable rather than a guess.
 
-**Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got.
+**A larger sample does not support the correlation this entry was written on, and it is the fifth prediction of that session the data refused.** Across 32 technical-editor calls on twelve chapters:
+
+| chapter | calls | empty | context |
+|---|---|---|---|
+| CH-0006 | 1 | 0 | 33923 |
+| CH-0009 | 8 | **5** | 35126 |
+| CH-0010 | 2 | 1 | **48037** |
+| CH-0011 | 2 | 0 | 39625 |
+| CH-0012 | 2 | 0 | 33440 |
+
+**CH-0010 carries the largest context of the book — 48037 characters — and answered in two calls**, while CH-0009 at 35126 came back empty five times in eight. The overall rate is 13 empty of 32, about 40%, and it is flat across chapter depth rather than climbing. So CH-0009 was an unlucky cluster on a role that fails four times in ten wherever it is asked, and the context growth, which is real, is not what decides.
+
+**What that leaves.** The growth is still worth removing on its own terms — an input that follows the book's length is the shape this engine slices everywhere else, and it will matter at forty chapters even if it does not at twenty-six. But it is no longer a fix for the failure rate, and building it expecting one would be building the wrong thing. The failure looks like what the arms found for the translation critic: a role sitting near enough to its ceiling that variance decides, where the remedy that works is the bounded re-ask already shipped.
+
+**Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got — undertaken as the design cleanup it is, and not as a cure for a rate it does not explain.
 
 
 ## A role that answers on the second ask is given a second ask 🔄
