@@ -4233,3 +4233,20 @@ So the budget is right about the half it counts and blind to the half it does no
 - [~] CH-0013 closes
 
 **Done when:** The reviser is given room for the answer it was asked for, not for half of it.
+
+
+## What the engine calls an output budget never reaches the provider ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-03, measured**
+
+**Found while diagnosing a credit wall, and it reframes most of what this session chased.** Every attempt after CH-0015 came back `HTTP 402: You requested up to 32000 tokens, but can only afford 25352`. The decisive row is `ATT-0390`: the **cold reader**, at `variant=low`, whose envelope declares `max_output_tokens: 2500` — and the request still asks the provider for **32000**.
+
+So `max_output_tokens` is a number the engine writes into the payload and validates against `ROLE_BUDGETS`. It is read by the model as an instruction. **It is not a limit sent to the provider.** `run_opencode_role` invokes `opencode --pure debug agent <role>` and hands the envelope over stdin; what `max_tokens` reaches OpenRouter is OpenCode's business, and it is 32000 for every role at every effort.
+
+**That is very likely the ceiling this session spent the night on.** The translation critic, the technical editor, the designer and the canon auditor all failed the same way — `output: 0` after exactly 32000 reasoning tokens — and lowering `reasoningEffort` never helped, on any of them. If the model is handed 32000 tokens to spend and no instruction it must obey, spending them on reasoning and having none left to write is not a mystery. Every remedy this session built works *around* that: bounding the answer asked for, re-asking when the dice fall badly, sizing the reviser's own budget. None of them could take the 32000 away, because the engine never had it to give.
+
+**Probed once, and the obvious option is not the one.** `maxTokens: 3000` added to a model's `options` in the generated `opencode.json` changed nothing: the next attempts still requested 32000. The probe was free — a 402 names the amount requested — and the generated file was restored from the generator afterwards. Guessing further option names costs one probe each and is exactly the habit that produced five disproved predictions this session.
+
+**What to establish before building anything:** whether OpenCode accepts a per-model or per-agent cap on the completion at all, and under what key. That is a question for its configuration surface, not for another guess. If it does, `sync_runtime` should write each role's declared budget there, and `max_output_tokens` stops being advice the model may ignore. If it does not, the entry closes with that recorded, and the remedies already shipped are the whole of what is available.
+
+**Done when:** A role's declared output budget is the budget the provider enforces, or the plan records that it cannot be.
