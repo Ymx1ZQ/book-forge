@@ -4154,6 +4154,10 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 
 **Why this is proposed rather than done.** The fix is not a constant — it is deciding what the technical editor can be asked to check without reading all the canon a chapter imports, and that is a judgement about what the role is for, not an arithmetic one. `_audit_proposal`'s precedent is to drop what another check already owns, and the equivalent here has to be chosen by reading what the technical editor's findings actually cite. Picking it at four in the morning, on the strength of a correlation, is how the last three guesses tonight got disproved.
 
+**The cheap lever was tried and it does not work here.** The technical editor was pinned to `medium` on this project — the same operating point that let the translation critic read CH-0003 for the first time — and CH-0009 came back `reasoning 31998, output 0` at the first ask. One call, so it settles nothing about the role in general; it does settle that this is not the way past this chapter. The pin was reverted, because a change with no evidence behind it should not sit in a project's config.
+
+**So the input is what is left**, and the correlation now has nothing else standing beside it: not the answer bound, which is in place; not the effort, which was just tried; not the text, which is flat while the context doubles.
+
 **What the next session should measure first:** across the technical editor's findings on chapters one to nine, how many cite an imported canon block at all, and which blocks. If the answer is a small and stable set, the fix is to send those and not the closure.
 
 **Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got.
