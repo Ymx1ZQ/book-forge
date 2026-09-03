@@ -4280,3 +4280,35 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 **One thing came out of building it that the plan did not say.** The last refused attempt was settled with `block=True`, which stops the run — so setting the chapter aside was not enough on its own: the chapter behind it still could not dispatch. It settles with `block=False` now. The lesson is the one from three hours earlier in another form: deciding to carry on is not the same as leaving the run in a state that can.
 
 **Done when:** A locale rule stops a chapter, never a book.
+
+
+## The catalogue can hold a batch model, and the critic uses one 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**Priced against the critic's own measured profile, not against a list price.** The translation critic is 53 calls and **$4.50 of this project's $7.94** — 57% of the spend for 13% of the volume. What makes it expensive is the shape of its work: 14686 tokens of input, **27510 of reasoning** and 518 of output per call, and reasoning bills at the completion rate. So for this role the completion price is nearly the whole cost.
+
+| model | per call | over 17 chapters |
+|---|---|---|
+| deepseek-v4-flash | $0.006 | $0.10 |
+| gemini-3.1-flash-lite | $0.046 | $0.78 |
+| **gemini-3.8-flash:batch** | **$0.058** | **$0.99** |
+| deepseek-v4-pro *(current)* | $0.110 | $1.87 |
+| gemini-3.8-flash | $0.116 | $1.97 |
+| gemini-3.5-flash | $0.274 | $4.66 |
+
+The batch variant is the same model at half price, and this role already takes seven minutes a call — batch latency is not a cost it can notice. Chosen over the flash models beneath it because the critic is the one role whose job is adversarial reading, and a cheaper reader that misses the calque costs more than it saves.
+
+**What is honest to say about quality: nothing measured.** Prices and token counts here are measured; which model *catches* more as a critic is not, and a model's reputation is not a measurement. The experiment that would settle it is the one the three arms used — the same chapters read by two candidates, counting the real findings one finds and the other misses.
+
+**The catalogue is the gate.** `_role_pin` refuses a model it does not configure, deliberately, so this is not a config line but a catalogue entry: provider pin, effort ladder, and whatever the model actually accepts.
+
+**Tasks:**
+- [ ] `google/gemini-3.8-flash:batch` joins the catalogue with its provider pin and effort ladder
+- [ ] Its ladder matches what the model reports it supports, rather than being copied from a sibling
+- [ ] Test: the new model resolves as a critic pin and is refused as the translator's own model like any other
+- [ ] Suite green. Reinstall, commit & push
+- [ ] Pinned on landfall once the running translation finishes, so the change does not land mid-chapter
+- [ ] Measured after a few chapters: cost per critic call against the $0.110 it is replacing
+
+**Done when:** The critic reads at half the price of the model it replaced, and the catalogue can hold a batch variant.

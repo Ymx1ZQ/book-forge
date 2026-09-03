@@ -260,5 +260,47 @@ class TheReviserFollowsTheWriterTests(WriterPinFixture):
             self.assertEqual(self.bf._role_pin(config, role), (MODEL, self.bf.ROLE_SPECS[role][1]))
 
 
+
+class TheCatalogueHoldsABatchModelTests(WriterPinFixture):
+    """The translation critic is 53 calls and $4.50 of this project's $7.94 — 57% of
+    the spend for 13% of the volume — because it reasons 27510 tokens per call and
+    reasoning bills at the completion rate. The batch variant is the same model at
+    half price, and a role that already takes seven minutes cannot notice the
+    latency."""
+
+    BATCH = "openrouter/google/gemini-3.8-flash:batch"
+
+    def test_the_batch_variant_is_a_model_the_catalogue_configures(self):
+        self.assertIn(self.BATCH, self.bf.CHORUS_MODEL_CONFIGS)
+        cfg = self.bf.CHORUS_MODEL_CONFIGS[self.BATCH]
+        self.assertIn("provider", cfg, "a catalogue model carries its provider pin")
+        self.assertTrue(cfg["variants"], "and an effort ladder")
+
+    def test_it_resolves_as_a_critic_pin(self):
+        config = {"roles": {
+            "translator": {"model": GLM, "variant": "high"},
+            "translation-critic": {"model": self.BATCH, "variant": "high"},
+        }}
+        self.assertEqual(self.bf._role_pin(config, "translation-critic"), (self.BATCH, "high"))
+
+    def test_it_is_refused_as_the_critic_when_it_is_also_the_translator(self):
+        """A model rereading its own rendering approves its own blind spots, and
+        that holds for a batch variant like any other."""
+        config = {"roles": {
+            "translator": {"model": self.BATCH},
+            "translation-critic": {"model": self.BATCH},
+        }}
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._role_pin(config, "translation-critic")
+
+    def test_a_variant_the_ladder_does_not_offer_is_still_refused(self):
+        config = {"roles": {
+            "translator": {"model": GLM, "variant": "high"},
+            "translation-critic": {"model": self.BATCH, "variant": "max"},
+        }}
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._role_pin(config, "translation-critic")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -169,6 +169,17 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high"},
     },
+    # The batch variant: the same model at half the price, for a role whose call
+    # already takes minutes and cannot notice the added latency. Priced against the
+    # translation critic's measured profile — 14686 input, 27510 reasoning, 518
+    # output per call, with reasoning billed at the completion rate — it costs
+    # $0.058 a call against the $0.110 of the model it replaces. The ladder is what
+    # the model reports it supports (`reasoning_effort`), not a copy of a sibling's.
+    "openrouter/google/gemini-3.8-flash:batch": {
+        "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high"},
+    },
     "openrouter/openai/gpt-5.6-luna": {
         "provider": {"order": ["openai"], "only": ["openai"], "allow_fallbacks": False},
         "default_effort": "high",
