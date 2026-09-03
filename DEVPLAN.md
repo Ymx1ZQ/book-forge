@@ -4307,7 +4307,7 @@ The batch variant is the same model at half price, and this role already takes s
 - [ ] `google/gemini-3.8-flash:batch` joins the catalogue with its provider pin and effort ladder
 - [ ] Its ladder matches what the model reports it supports, rather than being copied from a sibling
 - [ ] Test: the new model resolves as a critic pin and is refused as the translator's own model like any other
-- [ ] Suite green. Reinstall, commit & push
+- [x] Suite green: 720 passed, 405 subtests (era 716). Reinstall, commit & push
 - [ ] Pinned on landfall once the running translation finishes, so the change does not land mid-chapter
 - [ ] Measured after a few chapters: cost per critic call against the $0.110 it is replacing
 
