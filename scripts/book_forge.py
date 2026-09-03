@@ -8079,7 +8079,7 @@ def recheck_style_closed_chapter(
         imports=list(contract.get("imports", [])),
         state={},
         tools=[],
-        max_output_tokens=min(8000, max(1000, int(contract["target_words"]) * 2)),
+        max_output_tokens=_reviser_budget(contract, style_findings),
     )
     claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
     attempt_dir = Path(claim["capsule"]).parent
@@ -8450,6 +8450,30 @@ STYLE_MAX_FINDINGS = 4
 REVIEW_CEILING_REASKS = 3
 
 
+# What one disposition costs the reviser: the finding id, the action taken, the
+# evidence for it, what was lost and what it supersedes. Measured on CH-0013, whose
+# three answers were cut at 5251, 5771 and 6069 output tokens against a budget of
+# 4000: about 2700 tokens of rewritten chapter and the rest bookkeeping, over some
+# twenty findings.
+REVISER_TOKENS_PER_DISPOSITION = 160
+
+
+def _reviser_budget(contract: dict[str, object], findings: list[object]) -> int:
+    """Room for the chapter *and* the dispositions it is being asked to write.
+
+    The budget used to be `target_words * 2`, which sizes the answer as if it were
+    only the rewritten prose. It is the prose plus one disposition per finding, and
+    a budget blind to that half produces a truncation the gate then refuses — three
+    paid calls on CH-0013 that could not have fitted.
+
+    Still capped by the role's declared ceiling: a budget that grows without limit
+    is how a role stops answering at all, which this engine has measured on four
+    roles now.
+    """
+    prose = max(1000, int(contract.get("target_words") or 0) * 2)
+    return min(ROLE_BUDGETS["reviser"][1], prose + len(findings) * REVISER_TOKENS_PER_DISPOSITION)
+
+
 REPETITION_MIN_WORDS = 4
 REPETITION_STOPWORDS = frozenset(
     "the a an and or but of to in on at for with from by as is was were be been it its "
@@ -8728,7 +8752,7 @@ def review_and_close_chapter(
         imports=list(contract.get("imports", [])),
         state=_read_json(root / "books" / book_id / "state.yaml"),
         tools=[],
-        max_output_tokens=min(8000, max(1000, int(contract["target_words"]) * 2)),
+        max_output_tokens=_reviser_budget(contract, findings),
     )
     claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
     attempt_dir = Path(claim["capsule"]).parent

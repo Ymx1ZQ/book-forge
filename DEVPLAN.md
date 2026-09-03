@@ -4208,3 +4208,28 @@ The stage gives the whole pass three attempts, and each of them costs a fresh ca
 **Writing it put back a defect fixed three hours earlier, and the test caught it in one run.** The re-ask raises from inside the executor, which is *before* the block that settles the claims — so a reviewer empty on every ask left both claims at `running`, exactly the state that becomes `outcome_unknown` and stops the run for a person. The claims are now held from the moment they are taken rather than from the moment the answers come back. The lesson is not about this defect: a fix that moves where an exception is raised moves what is left unsettled behind it, and the two have to be looked at together.
 
 **Done when:** A failure that a second ask fixes costs a second ask, not a pass.
+
+
+## The reviser's budget counts the dispositions as well as the prose 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**Measured on CH-0013, which stopped the run three times with `Expecting ',' delimiter: line 1 column 17602`.** The reviser's output budget is `min(8000, max(1000, target_words * 2))`, so a 2000-word chapter is given 4000 tokens. Its three answers came back at 5251, 5771 and 6069 output tokens, cut mid-string every time.
+
+The formula sizes the answer as if it were the rewritten prose. It is not: it is the prose **plus one disposition per finding** — each carrying the finding id, the action, the evidence, what was lost and what it supersedes. On this chapter that is around twenty dispositions beside a 2000-word chapter, and the measured answers land where prose and dispositions together land: about 2700 tokens of chapter and roughly 3000 of bookkeeping.
+
+So the budget is right about the half it counts and blind to the half it does not, and the failure it produces is a truncation the gate then refuses — three paid calls that could not have fitted.
+
+**Fix.** Size it from both: the chapter as it does today, plus an allowance per finding it is being asked to disposition, still capped by the role's declared ceiling. The cap stays because a budget that grows without limit is how a role stops answering at all, which this engine has now measured four times.
+
+**Tasks:**
+- [x] The reviser's `max_output_tokens` counts the findings it must disposition, not only the chapter's target words
+- [x] Both call sites, since the style-only pass has the same shape and the same blind spot
+- [x] The allowance per finding is written beside the number that justifies it
+- [x] Still capped by `ROLE_BUDGETS["reviser"]`, so it cannot grow without limit
+- [x] Test: a chapter with many findings is given more room than the same chapter with few
+- [x] Test: the budget never exceeds the role's declared ceiling
+- [x] Suite green: 715 passed, 405 subtests (era 711). Reinstall, commit & push
+- [~] CH-0013 closes
+
+**Done when:** The reviser is given room for the answer it was asked for, not for half of it.

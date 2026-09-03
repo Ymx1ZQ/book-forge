@@ -622,5 +622,34 @@ class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
         self.assertNotIn("REVIEW_CEILING_REASKS", critic)
 
 
+
+class TheReviserIsGivenRoomForTheAnswerAskedForTests(unittest.TestCase):
+    """CH-0013 stopped the run three times on `Expecting ',' delimiter` at column
+    17602. The budget was `target_words * 2` — 4000 tokens for a 2000-word chapter
+    — and the three answers came back at 5251, 5771 and 6069, cut mid-string. The
+    formula counted the rewritten prose and not the disposition the reviser owes
+    for every finding."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_more_findings_buy_more_room_on_the_same_chapter(self):
+        contract = {"target_words": 2000}
+        few = self.bf._reviser_budget(contract, [1] * 2)
+        many = self.bf._reviser_budget(contract, [1] * 20)
+        self.assertGreater(many, few)
+        self.assertGreaterEqual(many, 6069, "the measured answers must fit")
+
+    def test_the_budget_never_exceeds_the_role_s_declared_ceiling(self):
+        ceiling = self.bf.ROLE_BUDGETS["reviser"][1]
+        self.assertEqual(self.bf._reviser_budget({"target_words": 9000}, [1] * 500), ceiling)
+
+    def test_a_chapter_with_no_findings_is_sized_as_before(self):
+        self.assertEqual(self.bf._reviser_budget({"target_words": 2000}, []), 4000)
+
+    def test_a_contract_without_a_target_still_gets_a_floor(self):
+        self.assertGreaterEqual(self.bf._reviser_budget({}, []), 1000)
+
+
 if __name__ == "__main__":
     unittest.main()
