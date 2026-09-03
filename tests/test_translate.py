@@ -93,7 +93,7 @@ class TranslateTests(unittest.TestCase):
         self.assertEqual(state["completed_chapters"], ["CH-0001", "CH-0002"])
         self.assertEqual(state["status"], "current")
 
-    def test_flagged_output_gets_one_repair_only(self):
+    def test_flagged_output_gets_the_repairs_the_engine_allows(self):
         bad = {"translated_markdown": "# Capitolo\n\nManca il numero.", "glossary_updates": [], "boundary": ""}
         provider = TranslationProvider([bad, translated(1, 1)])
         result = self.bf.translate_next(self.project, self.book, "it-IT", provider=provider)
@@ -110,10 +110,33 @@ class TranslateTests(unittest.TestCase):
         (second / f"books/{book}/manuscript/chapters/CH-0001.md").write_text("# Chapter 1\n\nMara sees number 42 and leaves.")
         self.bf.add_translation(second, book, "it-IT")
         _decide_locale_style(self.bf, second, book, "it-IT")
-        broken = TranslationProvider([bad, bad])
-        with self.assertRaises(self.bf.BookForgeError):
+        broken = TranslationProvider([bad] * self.bf.TRANSLATION_ATTEMPTS)
+        with self.assertRaises(self.bf.TranslationRefused):
             self.bf.translate_next(second, book, "it-IT", provider=broken)
-        self.assertEqual(len(broken.calls), 2)
+        self.assertEqual(len(broken.calls), self.bf.TRANSLATION_ATTEMPTS)
+
+    def test_one_refused_chapter_does_not_stop_the_ones_behind_it(self):
+        """CH-0005 carried `i suoi occhi` twice and took thirteen chapters with it."""
+        bad = {"translated_markdown": "# Capitolo\n\nManca il numero.", "glossary_updates": [], "boundary": ""}
+        chapters = self.project / f"books/{self.book}/chapters"
+        source = self.project / f"books/{self.book}/manuscript/chapters"
+        for order in (2, 3):
+            (chapters / f"CH-{order:04d}.json").write_text(json.dumps({
+                "schema": 1, "book": self.book, "id": f"CH-{order:04d}", "order": order, "pov": "Mara",
+                "beats": ["Find signal"], "target_words": 30, "imports": ["UNI-0001#kernel"], "pivotal": None,
+            }))
+            (source / f"CH-{order:04d}.md").write_text(
+                f"# Chapter {order}\n\nMara finds signal {order} in the drowned city. "
+                "Memory changes every choice, but her name remains Mara.")
+        provider = TranslationProvider(
+            [translated(1, 1)] + [bad] * self.bf.TRANSLATION_ATTEMPTS + [translated(3, 3)] * 3
+        )
+        result = self.bf.translate_next(self.project, self.book, "it-IT", provider=provider, run_all=True)
+        self.assertEqual([str(r["chapter"]) for r in result["refused"]], ["CH-0002"])
+        self.assertIn("CH-0003", result["chapters"], "the chapter behind the refused one is still translated")
+        recorded = json.loads(
+            (self.project / f"books/{self.book}/translations/it-IT/refused.json").read_text())
+        self.assertEqual(recorded["refused"][0]["chapter"], "CH-0002")
 
 
 if __name__ == "__main__":

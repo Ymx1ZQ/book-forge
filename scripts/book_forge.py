@@ -8474,6 +8474,22 @@ def _reviser_budget(contract: dict[str, object], findings: list[object]) -> int:
     return min(ROLE_BUDGETS["reviser"][1], prose + len(findings) * REVISER_TOKENS_PER_DISPOSITION)
 
 
+# How many times the translator is asked for a chapter before it is set aside. One
+# first pass and two repairs, each carrying what the gate refused.
+TRANSLATION_ATTEMPTS = 3
+
+
+class TranslationRefused(BookForgeError):
+    """A chapter the locale's own rules will not accept, after every repair.
+
+    Kept apart from the errors that mean the engine is broken, because this one
+    means the engine worked: a rule was written, the gate held it, and the chapter
+    is the thing at fault. It is recorded and skipped so the chapters behind it are
+    still translated — CH-0005 carried `i suoi occhi` twice and took thirteen
+    chapters down with it before this existed.
+    """
+
+
 REPETITION_MIN_WORDS = 4
 REPETITION_STOPWORDS = frozenset(
     "the a an and or but of to in on at for with from by as is was were be been it its "
@@ -9956,7 +9972,11 @@ def _translate_one(
     last_error = ""
     calls = 0
     must_review = bool(contract.get("pivotal"))
-    for attempt_number in (1, 2):
+    # Two repairs, not one. Every other role that produces text and is judged gets
+    # told what was wrong and asked again — the review's repair does, and that
+    # second ask has landed twice in production on exactly these locale rules,
+    # `stette` and `dovette`. The translator faces the same gate and had one.
+    for attempt_number in (1, 2, TRANSLATION_ATTEMPTS):
         capsule = {
             "book": book_id,
             "chapter": chapter_id,
@@ -10007,9 +10027,16 @@ def _translate_one(
                 raise BookForgeError("; ".join(problems))
         except BookForgeError as exc:
             last_error = str(exc)
-            _set_attempt_failure(root, claim["attempt"], block=attempt_number == 2, reason=last_error)
-            if attempt_number == 2:
-                raise BookForgeError(f"Translation blocked after one repair: {last_error}") from exc
+            final = attempt_number == TRANSLATION_ATTEMPTS
+            # `block=False` even on the last attempt: the chapter is set aside and
+            # recorded, and a blocked run would stop the chapters behind it — which
+            # is the defect this whole entry is about. Publication still refuses an
+            # incomplete locale, so nothing ships past this quietly.
+            _set_attempt_failure(root, claim["attempt"], block=False, reason=last_error)
+            if final:
+                raise TranslationRefused(
+                    f"Translation refused after {TRANSLATION_ATTEMPTS - 1} repair(s): {last_error}"
+                ) from exc
             previous_output = str(result["text"]) if "result" in dir() else ""
             _wait_before_retry("translator", chapter_id, attempt_number, exc, runner)
             continue
@@ -10095,22 +10122,47 @@ def translate_next(
         raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
     _ensure_locale_artifacts(root, book_id, canonical)
     results = []
+    refused: list[dict[str, object]] = []
     while True:
         source_chapters = sorted((root / "books" / book_id / "manuscript" / "chapters").glob("CH-*.md"))
-        next_source = next((path for path in source_chapters if not (locale_root / "chapters" / path.name).is_file()), None)
+        next_source = next(
+            (path for path in source_chapters
+             if not (locale_root / "chapters" / path.name).is_file()
+             and path.stem not in {str(row["chapter"]) for row in refused}),
+            None,
+        )
         if not next_source:
             break
-        results.append(_translate_one(root, book_id, canonical, next_source.stem, provider=provider))
+        try:
+            results.append(_translate_one(root, book_id, canonical, next_source.stem, provider=provider))
+        except TranslationRefused as no:
+            # The gate worked and the chapter is what is wrong. Record it and carry
+            # on: a locale rule stops a chapter, never a book.
+            refused.append({"chapter": next_source.stem, "why": str(no)})
+            print(f"[translator] {next_source.stem} set aside: {no}", file=sys.stderr)
+            _write_json(
+                locale_root / "refused.json",
+                {"schema": 1, "locale": canonical, "refused": refused},
+            )
+            if not run_all:
+                raise
         if not run_all:
             break
-    if not results:
-        return {"state": "current", "book": book_id, "locale": canonical, "calls": 0, "chapters": []}
+    if not results and not refused:
+        return {"state": "current", "book": book_id, "locale": canonical, "calls": 0, "chapters": [], "refused": []}
+    if refused:
+        print(
+            f"[translator] {len(refused)} chapter(s) the locale would not accept: "
+            f"{', '.join(str(row['chapter']) for row in refused)}",
+            file=sys.stderr,
+        )
     return {
         "state": _read_json(locale_root / "state.yaml")["status"],
         "book": book_id,
         "locale": canonical,
         "calls": sum(int(result["calls"]) for result in results),
         "chapters": [result["chapter"] for result in results],
+        "refused": refused,
     }
 
 

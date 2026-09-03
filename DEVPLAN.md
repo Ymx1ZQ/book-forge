@@ -4250,3 +4250,33 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 **What to establish before building anything:** whether OpenCode accepts a per-model or per-agent cap on the completion at all, and under what key. That is a question for its configuration surface, not for another guess. If it does, `sync_runtime` should write each role's declared budget there, and `max_output_tokens` stops being advice the model may ignore. If it does not, the entry closes with that recorded, and the remedies already shipped are the whole of what is available.
 
 **Done when:** A role's declared output budget is the budget the provider enforces, or the plan records that it cannot be.
+
+
+## A chapter that will not translate does not stop the sixteen behind it 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**Found translating seventeen chapters.** CH-0005 came back twice carrying `i suoi occhi`, which the locale forbids — the possessive on a body part, one of the defects the Italian rules exist to catch. The gate refused it both times, correctly, and then the whole `translate run` stopped: `Translation blocked after one repair`. Thirteen chapters behind it were never attempted.
+
+**The rule is right and the check is right.** Measured against the accepted chapters, the pattern matches only a possessive followed by a body part from a fixed list, and the one occurrence it finds in already-shipped prose — `i suoi occhi` — is a real defect that slipped in before the rule existed. This is not the over-broad matcher the preposition rule nearly became; it is a good check doing its job.
+
+**What is wrong is the blast radius, and it is the same shape as five other defects this session.** One chapter that cannot pass takes the run with it. The engine's own principle says the opposite: what cannot be used is set aside and recorded, the run continues, and nobody is asked. The translation is the one pass still doing it the other way.
+
+**And the translator gets one repair where every other producing role now gets more.** The review's repair is re-asked when validation refuses it, and that second ask has landed twice in production on exactly these locale rules — `stette` and `dovette`. The translator, which faces the same gate, is given one attempt and then blocks.
+
+**Fix.** The translator gets the same second repair its sibling has, carrying the refusal. A chapter that still cannot pass is recorded beside the locale with what it violated, and the run moves to the next chapter. The locale is then incomplete, which publication already refuses — so the outcome is a named list of chapters needing attention rather than a stopped run or a silent gap.
+
+**Tasks:**
+- [x] The translator is re-asked twice on a refused translation, not once, carrying the reason each time
+- [x] A chapter that still fails is recorded and skipped, and `translate run` continues with the next
+- [x] The route reports which chapters were skipped and what they violated
+- [x] Publication still refuses an incomplete locale, so a skipped chapter cannot ship silently
+- [x] Test: one chapter that cannot pass does not stop the chapters after it
+- [x] Test: a translation refused once and correct the second time is kept — already covered, and the existing test that asserted *one* repair now asserts the count the engine declares
+- [x] Test: the skipped chapters are named in the route's output
+- [x] Suite green: 716 passed, 405 subtests (era 715). Reinstall, commit & push
+- [~] The seventeen chapters translate, or the ones that cannot are named
+
+**One thing came out of building it that the plan did not say.** The last refused attempt was settled with `block=True`, which stops the run — so setting the chapter aside was not enough on its own: the chapter behind it still could not dispatch. It settles with `block=False` now. The lesson is the one from three hours earlier in another form: deciding to carry on is not the same as leaving the run in a state that can.
+
+**Done when:** A locale rule stops a chapter, never a book.
