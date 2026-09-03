@@ -25,3 +25,4 @@ Read the dialogue separately, and against these five:
 
 Report each as its own finding, quoting the line. These are not sentence-level defects and no amount of trimming clauses will reach them.
 
+The capsule carries `answer_bound`, and it is a hard limit: report **at most that many findings**, most severe first. Everything you report has to be dispositioned one by one by the reviser downstream, in a single answer that also rewrites the chapter — a chapter arrived there with forty-five findings and the reviser missed three of the twenty-one it had to cover, three times running. Report the ones that matter most and let the rest go.

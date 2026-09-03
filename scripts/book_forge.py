@@ -8376,6 +8376,14 @@ def _call_parallel_reviews(
 # editor spent its ceiling on two chapters running before this existed, and unlike
 # the critic it gates the chapter rather than advising it.
 REVIEW_MAX_FINDINGS = 6
+# What one style advisor may return. Measured on CH-0008, the first stage a run
+# could not retry its way out of: the reviser was handed 45 findings, 30 of them
+# from the four style advisors, and had to disposition 21 — fifteen of those from
+# the chorus. It answered with 6155 output tokens and missed three, three times
+# running. The gate is right to be strict, so the demand is what has to come down,
+# and four advisors at this bound still outnumber the two roles that gate the
+# chapter, which is what a chorus is for.
+STYLE_MAX_FINDINGS = 4
 
 
 REPETITION_MIN_WORDS = 4
@@ -8485,7 +8493,12 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
     for task in [t for t in plan["tasks"] if t["id"].startswith(f"STYLE-{book_id}-{chapter_id}-") and t["state"] == "pending" and t["id"].rsplit("-", 1)[-1] not in current_slugs]:
         plan["tasks"].remove(task)
     _save_plan(root, plan)
-    capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft, "mode": "style"}
+    capsule = {
+        "book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft, "mode": "style",
+        # The last unbounded producer of findings in the chapter pipeline, and the
+        # one that was overflowing the reviser downstream of it.
+        "answer_bound": f"Report at most {STYLE_MAX_FINDINGS} findings, most severe first.",
+    }
     findings = []
 
     def _normalize(f, slug):

@@ -487,6 +487,21 @@ class TheReviewersAreBoundedTests(unittest.TestCase):
         self.assertIsInstance(self.bf.REVIEW_MAX_FINDINGS, int)
         self.assertGreaterEqual(self.bf.REVIEW_MAX_FINDINGS, 1)
 
+    def test_the_style_advisors_are_bounded_too(self):
+        """CH-0008 handed the reviser 45 findings, 30 of them from the four style
+        advisors, with 21 to disposition and 15 of those from the chorus. It missed
+        three, three times running."""
+        self.assertIsInstance(self.bf.STYLE_MAX_FINDINGS, int)
+        self.assertGreaterEqual(self.bf.STYLE_MAX_FINDINGS, 1)
+        four_advisors = 4 * self.bf.STYLE_MAX_FINDINGS
+        self.assertLess(four_advisors, 21, "the chorus must no longer outweigh what a reviser can finish")
+        self.assertGreater(four_advisors, self.bf.REVIEW_MAX_FINDINGS,
+                           "a chorus that says less than one gate is not a chorus")
+
+    def test_the_style_prompt_names_no_count_of_its_own(self):
+        base = Path(self.bf.__file__).resolve().parent.parent / "assets" / "prompts"
+        self.assertIn("answer_bound", (base / "style-review.md").read_text(encoding="utf-8"))
+
     def test_neither_prompt_names_a_count_of_its_own(self):
         base = Path(self.bf.__file__).resolve().parent.parent / "assets" / "prompts"
         for name in ("cold-reader.md", "technical-editor.md"):

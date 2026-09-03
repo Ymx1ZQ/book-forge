@@ -4057,3 +4057,40 @@ But the engine already knows what happened. The answer came back, it was read, a
 **The first version of this fix settled the wrong claim, and the test written for it was too weak to say so.** It settled only the role that raised, and asserted that the task was not `outcome_unknown` — which was true of a claim still sitting at `running`, so it passed without proving anything. Reading the real state showed what mattered: the loop raises on the first role, so the **sibling's** claim — accepted, never looked at — is the one left holding, and the one that would have become the unknown. The pass now tracks every claim it holds, drops each as it promotes, and settles whatever is left before the exception leaves. The assertion is `pending` or `failed`, which is what settled means.
 
 **Done when:** A person is asked only about paying twice, never about an answer the engine has already read.
+
+
+## The reviser is asked for a list it can finish 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**Measured on CH-0008, the first stage this run could not retry its way out of.** Three attempts, all refused by the same gate: `Revision must disposition every blocking and warning finding exactly once; missing S-glm-5-3-flash-02, -06, -07`. The reviser was handed **45 findings** and answered with 6155 output tokens, missing three of the ones it had to cover.
+
+The composition is the finding:
+
+| | |
+|---|---|
+| findings handed to the reviser | 45 |
+| of which from the four style advisors | 30 |
+| must be dispositioned (blocking + warning) | **21** |
+| of those, from the style advisors | **15** |
+
+So three quarters of the reviser's *mandatory* work comes from a pass that is advisory by design. The two roles that gate the chapter contribute six between them; the chorus contributes fifteen, because each of four advisors returns as many findings as it likes.
+
+And the gate is right to be strict — a disposition silently skipped is a finding nobody acted on and nobody recorded. The demand is what is wrong, not the check.
+
+**This is the same lever, for the third time.** The translation critic answered 0 of 4 unbounded and 4 of 4 bounded; the chapter reviewers were bounded on that evidence; the style advisors are the last unbounded producer of findings in the chapter pipeline, and they are the ones now overflowing the role downstream of them.
+
+**Fix.** The style advisors carry `answer_bound` like every other role that returns findings. Four advisors at a small bound still outnumber the two gates, which is the point of a chorus — but the reviser's list stops being a function of how talkative four models happen to feel.
+
+**Tasks:**
+- [x] `STYLE_MAX_FINDINGS`, carried into the style capsule as `answer_bound`
+- [x] The style prompt defers to it and names no count of its own
+- [x] Test: the style capsule carries the bound
+- [x] Test: the prompt names no count
+- [ ] Measured on the chapters after it: how many findings reach the reviser, against 45 and 21 mandatory
+- [x] Suite green: 701 passed, 405 subtests (era 699). Reinstall, commit & push
+- [~] CH-0008 closes
+
+**One condition written into the test rather than left to judgement.** Four advisors at this bound must stay *more* numerous than one gating role and *fewer* than the twenty-one that broke the reviser. A chorus that says less than a single gate is not a chorus, and that is as easy to get wrong from this direction as the overflow was from the other.
+
+**Done when:** The reviser's list is the size the engine chose, not the size four advisors happened to produce.
