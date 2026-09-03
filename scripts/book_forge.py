@@ -8339,11 +8339,52 @@ def _call_parallel_reviews(
         attempt_dir = Path(claim["capsule"]).parent
         _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
         jobs.append((role, task_id, envelope, claim, attempt_dir))
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = {executor.submit(runner, role, envelope, attempt_dir): (role, task_id, envelope, claim) for role, task_id, envelope, claim, attempt_dir in jobs}
-        results = []
-        for future, metadata in futures.items():
-            results.append((*metadata, future.result()))
+    def ask(role, envelope, attempt_dir):
+        """One reviewer's answer, re-asked while it spends its ceiling and says nothing.
+
+        Bounded, and only for this failure: a malformed answer has its own remedy
+        upstream, and silence has the backoff. This is the third class — the model
+        answered, was charged, and left no room to write — and for this role it is
+        variance, so the same question asked again is a question that gets answered.
+        """
+        last = None
+        for attempt in range(1, REVIEW_CEILING_REASKS + 1):
+            result = runner(role, envelope, attempt_dir)
+            try:
+                _refuse_empty_answer(role, role, result)
+                return result
+            except ReasoningCeilingSpent as spent:
+                last = spent
+                if attempt < REVIEW_CEILING_REASKS:
+                    print(
+                        f"[{role}] spent its ceiling with nothing written; asking again "
+                        f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
+                        file=sys.stderr,
+                    )
+        raise last  # type: ignore[misc]
+
+    # Held from the moment they are claimed, and dropped as each is promoted. The
+    # calls themselves can raise — a reviewer that spends its ceiling on every
+    # re-ask does — and a claim left behind by that becomes `outcome_unknown` and
+    # stops the run for a person.
+    unsettled = {task_id: claim for _, task_id, _, claim, _ in jobs}
+
+    def abandon(reason: str) -> None:
+        for _, claim in unsettled.items():
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=reason)
+            except BookForgeError:
+                pass
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {executor.submit(ask, role, envelope, attempt_dir): (role, task_id, envelope, claim) for role, task_id, envelope, claim, attempt_dir in jobs}
+            results = []
+            for future, metadata in futures.items():
+                results.append((*metadata, future.result()))
+    except BookForgeError as unanswered:
+        abandon(str(unanswered))
+        raise
     parsed: dict[str, dict[str, object]] = dict(materialized)
     receipts = []
     # Every claim this pass holds, dropped as each one is promoted. Whatever is left
@@ -8353,7 +8394,6 @@ def _call_parallel_reviews(
     # it — is not an unknown outcome either. Left unsettled, both become
     # `outcome_unknown` and halt the run for a person, which is right only when the
     # engine does not know what happened. Here it does.
-    unsettled = {task_id: claim for _, task_id, _, claim, _ in results}
     try:
         for role, task_id, envelope, claim, result in results:
             mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
@@ -8376,14 +8416,9 @@ def _call_parallel_reviews(
             receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
             unsettled.pop(task_id, None)
     except BookForgeError as unusable:
-        for task_id, claim in unsettled.items():
-            try:
-                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unusable))
-            except BookForgeError:
-                # Already settled by something closer to the failure. Nothing to do,
-                # and nothing here may raise on the way out: the caller must see the
-                # failure that actually happened.
-                pass
+        # Nothing here may raise on the way out: the caller must see the failure
+        # that actually happened, not one invented by the cleanup.
+        abandon(str(unusable))
         raise
     return parsed["cold-reader"], parsed["technical-editor"], receipts
 
@@ -8403,6 +8438,16 @@ REVIEW_MAX_FINDINGS = 6
 # and four advisors at this bound still outnumber the two roles that gate the
 # chapter, which is what a chorus is for.
 STYLE_MAX_FINDINGS = 4
+# How many times a chapter reviewer is asked again when it spends its reasoning
+# ceiling and writes nothing. Measured over 18 calls of the technical editor on one
+# book: 15 answered, and ATT-0260 and ATT-0262 came back differently on the
+# identical envelope — for this role the failure is variance and a second ask is
+# worth making. That is the opposite of the translation critic, which returned
+# nothing on 4 identical asks out of 4 and therefore keeps its single ask.
+#
+# The stage above also retries, but each of its attempts costs a fresh call of
+# every unfinished role. Re-asking here costs one call.
+REVIEW_CEILING_REASKS = 3
 
 
 REPETITION_MIN_WORDS = 4

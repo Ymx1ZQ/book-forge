@@ -4162,6 +4162,35 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 
 **What it does support is splitting the question rather than trimming the input,** which is the move this engine already makes everywhere else. More than half of what this role finds needs no canon at all — contract, state and consequence checks against the prose in front of it. Those could be asked without the context that is doubling, and the canon-dependent half asked separately with it. Two calls whose sizes do not follow the book's length, in place of one that does.
 
+**And the closure is not where the growth is either.** Measured: CH-0004 declares 13 imports worth 16649 characters, CH-0009 declares 14 worth 32199. The transitive closure adds about 550 characters on top in both cases — under 2%. Same number of blocks, twice the text, because **the canon blocks themselves grow as chapters close and write back into them**. So neither trimming the closure nor capping the import count touches it.
+
 **Still not built, and deliberately.** That is a change to what a gating role is asked, it doubles its calls, and it needs its own measurement of whether the split halves find what the whole one found. It is a session's work with a clear head, not a patch at four in the morning — and the measurement above is what makes it designable rather than a guess.
 
 **Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got.
+
+
+## A role that answers on the second ask is given a second ask 🔄
+
+**Status: 🔄 In progress — 2026-09-03**
+
+**The blocker on CH-0009, addressed where the evidence actually points.** The technical editor spends its reasoning ceiling about half the time on that chapter, and the three levers that could change the question have each been ruled out by measurement: the answer bound is in place, `medium` effort was tried and returned `reasoning 31998, output 0` at the first ask, and trimming the imports saves under 2% because the growth is inside the canon blocks rather than in how many are pulled.
+
+What *is* established, from 18 calls of this role across the book, is that **re-asking works: 15 of 18 answer, and ATT-0260 and ATT-0262 answered differently on the identical envelope.** This is the role for which "the question is not made easier by being asked again" was already found to be false — that finding is a fortnight-old entry above, and it is what the stage retry was built on.
+
+The stage gives the whole pass three attempts, and each of them costs a fresh call of *every* unfinished role. A role whose failure is variance should get its own bounded re-asks first, where a retry costs one call rather than a pass.
+
+**Fix.** On a spent ceiling — and only on that, since a malformed answer already has its own remedy — the chapter review re-asks the failing role a bounded number of times before letting the failure reach the stage. The translation critic keeps its single ask, because for the critic re-asking was measured useless: 0 of 4 on four identical questions.
+
+**Tasks:**
+- [x] A chapter reviewer that spends its ceiling is re-asked within the pass, bounded by a constant
+- [x] The bound is written beside the measurement that justifies it, and the roles it does not apply to say why
+- [x] The re-asks are reported, so a role that needs three every time is visible rather than silently expensive
+- [x] Test: a reviewer empty once and answering next produces its findings in one pass
+- [x] Test: a reviewer empty every time still fails, and the stage still sees it
+- [x] Test: the translation critic is unchanged, since re-asking was measured useless there
+- [x] Suite green: 711 passed, 405 subtests (era 703). Reinstall, commit & push
+- [~] CH-0009 closes and the run goes on
+
+**Writing it put back a defect fixed three hours earlier, and the test caught it in one run.** The re-ask raises from inside the executor, which is *before* the block that settles the claims — so a reviewer empty on every ask left both claims at `running`, exactly the state that becomes `outcome_unknown` and stops the run for a person. The claims are now held from the moment they are taken rather than from the moment the answers come back. The lesson is not about this defect: a fix that moves where an exception is raised moves what is left unsettled behind it, and the two have to be looked at together.
+
+**Done when:** A failure that a second ask fixes costs a second ask, not a pass.

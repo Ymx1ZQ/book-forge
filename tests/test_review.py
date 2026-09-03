@@ -1,3 +1,4 @@
+import collections
 import importlib.util
 import json
 import tempfile
@@ -556,6 +557,69 @@ class AReviewerThatCannotBeReadSettlesItsOwnClaimTests(ReviewTests):
         for task in (f"REVIEW-COLD-{self.book}-CH-0001", f"REVIEW-TECH-{self.book}-CH-0001"):
             self.assertIn(self.state_of(task), {"pending", "failed"},
                           f"{task} still holds its claim and would become outcome_unknown")
+
+
+
+class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
+    """Measured over 18 calls of the technical editor on one book: 15 answered, and
+    two attempts came back differently on the identical envelope. For this role the
+    spent ceiling is variance, so the same question asked again gets answered — the
+    opposite of the translation critic, which returned nothing on four identical
+    asks out of four."""
+
+    class SpendsThenAnswers:
+        """Empty with a spent ceiling for the first `empties` asks of each role."""
+
+        def __init__(self, empties):
+            self.empties = collections.Counter()
+            self.budget = empties
+            self.calls = []
+
+        def __call__(self, role, envelope, attempt_dir):
+            self.calls.append(role)
+            payload = envelope["payload"]
+            base = {
+                "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                "session_id": f"ses-{len(self.calls)}", "cost": 0.1, "latency_ms": 1, "finish": "stop",
+            }
+            if self.empties[role] < self.budget:
+                self.empties[role] += 1
+                return {**base, "text": "", "tokens": {"input": 15000, "output": 0, "reasoning": 32000}}
+            answer = {"findings": [], "verdict": "faithful"}
+            if role == "technical-editor":
+                answer = {"verified": True, "findings": [], "consequences": []}
+            return {**base, "text": json.dumps(answer), "tokens": {"input": 15000, "output": 400}}
+
+    def close_chapter(self, provider):
+        """Through the route, so the tasks exist the way a real run creates them."""
+        try:
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        except self.bf.BookForgeError as stopped:
+            return stopped
+        return None
+
+    def test_a_reviewer_empty_once_and_answering_next_is_asked_again_in_one_pass(self):
+        provider = self.SpendsThenAnswers(1)
+        self.close_chapter(provider)
+        self.assertEqual(provider.calls.count("technical-editor"), 2, "asked again inside the pass")
+        self.assertEqual(provider.calls.count("cold-reader"), 2, "and so is the role beside it")
+
+    def test_a_reviewer_empty_every_time_still_fails_and_costs_a_constant(self):
+        provider = self.SpendsThenAnswers(99)
+        stopped = self.close_chapter(provider)
+        self.assertIsInstance(stopped, self.bf.ReasoningCeilingSpent)
+        self.assertEqual(
+            provider.calls.count("technical-editor"), self.bf.REVIEW_CEILING_REASKS,
+            "bounded: a role that never answers costs a constant, not a night",
+        )
+
+    def test_the_translation_critic_is_not_given_the_same_treatment(self):
+        """Re-asking was measured useless there: 0 of 4 on four identical asks."""
+        self.assertEqual(self.bf.CRITIC_ATTEMPTS, 3)
+        source = (Path(self.bf.__file__)).read_text(encoding="utf-8")
+        critic = source[source.index("def _review_translation("):]
+        critic = critic[: critic.index("def _record_unapplied(")]
+        self.assertNotIn("REVIEW_CEILING_REASKS", critic)
 
 
 if __name__ == "__main__":
