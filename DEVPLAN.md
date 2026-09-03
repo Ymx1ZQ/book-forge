@@ -4130,3 +4130,30 @@ The critic exceeds its lease on **46 calls out of 51**. Half this engine's roles
 - [~] `advance` runs a chapter without the error appearing
 
 **Done when:** A claim outlives the work it covers, and only a dead process loses it.
+
+
+## The chapter reviewer's input does not grow with the book ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-03, measured and not started**
+
+**Measured inside one run, on the role that gates every chapter.** The technical editor's capsule, in characters:
+
+| chapter | context | prose | contract | consequences |
+|---|---|---|---|---|
+| CH-0004 | 19429 | 9788 | 5331 | 2440 |
+| CH-0006 | 33923 | 10270 | 6068 | 2444 |
+| CH-0009 | **35126** | 8821 | 6750 | 3011 |
+
+**The context nearly doubles across six chapters while the prose stays flat.** What grows is the imported canon: a chapter deeper into the book imports more of it, so the input of the role that must approve every chapter is a function of how far the book has got. At CH-0009 the context is about half the whole envelope.
+
+And the failures track it. On CH-0009 the technical editor answered twice and came back empty twice on the identical input, and the run has now stopped on this chapter more than once. Earlier chapters, at 13185 and 15254 tokens, failed occasionally; this one fails about half the time.
+
+**This engine designs against exactly this shape and says so out loud.** The designer slices so no call's size follows the book's length; the audit windows its passes; `_audit_proposal` drops the fields the auditor does not need. The chapter reviewers have none of it, and they are the ones that can stop a book.
+
+**The engine already measures this and treats it as advice.** Every failing call printed `envelope 22372 tokens is over the advisory budget 20000` and proceeded. The budget is right, the number it names is right, and nothing acts on it.
+
+**Why this is proposed rather than done.** The fix is not a constant — it is deciding what the technical editor can be asked to check without reading all the canon a chapter imports, and that is a judgement about what the role is for, not an arithmetic one. `_audit_proposal`'s precedent is to drop what another check already owns, and the equivalent here has to be chosen by reading what the technical editor's findings actually cite. Picking it at four in the morning, on the strength of a correlation, is how the last three guesses tonight got disproved.
+
+**What the next session should measure first:** across the technical editor's findings on chapters one to nine, how many cite an imported canon block at all, and which blocks. If the answer is a small and stable set, the fix is to send those and not the closure.
+
+**Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got.
