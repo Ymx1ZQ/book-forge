@@ -4322,3 +4322,27 @@ The batch variant is the same model at half price, and this role already takes s
 **Both entries are removed from the catalogue rather than left unused.** A model the engine offers and OpenCode cannot resolve is a trap for whoever picks it next, and the engine's catalogue is a promise that a pin will work.
 
 **What would make it available:** `opencode upgrade`. Not done here — another harness runs `opencode serve` on this machine and the binary is not this project's to replace.
+
+
+## A draft is published in the book's order, not in the order it was translated ✅
+
+**Status: ✅ Done — 2026-09-04**
+
+**Found publishing seventeen translated chapters.** `Draft publication refused: completed chapters out of order`. The locale's `completed_chapters` reads `… CH-0006, CH-0008, CH-0009, CH-0011, CH-0007, CH-0010, CH-0012 …` — the order in which chapters *finished*, not the order they are read in. CH-0007 and CH-0010 finished late because they were refused once and retried, which is exactly what the set-aside-and-carry-on fix shipped yesterday is for.
+
+So the gate refuses a state its sibling feature now produces routinely. The list is a completion log; the gate reads it as a running order.
+
+**What the gate is actually for is still worth having.** A draft must not publish a chapter the book does not have, and must not silently reorder the reader's experience. Both are answered by the set of chapters and the outline, not by the sequence of a log: **what matters is that every completed chapter is a real one, and that the export walks them in the outline's order.**
+
+**Fix.** Keep refusing a chapter the book does not have. Drop the ordering test on the log, and sort the export by the outline instead — which is where a chapter's order actually lives.
+
+**Tasks:**
+- [x] The unknown-chapter check stays exactly as it is
+- [x] The order test on `completed_chapters` is removed, since the log records when a chapter finished and not where it sits
+- [x] The export walks the chapters in the outline's order regardless of how the log is arranged
+- [x] Test: a locale whose log is out of order publishes, and its chapters come out in the book's order
+- [x] Test: a completed chapter the book does not have is still refused
+- [x] Suite green: 720 passed, 405 subtests (era 716). Reinstall, commit & push
+- [x] Landfall's Italian publishes with all seventeen chapters in order — verified in the epub's spine, `chapter-0001` through `chapter-0017`, and the four files are on Drive at their existing ids
+
+**Done when:** A chapter that was retried reads in its own place, and the publication gate stops rejecting the retry it asked for.

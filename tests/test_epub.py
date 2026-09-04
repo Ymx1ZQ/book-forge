@@ -138,3 +138,40 @@ class NavigationTests(EpubTests):
         named = self.bf.add_book(self.base, "Named", author="A Hand")
         self.assertEqual(named["author"], "A Hand")
         self.assertNotIn("author", self.bf.add_book(self.base, "Unnamed"))
+
+
+class ADraftPublishesInTheBookSOrderTests(EpubTests):
+    """Landfall's Italian was refused with `completed chapters out of order`: the log
+    read `… CH-0009, CH-0011, CH-0007, CH-0010 …` because CH-0007 and CH-0010 were
+    refused once and retried, which is what setting a chapter aside and carrying on
+    was built to allow. The gate was rejecting a state its sibling produces."""
+
+    def locale_with_log(self, order):
+        self.bf.add_translation(self.base, self.book, "it")
+        root = self.base / f"books/{self.book}/translations/it"
+        (root / "style.md").write_text(
+            "---\nid: S\n---\n\n<!-- bf:block style -->\nImperfetto.\n", encoding="utf-8")
+        chapters = sorted(p.stem for p in (self.base / f"books/{self.book}/manuscript/chapters").glob("CH-*.md"))
+        for ch in chapters:
+            (root / "chapters" / f"{ch}.md").write_text(f"# Capitolo\n\nTesto di {ch}.\n", encoding="utf-8")
+        state = json.loads((root / "state.yaml").read_text())
+        state["completed_chapters"] = order(list(chapters))
+        (root / "state.yaml").write_text(json.dumps(state))
+        meta_path = root / "metadata.yaml"
+        if meta_path.is_file():
+            meta = json.loads(meta_path.read_text())
+            meta.setdefault("title", "La candela perduta")
+            meta_path.write_text(json.dumps(meta))
+        return chapters
+
+    def test_a_log_out_of_order_still_publishes_in_the_books_order(self):
+        chapters = self.locale_with_log(lambda c: c[2:] + c[:2] if len(c) > 2 else c)
+        assembly = self.bf.assemble_edition(self.base, self.book, "it", draft=True)
+        got = [str(row.get("id") or row.get("chapter")) for row in assembly["chapters"]]
+        self.assertEqual(got, list(chapters), "the reader gets the book's order, not the log's")
+
+    def test_a_completed_chapter_the_book_does_not_have_is_still_refused(self):
+        self.locale_with_log(lambda c: c + ["CH-9999"])
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.assemble_edition(self.base, self.book, "it", draft=True)
+        self.assertIn("unknown chapter", str(caught.exception))

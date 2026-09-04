@@ -164,6 +164,15 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
     },
+    # Released 2026-09-02. Reachable only from OpenCode 1.18.27 or newer: the 1.18.23
+    # binary that shipped before it answered `Model not found` however the model was
+    # written into the project's config, because the binary validates against a list
+    # of its own rather than against `~/.cache/opencode/models.json`.
+    "openrouter/google/gemini-3.8-flash": {
+        "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high"},
+    },
     "openrouter/google/gemini-3.7-flash": {
         "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
         "default_effort": "high",
@@ -10631,12 +10640,16 @@ def assemble_edition(project: Path | str, book_id: str, language: str, draft: bo
             completed = state.get("completed_chapters") or []
             if not isinstance(completed, list) or not completed:
                 raise BookForgeError("Draft publication refused: no completed chapters available for review")
-            # Use available completed chapters, must be subset of expected and in order
+            # A chapter the book does not have must never publish. Its *position*,
+            # though, is the outline's business and not the log's: `completed_chapters`
+            # records when a chapter finished, and a chapter refused once and retried
+            # finishes late — which is what setting a chapter aside and carrying on
+            # was built to allow. Landfall's Italian read `… CH-0009, CH-0011,
+            # CH-0007, CH-0010 …` and was refused for it, on a state the engine's own
+            # retry produces routinely.
             if not all(ch in expected for ch in completed):
                 raise BookForgeError("Draft publication refused: completed chapters contain unknown chapter")
-            if completed != sorted(completed, key=lambda x: expected.index(x) if x in expected else 999):
-                raise BookForgeError("Draft publication refused: completed chapters out of order")
-            export_chapters = [str(c) for c in completed]
+            export_chapters = [str(ch) for ch in expected if ch in set(completed)]
             manuscript_root = locale_root / "chapters"
         else:
             if (
