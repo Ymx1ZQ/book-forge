@@ -441,6 +441,37 @@ class ChapterResetTests(ResetFixture):
             "CH-0001",
         )
 
+    def test_no_surviving_artifact_is_left_depending_on_a_dropped_one(self):
+        # Chapter two's translation depends on chapter one's, the same "previous
+        # chapter" chain the tasks carry. Dropping one left the other pointing at
+        # nothing, and the next translation was written to disk and then refused
+        # registration with `Dangling artifact dependency`.
+        self.bf.register_artifact(
+            self.project, f"TRANSLATION-{self.book}-CH-0002-it", "translation-chapter",
+            path=f"books/{self.book}/translations/it/chapters/CH-0002.md",
+            dependencies=[f"TRANSLATION-{self.book}-CH-0001-it"],
+        )
+        self.reset_chapter()
+        registry = json.loads((self.project / ".book-forge" / "artifact-deps.json").read_text())
+        survivor = registry["artifacts"][f"TRANSLATION-{self.book}-CH-0002-it"]
+        self.assertEqual(survivor["dependencies"], [])
+        self.assertNotIn(f"TRANSLATION-{self.book}-CH-0001-it", registry["artifacts"])
+        for artifact in registry["artifacts"].values():
+            self.assertNotIn(f"TRANSLATION-{self.book}-CH-0001-it", artifact.get("dependencies", []))
+
+    def test_a_dependency_that_is_not_an_artifact_survives_the_reset(self):
+        # Canon block ids sit in the same list and are not artifacts. Only an id
+        # this reset actually dropped comes out.
+        self.bf.register_artifact(
+            self.project, f"TRANSLATION-{self.book}-CH-0002-it", "translation-chapter",
+            path=f"books/{self.book}/translations/it/chapters/CH-0002.md",
+            dependencies=[f"TRANSLATION-{self.book}-CH-0001-it", "UNI-0001#kernel"],
+        )
+        self.reset_chapter()
+        registry = json.loads((self.project / ".book-forge" / "artifact-deps.json").read_text())
+        survivor = registry["artifacts"][f"TRANSLATION-{self.book}-CH-0002-it"]
+        self.assertEqual(survivor["dependencies"], ["UNI-0001#kernel"])
+
     def test_the_cli_carries_the_chapter_through(self):
         parsed = self.bf.build_parser().parse_args(["reset", "--book", self.book, "--chapter", "CH-0001", "--yes"])
         self.assertEqual(parsed.chapter, "CH-0001")

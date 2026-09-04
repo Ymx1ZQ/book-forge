@@ -4430,8 +4430,87 @@ Both named the same two moments where the writing improves, and both are the mom
 - [x] Test: `--scope prose` without `--chapter` still removes what it removed before
 - [x] A translation task depends on the chapter before it in the book, not on the last one translated
 - [x] A dropped task's id leaves no surviving task depending on it
-- [x] Suite green: 744 passed, 405 subtests (era 726). Reinstall, commit & push
+- [x] A dropped artifact's id leaves no surviving artifact depending on it — **the same requirement, missed on the registry.** Landfall's first re-translation after the reset ended `Error: Dangling artifact dependency: TRANSLATION-BOOK-0001-CH-0001-it`: chapter two's translation artifact depends on chapter one's, the same "previous chapter" chain the tasks carry, and the reset dropped the one without touching the other. The translation was written to disk and then not registered
+- [x] Test: a reset leaves no surviving artifact depending on a dropped one, and a canon block id in the same list survives
+- [x] Suite green: 746 passed, 405 subtests (era 726). Reinstall, commit & push
 
 **Measured while testing it, 2026-09-04.** Resetting CH-0001 and running again crashed with `RecursionError` inside `ready_frontier`'s depth walk. `TRANSLATE-<book>-<chapter>-<locale>` depended on the translation of `completed_chapters[-1]` — the last chapter *translated*, which is history and not structure. With the first chapter reset, the second is the last completed, so the first's new task depended on the second while the second still depended on the first. The dependency is now the latest completed chapter that precedes this one in the book's order, which still skips a refused chapter (a locale rule stops a chapter, never a book) and cannot point forward. `reset` also strips the dropped ids out of every surviving task's `deps`, so nothing is left waiting on a task that no longer exists.
 
 **Done when:** Rewriting one chapter costs one chapter.
+
+
+## A locale that refuses everything reports it instead of crashing ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-04**
+
+**Found while testing the chapter reset, on a path the refusal work left uncovered.** `translate_next` ends by reading the locale's `status` out of its state file:
+
+```python
+return {"state": _read_json(locale_root / "state.yaml")["status"], ...}
+```
+
+A freshly created workspace has no `status` key — `translate add` seeds `{"schema", "locale", "completed_chapters", "current", "boundary_hashes"}` and the key is first written when a chapter *completes*. So a locale whose every chapter is refused reaches that line having completed nothing, and the run dies with `KeyError: 'status'` after doing the work correctly: the chapters were set aside, `refused.json` was written, the names were printed. The report is the only thing missing, and it takes the run with it.
+
+**It is the same shape as the entry above it.** Setting a chapter aside so the run continues is worth nothing if the run then cannot say what it did. The refusal path was tested with chapters that also succeeded; the case where nothing succeeds is the case a new locale hits on its first bad rule.
+
+**Fix.** Read the status with a default, and name the state for what it is: a locale that has completed nothing and refused something is `refused`, not missing.
+
+**Tasks:**
+- [ ] `translate run` returns a state when nothing completed, instead of raising on a key the workspace has not written yet
+- [ ] The state distinguishes a locale that refused everything from one that has nothing to do
+- [ ] Test: every chapter refused on a fresh workspace returns the refusals rather than raising
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A locale can refuse every chapter it has and still say so.
+
+
+## A chapter that was set aside stops being listed once it lands ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-04**
+
+**Found closing the refusal entry, in landfall's own workspace.** `refused.json` still names CH-0007 and CH-0010, and both are translated. The file is written when a chapter is set aside and never touched again when a later run succeeds on it, so it reads as a list of chapters needing attention when it is a record of one past run.
+
+This costs exactly the person the file was written for: someone who comes back after a refusal, opens the one file that says what needs redoing, and finds two chapters named that do not.
+
+**Fix.** The refusal record is rewritten from the run's own outcome each time `translate run` completes, so a chapter that lands leaves the list and a chapter still refused stays on it. Recording *when* it was refused costs one field and answers the next question a reader has.
+
+**Tasks:**
+- [ ] A chapter that translates successfully is removed from `refused.json`
+- [ ] The file records when each refusal happened, so an old one is visible as old
+- [ ] An empty list is written rather than the file being deleted, so "nothing refused" is stated rather than inferred from an absence
+- [ ] Test: a chapter refused on one run and translated on the next is not listed afterwards
+- [ ] Landfall's own `refused.json` is correct after the next translate run
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** The file that says what needs redoing names only what needs redoing.
+
+
+## A role the engine has is a role the project can call ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-04, measured on landfall**
+
+**The `locale-reader` was never asked a single question.** It shipped this morning with a prompt, a budget, a capsule and seven tests, and landfall's first translation after it went out ran without it:
+
+```
+[locale-reader] CH-0001 was not read: OpenCode could not resolve agent locale-reader:
+Agent locale-reader not found, run 'opencode agent list' to get an agent list
+```
+
+**The cause is that `.opencode/agents/` is generated when a project is created and never again.** Landfall was created with 28 agent files and had 28 that morning; `ROLE_SPECS` had grown to 29. So the engine dispatched a role the project could not resolve, and did it on the one role whose whole purpose was to catch what the bilingual critic cannot see.
+
+**Two things made it invisible, and both were deliberate.** `_ask_locale_reader` catches broadly on purpose, so an advisory pass cannot stop a run by any route — which means a role that does not exist is indistinguishable from a role that found nothing. And the route that fixes it already exists: `runtime sync`'s own docstring says a new role *"would otherwise reach existing universes only by hand"*. Nothing runs it, and nothing says it needs running.
+
+**So the engine holds both halves and never compares them:** the roles it intends to dispatch, and the agents on disk. The bake-off route already does the comparison for models — it regenerates the runtime over the union before claiming, *"a model outside the project's chorus has no agent and no catalogue entry, and would die at the probe with a claim already taken"*. The same sentence is true of a role, and only models are covered.
+
+**Fix.** Before a role is dispatched, a project whose agent set does not carry it regenerates its runtime surface — the same operation `runtime sync` performs, from the same config, so nothing is written by hand and the state stays reproducible. And an advisory role that could not be resolved says so as a distinct outcome rather than as an empty finding list, because "nobody was asked" and "the reader found nothing" are opposite answers.
+
+**Tasks:**
+- [ ] A dispatch whose role has no agent file regenerates the runtime surface from config, once, and proceeds
+- [ ] `doctor` reports a project whose agent set is behind the engine's roles, naming the missing ones
+- [ ] An advisory role that could not be resolved is reported as unresolved, not as a clean read
+- [ ] Test: a project created before a role existed can dispatch it without a person running anything
+- [ ] Test: an unresolvable role still cannot stop a run, and still does not read as a clean pass
+- [ ] Landfall's CH-0001 is read by the `locale-reader` for the first time, and what it finds is recorded here
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** Adding a role to the engine is enough to have it asked.

@@ -11568,8 +11568,21 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
             dropped_artifacts.append(str(artifact_id))
             continue
         surviving[str(artifact_id)] = artifact
+    for artifact in surviving.values():
+        # The same requirement the plan's `deps` carry, on the registry. Chapter
+        # two's translation depends on chapter one's — the "previous chapter" chain
+        # again — so dropping one artifact left the other pointing at nothing, and
+        # the next translation was written to disk and then refused registration.
+        # Canon block ids live in this list too and are not artifacts: only an id
+        # this reset actually dropped comes out.
+        deps = artifact.get("dependencies")
+        if isinstance(deps, list):
+            artifact["dependencies"] = [dep for dep in deps if str(dep) not in set(dropped_artifacts)]
     registry["artifacts"] = surviving
-    registry["edges"] = [edge for edge in registry.get("edges", []) if str(edge.get("to")) in surviving]
+    registry["edges"] = [
+        edge for edge in registry.get("edges", [])
+        if str(edge.get("to")) in surviving and str(edge.get("from")) not in set(dropped_artifacts)
+    ]
     _write_json(root / ".book-forge" / "artifact-deps.json", registry)
     currentness = _read_json(root / ".book-forge" / "currentness.json")
     currentness["artifacts"] = {key: value for key, value in currentness.get("artifacts", {}).items() if key in surviving}
