@@ -31,7 +31,10 @@ class ScriptedProvider:
     def __call__(self, role, envelope, attempt_dir):
         payload = envelope["payload"]
         self.calls.append(role)
-        if role == "translation-critic":
+        if role == "locale-reader":
+            # A reader that finds nothing is the common case and a real answer.
+            text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+        elif role == "translation-critic":
             text = json.dumps(self.critic if self.critic is not None else {"findings": [], "verdict": "faithful"})
         else:
             text = self.translations.pop(0)
@@ -205,14 +208,14 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic([self.calque_finding()]),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader", "translator"])
         self.assertIn("gesso di marea", (self.locale_root / "chapters" / "CH-0001.md").read_text())
 
     def test_a_finding_that_quotes_nothing_is_set_aside_and_drives_no_repair(self):
         vague = {"id": "01", "severity": "warning", "kind": "style", "issue": "si potrebbe migliorare"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([vague]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic"])
+        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["set_aside"]), 1)
         self.assertEqual(review["findings"], [])
@@ -221,7 +224,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         note = {**self.calque_finding(), "severity": "note"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([note]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic"])
+        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader"])
 
     def test_a_repair_refused_once_is_asked_again_and_the_second_one_lands(self):
         """CH-0003's repair came back carrying a forbidden form, was rightly refused,
@@ -276,7 +279,10 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             answers = 0
 
             def __call__(self, role, envelope, attempt_dir):
-                if role == "translation-critic":
+                if role == "locale-reader":
+                    # A reader that finds nothing is the common case and a real answer.
+                    text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+                elif role == "translation-critic":
                     OnceUnreadable.answers += 1
                     if OnceUnreadable.answers == 1:
                         payload = dict(envelope["payload"])
@@ -318,7 +324,10 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
 
         class BlindOnFirst(ScriptedProvider):
             def __call__(self, role, envelope, attempt_dir):
-                if role == "translation-critic" and envelope["payload"]["task"]["chapter"] == "CH-0001":
+                if role == "locale-reader":
+                    # A reader that finds nothing is the common case and a real answer.
+                    text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+                elif role == "translation-critic" and envelope["payload"]["task"]["chapter"] == "CH-0001":
                     self.calls.append(role)
                     payload = envelope["payload"]
                     return {
@@ -338,7 +347,10 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
     def test_a_critic_that_cannot_be_read_never_stops_the_translation(self):
         class BrokenCritic(ScriptedProvider):
             def __call__(self, role, envelope, attempt_dir):
-                if role == "translation-critic":
+                if role == "locale-reader":
+                    # A reader that finds nothing is the common case and a real answer.
+                    text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+                elif role == "translation-critic":
                     raise self.bf_error("the critic produced nothing")
                 return super().__call__(role, envelope, attempt_dir)
 
@@ -367,7 +379,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic(findings),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader", "translator"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["findings"]), 12 + 2, "twelve cited findings plus the two the glossary found")
         self.assertEqual(review["set_aside"], [])
@@ -410,12 +422,12 @@ class TheChecksAreScoredByTheReaderTheyFeedTests(TranslationReviewFixture):
             {"id": "G-01", "verdict": "mistaken", "why": "il termine c'e', in altra forma"},
             {"id": "G-02", "verdict": "mistaken", "why": "la riga fissa un altro senso della parola"},
         ])
-        self.assertEqual(provider.calls, ["translation-critic"], "no repair was asked for")
+        self.assertEqual(provider.calls, ["translation-critic", "locale-reader"], "no repair was asked for")
         self.assertFalse(report["reviewed"][0]["repaired"])
 
     def test_a_finding_the_critic_upholds_still_drives_the_repair(self):
         report, provider = self.review([{"id": "G-01", "verdict": "holds", "why": "manca davvero"}])
-        self.assertEqual(provider.calls, ["translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["translation-critic", "locale-reader", "translator"])
         self.assertTrue(report["reviewed"][0]["repaired"])
 
     def test_silence_on_a_finding_is_not_a_refutation(self):
@@ -478,7 +490,10 @@ class WhenAReviewIsFinishedTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
-            if role == "translation-critic":
+            if role == "locale-reader":
+                # A reader that finds nothing is the common case and a real answer.
+                text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+            elif role == "translation-critic":
                 answer = self.critic_answers.pop(0) if self.critic_answers else {"findings": [], "verdict": "faithful"}
                 text = json.dumps(answer)
             else:
@@ -639,7 +654,10 @@ class AChapterThatWasNotReadTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
-            if role == "translation-critic":
+            if role == "locale-reader":
+                # A reader that finds nothing is the common case and a real answer.
+                text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+            elif role == "translation-critic":
                 answer = self.critic_answers.pop(0) if self.critic_answers else {"findings": [], "verdict": "faithful"}
                 text = answer if isinstance(answer, str) else json.dumps(answer)
             else:
@@ -724,7 +742,10 @@ class WhenTheCriticSpendsItsCeilingTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
-            if role == "translation-critic":
+            if role == "locale-reader":
+                # A reader that finds nothing is the common case and a real answer.
+                text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+            elif role == "translation-critic":
                 return {
                     "text": "", "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
                     "session_id": f"ses-{len(self.calls)}",
@@ -789,7 +810,10 @@ class TheAnswerBoundTests(TranslationReviewFixture):
 
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
-            if role == "translation-critic":
+            if role == "locale-reader":
+                # A reader that finds nothing is the common case and a real answer.
+                text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+            elif role == "translation-critic":
                 self.capsules.append(payload["task"])
                 text = json.dumps({"findings": [], "verdict": "faithful"})
             else:
@@ -820,6 +844,56 @@ class TheAnswerBoundTests(TranslationReviewFixture):
 
     def test_the_bound_is_small_enough_to_have_been_measured(self):
         self.assertLessEqual(self.bf.CRITIC_MAX_FINDINGS, 4, "four is the value four repetitions answered on")
+
+
+
+class AReaderWhoCannotSeeTheSourceTests(TranslationReviewFixture):
+    """Nine broken constructions shipped in two pages of landfall's first Italian
+    chapter, past a locale style that forbids exactly them and a critic that had read
+    it. `go count your chalk` became «vai a contare il tuo gesso», which is not a
+    thing anyone says. The critic passed it because it had the English in front of
+    it, and with the English in front of you a calque parses."""
+
+    def test_the_reader_is_given_the_translation_and_the_style_and_nothing_else(self):
+        capsule = self.bf._locale_reader_capsule("CH-0001", "il testo tradotto", "lo stile")
+        self.assertEqual(capsule["translated_markdown"], "il testo tradotto")
+        self.assertEqual(capsule["locale_style"], "lo stile")
+        self.assertNotIn("source_markdown", capsule, "seeing the source makes a calque legible")
+        self.assertNotIn("glossary", capsule, "the glossary would excuse an unreadable term as agreed")
+        self.assertIn(str(self.bf.LOCALE_READER_MAX_FINDINGS), str(capsule["answer_bound"]))
+
+    def test_a_stumble_becomes_a_finding_the_repair_can_take(self):
+        value = {"summary": "una donna di guardia", "followed": True, "stumbles": [
+            {"sentence": "vai a contare il tuo gesso", "why": "non so cosa voglia dire", "severity": "blocking"},
+            {"sentence": "La montava come la montava il muro", "why": "un muro non monta la guardia", "severity": "blocking"},
+        ]}
+        findings = self.bf._locale_reader_findings(value)
+        self.assertEqual(len(findings), 2)
+        self.assertEqual([f["origin"] for f in findings], ["reader", "reader"])
+        self.assertEqual(findings[0]["translated"], "vai a contare il tuo gesso")
+        self.assertEqual(findings[0]["kind"], "readability")
+        self.assertEqual(findings[0]["fix"], "", "a reader does not propose a rendering")
+
+    def test_a_stumble_quoting_nothing_is_dropped(self):
+        """It cannot be repaired and it cannot be checked."""
+        value = {"stumbles": [{"sentence": "   ", "why": "boh", "severity": "warning"}]}
+        self.assertEqual(self.bf._locale_reader_findings(value), [])
+
+    def test_no_stumbles_is_a_real_answer(self):
+        self.assertEqual(self.bf._locale_reader_findings({"summary": "chiaro", "followed": True, "stumbles": []}), [])
+
+    def test_the_prompt_refuses_to_rewrite_and_refuses_the_source(self):
+        prompt = (
+            Path(self.bf.__file__).resolve().parent.parent / "assets" / "prompts" / "locale-reader.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Do not propose a rewrite", prompt)
+        self.assertIn("answer_bound", prompt)
+        self.assertIn("not being shown an original", prompt)
+
+    def test_the_role_is_registered_with_a_budget(self):
+        self.assertIn("locale-reader", self.bf.ROLE_SPECS)
+        self.assertIn("locale-reader", self.bf.ROLE_BUDGETS)
+        self.assertGreater(self.bf.ROLE_BUDGETS["locale-reader"][1], 0)
 
 
 if __name__ == "__main__":

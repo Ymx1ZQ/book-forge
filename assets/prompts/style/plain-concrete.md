@@ -10,3 +10,6 @@ The register these sentences aim for. These refine how the prose sounds; they ne
 8. Let dialogue sound spoken. People interrupt, answer beside the question, and leave things out.
 9. Sentences carry one idea. Subordinate a clause only when the subordination is the meaning.
 10. End a scene with the situation changed. Something is known, lost, decided or broken that was not before.
+11. Never write a sentence built for effect rather than for information. The test is mechanical: delete it. If nothing is lost, it was ornament — leave it deleted. This catches the closing line with a twist in it, the aphorism, the inverted echo (X carried Y and Y carried no X), the fragment kept for rhythm. One is a good sentence; four to a page and the reader hears the author instead of the scene.
+12. A coined word earns its place the moment the scene needs it, and not before. An opening that asks the reader to hold six or eight invented terms is spending patience it has not yet bought. Give them the thing happening first; name the world as the world becomes necessary.
+13. Measurement and material belong to one world. Fathoms and metres, tallow and sodium do not share a page: a modern term inside an old register stops the reader to ask what century this is, and that question is never the one you wanted.

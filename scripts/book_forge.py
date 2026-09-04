@@ -83,6 +83,9 @@ ROLE_SPECS = {
     "canon-auditor": ("all", "high", 8),
     "translator": ("all", "low", 7),
     "translation-critic": ("all", "high", 6),
+    # A reader, not a reviewer. It is given the translation and the locale style and
+    # nothing else — see `_locale_reader_capsule` for why the denial is the design.
+    "locale-reader": ("all", "medium", 4),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
@@ -3179,6 +3182,9 @@ ROLE_BUDGETS = {
     # chapter's worth of them is long. Landfall's first critic answer was cut
     # mid-string at 3000 and the whole pass was lost.
     "translation-critic": (24000, 9000),
+    # It reads one chapter and answers in a few quoted stumbles: a small question
+    # deliberately, since a reader who is asked for an essay starts writing one.
+    "locale-reader": (16000, 3000),
     "judge": (10000, 2000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
@@ -8434,6 +8440,64 @@ def _call_parallel_reviews(
 # editor spent its ceiling on two chapters running before this existed, and unlike
 # the critic it gates the chapter rather than advising it.
 REVIEW_MAX_FINDINGS = 6
+# What the monolingual reader may return. Small for the same reason the critic's is:
+# an answer bounded in the question is an answer that arrives.
+LOCALE_READER_MAX_FINDINGS = 6
+
+
+def _locale_reader_capsule(chapter_id: str, translated: str, style: str) -> dict[str, object]:
+    """What the reader is given, and — the point of the role — what it is denied.
+
+    The critic reads the source and the translation side by side, and that is why it
+    passed `vai a contare il tuo gesso` for `go count your chalk`: with the English in
+    front of you the calque is legible, and you supply the sense the Italian does not
+    carry. The defect exists only for a reader who does not have the original, and no
+    role in this engine was that reader. Nine broken constructions shipped in two
+    pages of landfall's first Italian chapter, past a locale style that forbids
+    exactly them and a critic that had read it.
+
+    So: no `source_markdown`, because seeing the source makes a calque parse. And no
+    glossary, because a term that is unreadable in the target language has to be
+    reported as unreadable rather than excused as agreed — the glossary is the
+    critic's authority and this role exists to be outside it.
+    """
+    return {
+        "chapter": chapter_id,
+        "translated_markdown": translated,
+        "locale_style": style,
+        "answer_bound": f"Report at most {LOCALE_READER_MAX_FINDINGS} stumbles, worst first.",
+    }
+
+
+def _locale_reader_findings(value: object) -> list[dict[str, object]]:
+    """Its stumbles, in the shape the repair already takes.
+
+    Marked `origin: reader` so the two sources can be counted apart: a defect only
+    the monolingual reader finds is the measure of whether this role earns its call.
+    """
+    rows = value.get("stumbles") if isinstance(value, dict) else None
+    findings: list[dict[str, object]] = []
+    for index, row in enumerate(rows if isinstance(rows, list) else [], start=1):
+        if not isinstance(row, dict):
+            continue
+        quoted = str(row.get("sentence") or "").strip()
+        if not quoted:
+            # A stumble that quotes nothing cannot be repaired and cannot be checked.
+            continue
+        findings.append({
+            "id": f"R-{index:02d}",
+            "severity": str(row.get("severity") or "warning"),
+            "kind": "readability",
+            "origin": "reader",
+            "source": "",
+            "translated": quoted,
+            "rule": "reads as the target language",
+            "issue": str(row.get("why") or ""),
+            "fix": "",
+        })
+    return findings
+
+
 # What one style advisor may return. Measured on CH-0008, the first stage a run
 # could not retry its way out of: the reviser was handed 45 findings, 30 of them
 # from the four style advisors, and had to disposition 21 — fifteen of those from
@@ -9579,6 +9643,67 @@ def _convergence(
     }
 
 
+def _ask_locale_reader(
+    root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner
+) -> list[dict[str, object]]:
+    """The chapter read by someone who cannot see where it came from.
+
+    Advisory and never a stop: a reader that fails leaves the critic's findings
+    standing, because a chapter with no second opinion is worse read, not unread.
+    """
+    task_id = f"LOCREAD-{book_id}-{chapter_id}-{locale}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, "locale-reader", priority=80, outputs=[])
+    else:
+        _reopen_task(root, task_id)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root,
+            role="locale-reader",
+            task_capsule=_locale_reader_capsule(chapter_id, translated, style),
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=ROLE_BUDGETS["locale-reader"][1],
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = runner("locale-reader", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        _refuse_empty_answer("locale-reader", chapter_id, result)
+        value = _parse_contract_json(str(result["text"]))
+        findings = _locale_reader_findings(value)
+        if not value.get("followed", True):
+            # A reader who cannot say what the chapter is about has found the largest
+            # defect in it, and it lives in no single sentence.
+            print(
+                f"[locale-reader] {chapter_id}: could not follow the chapter — {str(value.get('summary') or '')[:120]}",
+                file=sys.stderr,
+            )
+        if findings:
+            print(
+                f"[locale-reader] {chapter_id}: {len(findings)} stumble(s) a reader without the source hit",
+                file=sys.stderr,
+            )
+        _set_attempt_failure(root, claim["attempt"], block=False, reason="advisory pass complete")
+        return findings
+    except Exception as unread:
+        # Broad on purpose. This pass advises and nothing downstream needs it, so it
+        # must not be able to stop a translation by any route — not a refused answer,
+        # not a provider that has never heard of the role. Everything else in this
+        # engine that fails advisory-only is settled with `block=False` and the run
+        # goes on; this one cannot even raise.
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unread)[:200])
+            except BookForgeError:
+                pass
+        print(f"[locale-reader] {chapter_id} was not read: {str(unread)[:160]}", file=sys.stderr)
+        return []
+
+
 def _score_machine_findings(
     machine: list[dict[str, object]], verdicts: object
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
@@ -9758,6 +9883,7 @@ def _review_translation(
             cited, aside = _cited_findings(value.get("findings"))
             findings.extend(cited)
             set_aside.extend(aside)
+            findings.extend(_ask_locale_reader(root, book_id, locale, chapter_id, translated, style, runner))
             verdict = str(value.get("verdict") or "repairable")
             convergence = _convergence(previous, findings, verdict, bool(previous.get("repaired")))
             if convergence["verdict_inconsistent"]:

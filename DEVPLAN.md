@@ -4346,3 +4346,56 @@ So the gate refuses a state its sibling feature now produces routinely. The list
 - [x] Landfall's Italian publishes with all seventeen chapters in order — verified in the epub's spine, `chapter-0001` through `chapter-0017`, and the four files are on Drive at their existing ids
 
 **Done when:** A chapter that was retried reads in its own place, and the publication gate stops rejecting the retry it asked for.
+
+
+## A translation is read by someone who cannot see the source 🔄
+
+**Status: 🔄 In progress — 2026-09-04**
+
+**Found by giving landfall's first Italian chapter to readers who knew nothing about it.** Nine broken constructions in two pages, every one a word-for-word calque: `go count your chalk` → «vai a contare il tuo gesso», an English idiom rendered literally and meaning nothing; `stood the last dark` → «era di guardia all'ultimo buio»; `the rolls carried the watch, and the watch carried no Binta` → «i registri riportavano la guardia, e la guardia non riportava nessuna Binta», where the English pun on *carry* holds and the Italian verb cannot; `She stood it the way the wall stood it` → «La montava come la montava il muro», a wall mounting a watch, which is not a sentence in Italian; `a faint blue smolder` → «un ardore azzurro fioco», where *ardore* means passion.
+
+**The rules to catch these already exist and were read.** The locale style has a section headed *Contro il calco* saying an English idiom is rendered with its Italian equivalent and never word by word, and even *«a sentence that would not be said in Italian is rewritten, even when every single word is correct»*. The critic was given that style and approved the chapter anyway.
+
+**The reason is structural, and it is the whole point of this entry.** The critic reads the source and the translation side by side. With the English in front of it, «vai a contare il tuo gesso» *parses* — you can see where it came from. **The defect exists only for a reader who does not have the original**, and no role in this pipeline is that reader.
+
+**Fix.** A `locale-reader` role that is given the translated chapter and the locale style **and nothing else** — no source, no glossary, no contract. It answers as a reader: what it did not understand, which sentences it had to read twice, which words are not words in this language. Its findings join the critic's and go to the same repair.
+
+**What it must not be given, and why that is the design.** The source, because seeing it makes a calque legible. The glossary, because a term that is unreadable in the target language must be reported as unreadable, not excused as agreed. This role is the only one in the engine whose value comes from what it is denied.
+
+**Tasks:**
+- [ ] `locale-reader` role, prompt and budget: it receives the translated chapter and the locale style, and refuses to be given the source
+- [ ] Its capsule is asserted to carry no `source_markdown` and no glossary, so the denial cannot erode
+- [ ] It answers with what stopped it, quoting the sentence, and never proposes a rendering — it is a reader, not a translator
+- [ ] Its findings merge with the critic's for the repair, marked by origin so a rate can be measured per source
+- [ ] It runs inside `translate` and in `translate review`, so chapters already translated can be reached
+- [ ] Test: a chapter carrying a literal calque that the bilingual critic passes is caught by the monolingual reader
+- [ ] Test: the role's capsule is refused if it contains the source
+- [ ] Measured on landfall's CH-0001 against the nine constructions the human readers found
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A sentence that is not a sentence in the target language is found by someone who could not see where it came from.
+
+## The prose is not built out of closing lines 🔄
+
+**Status: 🔄 In progress — 2026-09-04**
+
+**Measured by a reader who had never seen the book.** *«Almost every paragraph ends on a closing line with a twist in it… Coming at a rate of four or five a page, I started hearing the rhythm before the sentence arrived, and by the middle of the chapter I was noticing the author rather than the harbour.»* The Italian reader, independently: *«frasi mozzate a effetto, una parola sola per riga. All'inizio dà atmosfera, dopo venti volte è un tic.»*
+
+Both named the same two moments where the writing improves, and both are the moments it stops doing this: the pen writing everything except her name, and a thumb finding a scar without looking.
+
+**The style preset has ten rules and none of them forbids it.** Rule 10 — *End a scene with the situation changed* — arguably invites it. So the writer produces closing lines because nothing has ever told it not to, the four style advisors do not flag them because they carry the same preset, and the reviser has no rule to apply.
+
+**Two more things the same reader caught that no role is asked to look for.** Eight invented terms in the first three pages before the reader is given a reason to care — *«I was still doing vocabulary maintenance when the barge started dying»*. And register breaks: `four-meter` and `sodium-dim` in a chapter of fathoms, tallow and oilcloth — *«hang on, what century is this»*.
+
+**Fix.** Three rules added to `plain-concrete`, which every writing and judging role already reads, so one edit reaches the writer, the reviser and the four advisors at once.
+
+**Tasks:**
+- [ ] A rule against the sentence built for effect: the test is to delete it, and if nothing is lost it was ornament
+- [ ] A rule on coinage: a new term earns its place when the scene needs it, and an opening spends its reader's patience before it has bought any
+- [ ] A rule on register: the vocabulary of measurement and material belongs to one world, and a modern term inside an old one stops the reader dead
+- [x] ~~The same three reach `neutral` where they apply~~ — **wrong, and a test said so.** `neutral` exists to add nothing at all; that is its contract and `test_the_neutral_preset_adds_nothing` holds it. A craft rule is still an imposition, and a project that asked for no style must get none
+- [ ] Test: the presets carry the rules, and the role prompts that compose them still build
+- [ ] Suite green. Reinstall, commit & push
+- [ ] CH-0001 rewritten in English against the new preset, and read again by a reader who has not seen it
+
+**Done when:** A reader notices the harbour and not the author.
