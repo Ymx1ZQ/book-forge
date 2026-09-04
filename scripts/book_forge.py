@@ -168,11 +168,6 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     # binary that shipped before it answered `Model not found` however the model was
     # written into the project's config, because the binary validates against a list
     # of its own rather than against `~/.cache/opencode/models.json`.
-    "openrouter/google/gemini-3.8-flash": {
-        "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
-        "default_effort": "high",
-        "variants": {"low": "low", "medium": "medium", "high": "high"},
-    },
     "openrouter/google/gemini-3.7-flash": {
         "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
         "default_effort": "high",
