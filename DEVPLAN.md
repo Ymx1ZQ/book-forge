@@ -4282,9 +4282,9 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 **Done when:** A locale rule stops a chapter, never a book.
 
 
-## The catalogue can hold a batch model, and the critic uses one 🔄
+## The catalogue can hold a batch model, and the critic uses one ❌
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ❌ Withdrawn — 2026-09-04, the model cannot be reached from here**
 
 **Priced against the critic's own measured profile, not against a list price.** The translation critic is 53 calls and **$4.50 of this project's $7.94** — 57% of the spend for 13% of the volume. What makes it expensive is the shape of its work: 14686 tokens of input, **27510 of reasoning** and 518 of output per call, and reasoning bills at the completion rate. So for this role the completion price is nearly the whole cost.
 
@@ -4312,3 +4312,13 @@ The batch variant is the same model at half price, and this role already takes s
 - [ ] Measured after a few chapters: cost per critic call against the $0.110 it is replacing
 
 **Done when:** The critic reads at half the price of the model it replaced, and the catalogue can hold a batch variant.
+
+**Withdrawn, and the reason is a date.** The pin was applied and every call died on `Model not found: openrouter/google/gemini-3.8-flash` — with and without the `:batch` suffix, so the suffix was never the problem. The installed OpenCode binary was compiled **2026-08-25** and `google/gemini-3.8-flash` was released **2026-09-02**: the model postdates the build. `~/.cache/opencode/models.json` refreshes on its own and does carry the model, but the binary validates against a list of its own, and writing the model into the project's `opencode.json` does not change that.
+
+**Three diagnoses were given and two were wrong** before the dates were compared: that the `:batch` suffix collided with OpenCode's model addressing, and that OpenCode's catalogue did not have the model at all. What settles it is `stat` on the binary against `release_date` in the catalogue — two facts that cost nothing and were reached last.
+
+**What it cost.** Three chapters — CH-0010, CH-0011, CH-0012 — were translated while the critic answered nothing, so they are on disk without ever being read back. `translate review` is the route that reaches them.
+
+**Both entries are removed from the catalogue rather than left unused.** A model the engine offers and OpenCode cannot resolve is a trap for whoever picks it next, and the engine's catalogue is a promise that a pin will work.
+
+**What would make it available:** `opencode upgrade`. Not done here — another harness runs `opencode serve` on this machine and the binary is not this project's to replace.
