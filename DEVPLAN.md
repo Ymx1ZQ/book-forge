@@ -4364,14 +4364,14 @@ So the gate refuses a state its sibling feature now produces routinely. The list
 
 **Tasks:**
 - [ ] `locale-reader` role, prompt and budget: it receives the translated chapter and the locale style, and refuses to be given the source
-- [ ] Its capsule is asserted to carry no `source_markdown` and no glossary, so the denial cannot erode
-- [ ] It answers with what stopped it, quoting the sentence, and never proposes a rendering — it is a reader, not a translator
-- [ ] Its findings merge with the critic's for the repair, marked by origin so a rate can be measured per source
-- [ ] It runs inside `translate` and in `translate review`, so chapters already translated can be reached
-- [ ] Test: a chapter carrying a literal calque that the bilingual critic passes is caught by the monolingual reader
-- [ ] Test: the role's capsule is refused if it contains the source
-- [ ] Measured on landfall's CH-0001 against the nine constructions the human readers found
-- [ ] Suite green. Reinstall, commit & push
+- [x] Its capsule is asserted to carry no `source_markdown` and no glossary, so the denial cannot erode
+- [x] It answers with what stopped it, quoting the sentence, and never proposes a rendering — it is a reader, not a translator
+- [x] Its findings merge with the critic's for the repair, marked by origin so a rate can be measured per source
+- [x] It runs inside `translate` and in `translate review`, so chapters already translated can be reached
+- [x] Test: a chapter carrying a literal calque that the bilingual critic passes is caught by the monolingual reader
+- [x] Test: the role's capsule is refused if it contains the source
+- [~] Measured on landfall's CH-0001 against the nine constructions the human readers found
+- [x] Suite green: 726 passed, 405 subtests (era 720). Reinstall, commit & push
 
 **Done when:** A sentence that is not a sentence in the target language is found by someone who could not see where it came from.
 
@@ -4390,12 +4390,12 @@ Both named the same two moments where the writing improves, and both are the mom
 **Fix.** Three rules added to `plain-concrete`, which every writing and judging role already reads, so one edit reaches the writer, the reviser and the four advisors at once.
 
 **Tasks:**
-- [ ] A rule against the sentence built for effect: the test is to delete it, and if nothing is lost it was ornament
-- [ ] A rule on coinage: a new term earns its place when the scene needs it, and an opening spends its reader's patience before it has bought any
-- [ ] A rule on register: the vocabulary of measurement and material belongs to one world, and a modern term inside an old one stops the reader dead
+- [x] A rule against the sentence built for effect: the test is to delete it, and if nothing is lost it was ornament
+- [x] A rule on coinage: a new term earns its place when the scene needs it, and an opening spends its reader's patience before it has bought any
+- [x] A rule on register: the vocabulary of measurement and material belongs to one world, and a modern term inside an old one stops the reader dead
 - [x] ~~The same three reach `neutral` where they apply~~ — **wrong, and a test said so.** `neutral` exists to add nothing at all; that is its contract and `test_the_neutral_preset_adds_nothing` holds it. A craft rule is still an imposition, and a project that asked for no style must get none
-- [ ] Test: the presets carry the rules, and the role prompts that compose them still build
-- [ ] Suite green. Reinstall, commit & push
-- [ ] CH-0001 rewritten in English against the new preset, and read again by a reader who has not seen it
+- [x] Test: the presets carry the rules, and the role prompts that compose them still build
+- [x] Suite green: 726 passed, 405 subtests (era 720). Reinstall, commit & push
+- [~] CH-0001 rewritten in English against the new preset, and read again by a reader who has not seen it
 
 **Done when:** A reader notices the harbour and not the author.
