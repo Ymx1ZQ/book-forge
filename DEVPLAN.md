@@ -4372,7 +4372,11 @@ So the gate refuses a state its sibling feature now produces routinely. The list
 - [x] It runs inside `translate` and in `translate review`, so chapters already translated can be reached
 - [x] Test: a chapter carrying a literal calque that the bilingual critic passes is caught by the monolingual reader
 - [x] Test: the role's capsule is refused if it contains the source
-- [~] Measured on landfall's CH-0001 against the nine constructions the human readers found
+- [~] Measured on landfall's CH-0001 against the nine constructions the human readers found. **The role has still not answered a question.** Two attempts on 2026-09-04, two different failures: the first found no agent at all (see *A role the engine has is a role the project can call*), the second returned `0 output token(s) after spending 32000 on reasoning` — `ReasoningCeilingSpent`, on a role declared at 3000 output tokens, which is the ceiling defect recorded in *What the engine calls an output budget never reaches the provider*. So the pass that exists to read the Italian has read none of it, twice, for two reasons that have nothing to do with each other.
+
+**Read by a person instead, on the re-translated CH-0001, five findings — the shape the role is meant to produce:** «una mano dagli occhi limpidi» and «Il quartiere dagli occhi limpidi», an attributive that only works on a person, attached to a hand and a district; «una traia di legno», which is not an Italian word; «avrei governato comunque su di quelli», a calque; «spina» and «secca» for the same bar of mud, so the reader cannot tell they are one object; and a rhythm fragment carried over from the English, «L'unico vero calore che avesse, quella mattina.»
+
+**Three of the five were prescribed by the glossary.** The row for `the clear-eyed quarter` read *"→ il quartiere dagli occhi limpidi"*, so the translator wrote what it was told. Fixed at the source: the attributive is now restricted to a person, the mud bar has one word, and the trough has a real one.
 - [x] Suite green: 726 passed, 405 subtests (era 720). Reinstall, commit & push
 
 **Done when:** A sentence that is not a sentence in the target language is found by someone who could not see where it came from.
