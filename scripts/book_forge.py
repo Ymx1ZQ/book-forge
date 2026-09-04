@@ -10063,6 +10063,33 @@ def _repair_translation(
     return None
 
 
+def _previous_translated_chapter(root: Path, book_id: str, chapter_id: str, completed: list) -> str | None:
+    """The latest completed chapter that comes *before* this one in the book.
+
+    It was the last chapter completed, full stop — history rather than structure.
+    Reset the first chapter and the second is the last one completed, so
+    re-translating the first made its task depend on the second while the second
+    still depended on the first, and the frontier's depth walk recursed until
+    Python stopped it. Reading the order instead keeps the skip that a refused
+    chapter needs — the next chapter leans on the latest one that did land — while
+    a dependency can only ever point backwards.
+    """
+    order: dict[str, int] = {}
+    outline = root / "books" / book_id / "outline.yaml"
+    if outline.is_file():
+        for row in _read_json(outline).get("chapters", []):
+            if isinstance(row, dict) and row.get("id") is not None:
+                order[str(row["id"])] = int(row.get("order", 0))
+    def position(chapter: str) -> tuple[int, str]:
+        # The id is the fallback ordering: `CH-%04d` sorts the way the book reads,
+        # so a chapter the outline has lost still lands in the right place.
+        return (order.get(chapter, 0), chapter)
+
+    here = position(chapter_id)
+    earlier = [str(item) for item in completed if position(str(item)) < here]
+    return max(earlier, key=position) if earlier else None
+
+
 def _translate_one(
     root: Path,
     book_id: str,
@@ -10079,9 +10106,8 @@ def _translate_one(
     state_path = locale_root / "state.yaml"
     state = _read_json(state_path)
     previous = state.get("boundary", "")
-    previous_id = None
-    if state.get("completed_chapters"):
-        previous_id = f"TRANSLATION-{book_id}-{state['completed_chapters'][-1]}-{locale}"
+    previous_chapter = _previous_translated_chapter(root, book_id, chapter_id, state.get("completed_chapters", []))
+    previous_id = f"TRANSLATION-{book_id}-{previous_chapter}-{locale}" if previous_chapter else None
     task_id = f"TRANSLATE-{book_id}-{chapter_id}-{locale}"
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
@@ -11306,7 +11332,20 @@ RESET_KEPT = (
 )
 
 
-def _reset_paths(root: Path, book_id: str, scope: str, locale: str | None = None) -> list[Path]:
+def _chapter_workspace(book: Path, directory: str, chapter: str) -> list[Path]:
+    """One chapter's entries under a per-chapter working directory.
+
+    The three directories name a chapter differently — `reviews/CH-0004` is a
+    directory, `coldread-state/CH-0004.md` a file — so match the name itself and
+    anything suffixed onto it rather than assuming either shape.
+    """
+    root = book / directory
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.glob(f"{chapter}*") if path.name == chapter or path.name.startswith(f"{chapter}."))
+
+
+def _reset_paths(root: Path, book_id: str, scope: str, locale: str | None = None, chapter: str | None = None) -> list[Path]:
     """Every derived path a reset removes, in the order it removes them."""
     book = root / "books" / book_id
     targets: list[Path] = []
@@ -11314,8 +11353,22 @@ def _reset_paths(root: Path, book_id: str, scope: str, locale: str | None = None
         # Only what this locale derived. The manuscript it was translated from is
         # an input here, and re-translating five minutes of work must never cost
         # the hundred minutes that wrote the prose.
-        targets.extend(sorted(book.glob(f"translations/{locale}/chapters/*.md")))
+        pattern = f"translations/{locale}/chapters/{chapter}.md" if chapter else f"translations/{locale}/chapters/*.md"
+        targets.extend(sorted(book.glob(pattern)))
         editions = root / "dist" / book_id / str(locale)
+        targets.extend(sorted(path for path in editions.glob("*") if path.exists()))
+        return targets
+    if chapter:
+        # One chapter and what was derived from it, in every language. The editions
+        # go too: each one contains this chapter, so each one is now stale — and an
+        # edition is minutes to rebuild against the hours the other chapters cost.
+        source = book / "manuscript" / "chapters" / f"{chapter}.md"
+        if source.exists():
+            targets.append(source)
+        targets.extend(sorted(book.glob(f"translations/*/chapters/{chapter}.md")))
+        for directory in ("reviews", "work", "coldread-state"):
+            targets.extend(_chapter_workspace(book, directory, chapter))
+        editions = root / "dist" / book_id
         targets.extend(sorted(path for path in editions.glob("*") if path.exists()))
         return targets
     targets.extend(sorted(book.glob("manuscript/chapters/*.md")))
@@ -11332,11 +11385,23 @@ def _reset_paths(root: Path, book_id: str, scope: str, locale: str | None = None
     return targets
 
 
-def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str, locale: str | None = None) -> list[str]:
+def _task_names_chapter(task_id: str, chapter: str) -> bool:
+    """Whether a task id carries this chapter as one of its segments.
+
+    Substring matching is what a five-digit chapter would break, so the chapter
+    has to sit between two dashes or end the id: `DRAFT-BOOK-0001-CH-0004`,
+    `STYLE-BOOK-0001-CH-0004-<model>`, `TRANSLATE-BOOK-0001-CH-0004-it`.
+    """
+    return f"-{chapter}-" in task_id or task_id.endswith(f"-{chapter}")
+
+
+def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str, locale: str | None = None, chapter: str | None = None) -> list[str]:
     dropped = []
     for task in plan["tasks"]:
         task_id = str(task["id"])
         if book_id not in task_id:
+            continue
+        if chapter and not _task_names_chapter(task_id, chapter):
             continue
         if scope == "translation":
             # `TRANSLATE-<book>-<chapter>-<locale>`: this locale's translations and
@@ -11350,7 +11415,36 @@ def _reset_task_ids(plan: dict[str, object], book_id: str, scope: str, locale: s
     return sorted(dropped)
 
 
-def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confirm: bool = False, locale: str | None = None) -> dict[str, object]:
+def _forget_chapter_in_locale(state_path: Path, chapter: str) -> None:
+    """Remove one chapter from a locale's state without disturbing the others.
+
+    `boundary` is the end-state the next chapter is translated against, and it
+    belongs to whichever chapter was translated last. Removing a chapter from the
+    middle leaves it correct; removing the last one leaves it describing prose the
+    locale no longer has, so it is cleared and the next translation starts from
+    nothing — the same position chapter one is always in.
+    """
+    state = _read_json(state_path)
+    completed = [str(item) for item in state.get("completed_chapters", [])]
+    if chapter not in completed:
+        return
+    was_last = completed[-1] == chapter
+    state["completed_chapters"] = [item for item in completed if item != chapter]
+    state["boundary_hashes"] = {key: value for key, value in state.get("boundary_hashes", {}).items() if key != chapter}
+    hashes = state.get("input_hashes")
+    if isinstance(hashes, dict):
+        for section in ("source", "canon"):
+            recorded = hashes.get(section)
+            if isinstance(recorded, dict):
+                recorded.pop(chapter, None)
+    if was_last:
+        state["boundary"] = ""
+    state["status"] = "in_progress" if state["completed_chapters"] else "empty"
+    state["current"] = True
+    _write_json(state_path, state)
+
+
+def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confirm: bool = False, locale: str | None = None, chapter: str | None = None) -> dict[str, object]:
     """Return a book to its pre-writing state without leaving the control plane
     claiming work whose output is gone.
 
@@ -11360,6 +11454,9 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
     state, each translation workspace, the artifact registry and its derived
     views. Canon, the brief, the continuity and the locale aids are input and
     are never touched.
+
+    `chapter` narrows `prose` and `translation` to one chapter, so a rule added
+    after the writing costs the chapter that broke it rather than the book.
     """
     if scope not in {"prose", "design", "translation"}:
         raise BookForgeError(f"Unknown reset scope: {scope} (prose, design, translation)")
@@ -11369,6 +11466,16 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
     book = root / "books" / book_id
     if not (book / "book.yaml").is_file():
         raise BookForgeError(f"Unknown book: {book_id}")
+    if chapter:
+        # A rule written after the prose is exactly the rule that prose never met,
+        # so one chapter has to be redoable at the cost of one chapter. Design has
+        # no per-chapter unit — the outline is written whole — and narrowing it
+        # would delete a chapter's design while the outline still promises it.
+        if scope == "design":
+            raise BookForgeError("reset --chapter is not available with --scope design; the outline is written whole")
+        known_chapters = [str(row.get("id")) for row in _read_json(book / "outline.yaml").get("chapters", [])]
+        if chapter not in known_chapters:
+            raise BookForgeError(f"Unknown chapter: {chapter}. This book has: {', '.join(known_chapters) or 'none'}")
     if scope == "translation":
         # Guessing the language would delete the wrong one, and a translation is
         # the one thing here that a person cannot tell apart by looking at the plan.
@@ -11384,7 +11491,7 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
     continuity = str(_read_json(book / "book.yaml").get("continuity", "CNT-0001"))
 
     removed = []
-    for path in _reset_paths(root, book_id, scope, locale):
+    for path in _reset_paths(root, book_id, scope, locale, chapter):
         if path.is_dir():
             shutil.rmtree(path)
         elif path.exists():
@@ -11392,18 +11499,49 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
         removed.append(str(path.relative_to(root)))
 
     plan = _load_plan(root)
-    dropped = _reset_task_ids(plan, book_id, scope, locale)
-    plan["tasks"] = [task for task in plan["tasks"] if str(task["id"]) not in set(dropped)]
-    plan["attempts"] = [row for row in plan.get("attempts", []) if str(row.get("task")) not in set(dropped)]
+    dropped = _reset_task_ids(plan, book_id, scope, locale, chapter)
+    gone = set(dropped)
+    plan["tasks"] = [task for task in plan["tasks"] if str(task["id"]) not in gone]
+    plan["attempts"] = [row for row in plan.get("attempts", []) if str(row.get("task")) not in gone]
+    for task in plan["tasks"]:
+        # A surviving task pointing at a dropped one waits for something that will
+        # never arrive, and the frontier's depth walk reads a task id that is no
+        # longer in the plan.
+        task["deps"] = [dep for dep in task.get("deps", []) if str(dep) not in gone]
     _save_plan(root, plan)
 
     locales = []
-    if scope == "translation":
+    if scope == "translation" and chapter:
+        state_path = book / "translations" / str(locale) / "state.yaml"
+        _forget_chapter_in_locale(state_path, chapter)
+        locales.append(str(locale))
+    elif scope == "translation":
         # The book's own state records which chapters are closed in the source
         # language, and this reset did not touch one of them.
         state_path = book / "translations" / str(locale) / "state.yaml"
         _write_json(state_path, {"schema": 1, "locale": locale, "completed_chapters": [], "current": True, "boundary_hashes": {}})
         locales.append(str(locale))
+    elif chapter:
+        state_path = book / "state.yaml"
+        state = _read_json(state_path)
+        closed = [str(item) for item in state.get("closed_chapters", [])]
+        was_last = bool(closed) and closed[-1] == chapter
+        state["closed_chapters"] = [item for item in closed if item != chapter]
+        if was_last:
+            # The tail is what the next chapter is written against, and it was this
+            # chapter's. Recover it from the chapter that is now last rather than
+            # leaving the writer two thousand characters of deleted prose.
+            state["previous_chapter_tail"] = ""
+            if state["closed_chapters"]:
+                previous = book / "manuscript" / "chapters" / f"{state['closed_chapters'][-1]}.md"
+                if previous.is_file():
+                    state["previous_chapter_tail"] = previous.read_text(encoding="utf-8")[-2000:]
+        # `consequences` is left whole on purpose: the rows carry no chapter, and
+        # the sixteen chapters that stay are written against them.
+        _write_json(state_path, state)
+        for state_path in sorted(book.glob("translations/*/state.yaml")):
+            _forget_chapter_in_locale(state_path, chapter)
+            locales.append(state_path.parent.name)
     else:
         _write_json(book / "state.yaml", {"schema": SCHEMA_VERSION, "closed_chapters": []})
         for state_path in sorted(book.glob("translations/*/state.yaml")):
@@ -11442,6 +11580,7 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
     return {
         "book": book_id,
         "scope": scope,
+        "chapter": chapter or "",
         "removed_paths": removed,
         "dropped_tasks": dropped,
         "dropped_artifacts": sorted(dropped_artifacts),
@@ -11488,6 +11627,7 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--book", required=True)
     reset.add_argument("--scope", choices=("prose", "design", "translation"), default="prose")
     reset.add_argument("--locale", help="Required with --scope translation: the locale to redo")
+    reset.add_argument("--chapter", help="Narrow prose or translation to one chapter, e.g. CH-0001")
     reset.add_argument("--yes", action="store_true", help="Required: reset removes written work")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
@@ -11610,7 +11750,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "reset":
-            print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale), sort_keys=True))
+            print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale, chapter=args.chapter), sort_keys=True))
         elif args.command == "add-book":
             print(json.dumps(add_book(args.project, args.title, continuity=args.continuity, author=args.author), sort_keys=True))
         elif args.command == "relate":

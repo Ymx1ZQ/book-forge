@@ -23,7 +23,15 @@ def _prose(words=700):
     return f'# The Ninth Tide\n\nMara set the lamp on the stone. "Open it," she said.\n\n{body}\n\nThe warden did not move.\n'
 
 
+def _prose_it(words=700):
+    """The same chapter in Italian: same numbers in the same order, one heading in
+    sentence case, and no ten-word run of the source left standing."""
+    body = " ".join(f"Mara contò la pietra al gradino {index} e il guardiano non disse nulla." for index in range(words // 12 + 2))
+    return f'# La nona marea\n\nMara posò la lampada sulla pietra. «Aprilo», disse.\n\n{body}\n\nIl guardiano non si mosse.\n'
+
+
 PROSE = _prose()
+PROSE_IT = _prose_it()
 
 
 class ScriptedProvider:
@@ -34,11 +42,18 @@ class ScriptedProvider:
         self.chapters = chapters
         self.fail = dict(fail or {})
         self.calls = []
+        self.payload = None
 
     def _envelope(self, value, role, finish="stop"):
+        # Echo the model and variant the envelope asked for. A role the project
+        # pins elsewhere — the translation critic is pinned on landfall — makes a
+        # hard-coded model come back as a receipt that does not match the pin.
+        payload = self.payload or {}
         return {
             "text": json.dumps(value),
-            "provider": "openrouter", "model": MODEL, "variant": ROLE_VARIANTS.get(role, "high"),
+            "provider": "openrouter",
+            "model": payload.get("model", MODEL),
+            "variant": payload.get("variant", ROLE_VARIANTS.get(role, "high")),
             "session_id": f"ses-{len(self.calls)}", "tokens": {"input": 100, "output": 200},
             "cost": 0.001, "latency_ms": 5, "finish": finish,
         }
@@ -65,6 +80,7 @@ class ScriptedProvider:
 
     def __call__(self, role, envelope, attempt_dir):
         self.calls.append(role)
+        self.payload = envelope.get("payload") or {}
         remaining = self.fail.get(role, 0)
         if remaining:
             self.fail[role] = remaining - 1
@@ -85,7 +101,11 @@ class ScriptedProvider:
         if role == "reviser":
             return self._envelope({"prose_markdown": PROSE, "beat_map": [{"beat": "Mara wants the log and the warden will not open it", "evidence": "Open it, she said."}], "consequences": [], "dispositions": [], "reader_state": "Mara asked."}, role)
         if role == "translator":
-            return self._envelope({"translated_markdown": PROSE.replace("Open it", "Aprilo"), "glossary_updates": [], "boundary": "Mara ha chiesto."}, role)
+            return self._envelope({"translated_markdown": PROSE_IT, "glossary_updates": [], "boundary": "Mara ha chiesto."}, role)
+        if role == "translation-critic":
+            return self._envelope({"findings": [], "verdict": "faithful"}, role)
+        if role == "locale-reader":
+            return self._envelope({"summary": "Mara asks the warden to open it.", "followed": True, "stumbles": []}, role)
         raise AssertionError(role)
 
 
@@ -136,6 +156,54 @@ class AdvanceEndToEndTests(AdvanceFixture):
     def test_an_unknown_stage_is_refused(self):
         with self.assertRaises(self.bf.BookForgeError):
             self.bf.advance_book(self.project, self.book, until="publish", provider=ScriptedProvider(self.bf))
+
+
+class ChapterResetTests(AdvanceFixture):
+    """Redoing one chapter has to cost one chapter. The whole-book reset would have
+    thrown away every other chapter and every translation of them; deleting the file
+    by hand leaves the plan reporting DRAFT as succeeded, so the writer is never
+    re-run and the restart silently does nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self.bf.advance_book(self.project, self.book, until="chapters", provider=ScriptedProvider(self.bf))
+        self.bf.add_translation(self.project, self.book, "it")
+        style = self.project / f"books/{self.book}/translations/it/style.md"
+        style.write_text(
+            "---\nid: LOC\n---\n\n# Locale Style\n\n<!-- bf:block style -->\n"
+            "Formal address throughout; guillemets for dialogue; past tense preserved.\n",
+            encoding="utf-8",
+        )
+        self.bf.advance_book(self.project, self.book, until="translate", locales=["it"], provider=ScriptedProvider(self.bf))
+
+    def test_the_reset_chapter_is_rewritten_by_the_next_run_and_its_translation_follows(self):
+        book = self.project / f"books/{self.book}"
+        kept = (book / "manuscript/chapters/CH-0002.md").read_bytes()
+        kept_translation = (book / "translations/it/chapters/CH-0002.md").read_bytes()
+
+        self.bf.reset_book(self.project, self.book, confirm=True, chapter="CH-0001")
+        self.assertFalse((book / "manuscript/chapters/CH-0001.md").exists())
+
+        provider = ScriptedProvider(self.bf)
+        self.bf.advance_book(self.project, self.book, until="translate", locales=["it"], provider=provider)
+
+        self.assertTrue((book / "manuscript/chapters/CH-0001.md").is_file())
+        self.assertTrue((book / "translations/it/chapters/CH-0001.md").is_file())
+        self.assertEqual((book / "manuscript/chapters/CH-0002.md").read_bytes(), kept)
+        self.assertEqual((book / "translations/it/chapters/CH-0002.md").read_bytes(), kept_translation)
+        self.assertEqual(provider.calls.count("writer"), 1)
+        self.assertEqual(provider.calls.count("translator"), 1)
+        self.assertNotIn("designer", provider.calls)
+
+    def test_the_book_state_records_the_rewritten_chapter_in_its_place(self):
+        self.bf.reset_book(self.project, self.book, confirm=True, chapter="CH-0001")
+        state = self.bf._read_json(self.project / f"books/{self.book}/state.yaml")
+        self.assertEqual(state["closed_chapters"], ["CH-0002"])
+        self.bf.advance_book(self.project, self.book, until="translate", locales=["it"], provider=ScriptedProvider(self.bf))
+        state = self.bf._read_json(self.project / f"books/{self.book}/state.yaml")
+        self.assertEqual(sorted(state["closed_chapters"]), ["CH-0001", "CH-0002"])
+        locale_state = self.bf._read_json(self.project / f"books/{self.book}/translations/it/state.yaml")
+        self.assertEqual(sorted(locale_state["completed_chapters"]), ["CH-0001", "CH-0002"])
 
 
 class StageRetryTests(AdvanceFixture):

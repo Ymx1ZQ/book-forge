@@ -3477,7 +3477,7 @@ The other measurements. Words against a 2000 target: deepseek 1982, glm 1702, qw
 
 ## A translation can be redone without throwing away the prose ✅
 
-**Status: 🔄 In progress — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 **Found on landfall's first Italian edition.** The locale style ruled `passato remoto` for action without excepting stative and durative verbs, and the translator was still on the default `low` effort, so three chapters came back with `Binta stette` for "Binta stood the watch" and with calques rendered word by word — `teneva i suoi polmoni dal dimenticare` for "kept her lungs from forgetting". Both causes are fixed where they live: the style now makes the imperfetto the base tense and forbids the remoto forms that stop a reader, and `roles.translator` is pinned to a model and an effort. Redoing the work is then a matter of asking again.
 
@@ -3502,7 +3502,7 @@ Nothing asks again. `translate run` translates a chapter only when its target fi
 
 ## A translation is read back before it is kept ✅
 
-**Status: 🔄 Proposed — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 The prose has a review stack — cold reader, technical editor, four style reviewers, reviser. A translation has one call and nobody reads it. Landfall's Italian shipped `Binta stette` for "Binta stood the watch" and `teneva i suoi polmoni dal dimenticare` for "kept her lungs from forgetting", and the pipeline reported success both times.
 
@@ -3558,7 +3558,7 @@ An answer bounded by a constant is the invariant this whole engine is built on, 
 
 ## An attempt id is never handed out twice ✅
 
-**Status: 🔄 In progress — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 **Found on landfall, one command after the translation reset.** Re-translating died on `Execution receipt is immutable`: the claim was given `ATT-0040`, whose directory already held a receipt from the run that wrote chapter one.
 
@@ -3609,7 +3609,7 @@ Four out of ten right is usable as advice and would have been a disaster as a ga
 
 ## An advisory pass cannot block the run it advises ✅
 
-**Status: 🔄 In progress — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 **Found on the final review of landfall's Italian.** One chapter of three was read. CH-0002's critic answered with prose instead of the contract, and CH-0003 then died on `Run does not accept dispatch while blocked` — not because anything was wrong with CH-0003, but because the failure on the chapter before it had blocked the run.
 
@@ -3690,7 +3690,7 @@ And the wait is skipped whenever the runner is not the real one. A substituted p
 
 ## The checks are scored by the reader they feed ✅
 
-**Status: 🔄 Proposed — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 The deterministic checks are cheap and they are sometimes wrong. On landfall's three Italian chapters the glossary check reported twelve missing terms and was right about five; after the matcher was repaired it reports one, and that one is a polysemous word the critic correctly declined to act on. Both of those numbers were counted by hand, by reading twelve findings against three chapters and deciding one at a time. Nothing in the pipeline knows its own precision, so the next time it drifts, the person who finds out is whoever is reading the book.
 
@@ -3716,7 +3716,7 @@ A sampling audit would cost a call per sample and measure the check by asking a 
 
 ## A review says whether it converged ✅
 
-**Status: 🔄 In progress — 2026-09-01**
+**Status: ✅ Done — 2026-09-01**
 
 **Found by reading the pass log rather than the book.** CH-0001 has been read back four times. The passes returned 17 findings, then 6, then 12, and the last twelve were all `meaning` — on a chapter whose overall verdict in that same answer was `faithful`. A chapter the critic calls faithful while listing twelve changes of meaning is a contradiction, and nothing looked at it.
 
@@ -4098,9 +4098,9 @@ And the gate is right to be strict — a disposition silently skipped is a findi
 **Done when:** The reviser's list is the size the engine chose, not the size four advisors happened to produce.
 
 
-## A lease outlives the call it protects 🔄
+## A lease outlives the call it protects ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-04**
 
 **`Only a running attempt can be marked accepted` appeared three times tonight and was twice left undiagnosed for want of data.** The data is now in: **the lease is shorter than the calls it covers.** `LEASE_SECONDS = 300.0`, and `OPENCODE_CALL_TIMEOUT = 900.0` — so a call may legitimately run three times longer than the claim protecting it, and when it does, the claim lapses while the work is still healthy. The engine then takes its own answer and finds the attempt no longer running.
 
@@ -4127,7 +4127,7 @@ The critic exceeds its lease on **46 calls out of 51**. Half this engine's roles
 - [x] Test: an abandoned claim is still reclaimable once the lease has passed — unchanged and still covered by the recovery tests, which set their own lease rather than reading the constant
 - [x] The measurement above is recorded beside the constant, so the next person who shortens it knows what it costs
 - [x] Suite green: 703 passed, 405 subtests (era 701). Reinstall, commit & push
-- [~] `advance` runs a chapter without the error appearing
+- [x] `advance` runs a chapter without the error appearing. **Measured on landfall:** the last two occurrences were ATT-0301 and ATT-0312, at 02:32 and 03:17 on 2026-09-03; the derived lease shipped at 03:28 the same morning. The 208 attempts since — ATT-0313 to ATT-0520, seventeen chapters and seventeen translations, through 2026-09-04 15:38 — carry none.
 
 **Done when:** A claim outlives the work it covers, and only a dead process loses it.
 
@@ -4183,9 +4183,9 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 **Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got — undertaken as the design cleanup it is, and not as a cure for a rate it does not explain.
 
 
-## A role that answers on the second ask is given a second ask 🔄
+## A role that answers on the second ask is given a second ask ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-04**
 
 **The blocker on CH-0009, addressed where the evidence actually points.** The technical editor spends its reasoning ceiling about half the time on that chapter, and the three levers that could change the question have each been ruled out by measurement: the answer bound is in place, `medium` effort was tried and returned `reasoning 31998, output 0` at the first ask, and trimming the imports saves under 2% because the growth is inside the canon blocks rather than in how many are pulled.
 
@@ -4203,16 +4203,16 @@ The stage gives the whole pass three attempts, and each of them costs a fresh ca
 - [x] Test: a reviewer empty every time still fails, and the stage still sees it
 - [x] Test: the translation critic is unchanged, since re-asking was measured useless there
 - [x] Suite green: 711 passed, 405 subtests (era 703). Reinstall, commit & push
-- [~] CH-0009 closes and the run goes on
+- [x] CH-0009 closes and the run goes on. It stands at 1990 words in the manuscript and is translated into Italian; the book went on to seventeen chapters.
 
 **Writing it put back a defect fixed three hours earlier, and the test caught it in one run.** The re-ask raises from inside the executor, which is *before* the block that settles the claims — so a reviewer empty on every ask left both claims at `running`, exactly the state that becomes `outcome_unknown` and stops the run for a person. The claims are now held from the moment they are taken rather than from the moment the answers come back. The lesson is not about this defect: a fix that moves where an exception is raised moves what is left unsettled behind it, and the two have to be looked at together.
 
 **Done when:** A failure that a second ask fixes costs a second ask, not a pass.
 
 
-## The reviser's budget counts the dispositions as well as the prose 🔄
+## The reviser's budget counts the dispositions as well as the prose ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-04**
 
 **Measured on CH-0013, which stopped the run three times with `Expecting ',' delimiter: line 1 column 17602`.** The reviser's output budget is `min(8000, max(1000, target_words * 2))`, so a 2000-word chapter is given 4000 tokens. Its three answers came back at 5251, 5771 and 6069 output tokens, cut mid-string every time.
 
@@ -4230,7 +4230,7 @@ So the budget is right about the half it counts and blind to the half it does no
 - [x] Test: a chapter with many findings is given more room than the same chapter with few
 - [x] Test: the budget never exceeds the role's declared ceiling
 - [x] Suite green: 715 passed, 405 subtests (era 711). Reinstall, commit & push
-- [~] CH-0013 closes
+- [x] CH-0013 closes. 2042 words in the manuscript, translated into Italian, and the truncation has not returned in the fourteen chapters revised since.
 
 **Done when:** The reviser is given room for the answer it was asked for, not for half of it.
 
@@ -4252,9 +4252,9 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 **Done when:** A role's declared output budget is the budget the provider enforces, or the plan records that it cannot be.
 
 
-## A chapter that will not translate does not stop the sixteen behind it 🔄
+## A chapter that will not translate does not stop the sixteen behind it ✅
 
-**Status: 🔄 In progress — 2026-09-03**
+**Status: ✅ Done — 2026-09-04**
 
 **Found translating seventeen chapters.** CH-0005 came back twice carrying `i suoi occhi`, which the locale forbids — the possessive on a body part, one of the defects the Italian rules exist to catch. The gate refused it both times, correctly, and then the whole `translate run` stopped: `Translation blocked after one repair`. Thirteen chapters behind it were never attempted.
 
@@ -4275,7 +4275,9 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 - [x] Test: a translation refused once and correct the second time is kept — already covered, and the existing test that asserted *one* repair now asserts the count the engine declares
 - [x] Test: the skipped chapters are named in the route's output
 - [x] Suite green: 716 passed, 405 subtests (era 715). Reinstall, commit & push
-- [~] The seventeen chapters translate, or the ones that cannot are named
+- [x] The seventeen chapters translate, or the ones that cannot are named. **Measured:** CH-0007 and CH-0010 were set aside on the run that found this, both on the same locale rule (`su la` for `sulla`), and both were named in `refused.json` rather than stopping the run. Both landed on the following run. All seventeen are translated.
+
+**Left open, found while closing this:** `refused.json` is written when a chapter is set aside and never cleared when that chapter later succeeds. Landfall's still names CH-0007 and CH-0010 although both are translated, so the file reads as a list of broken chapters when it is a record of one past run. Small, and it misleads exactly the person who goes looking after a refusal.
 
 **One thing came out of building it that the plan did not say.** The last refused attempt was settled with `block=True`, which stops the run — so setting the chapter aside was not enough on its own: the chapter behind it still could not dispatch. It settles with `block=False` now. The lesson is the one from three hours earlier in another form: deciding to carry on is not the same as leaving the run in a state that can.
 
@@ -4363,7 +4365,7 @@ So the gate refuses a state its sibling feature now produces routinely. The list
 **What it must not be given, and why that is the design.** The source, because seeing it makes a calque legible. The glossary, because a term that is unreadable in the target language must be reported as unreadable, not excused as agreed. This role is the only one in the engine whose value comes from what it is denied.
 
 **Tasks:**
-- [ ] `locale-reader` role, prompt and budget: it receives the translated chapter and the locale style, and refuses to be given the source
+- [x] `locale-reader` role, prompt and budget: it receives the translated chapter and the locale style, and refuses to be given the source
 - [x] Its capsule is asserted to carry no `source_markdown` and no glossary, so the denial cannot erode
 - [x] It answers with what stopped it, quoting the sentence, and never proposes a rendering — it is a reader, not a translator
 - [x] Its findings merge with the critic's for the repair, marked by origin so a rate can be measured per source
@@ -4399,3 +4401,37 @@ Both named the same two moments where the writing improves, and both are the mom
 - [~] CH-0001 rewritten in English against the new preset, and read again by a reader who has not seen it
 
 **Done when:** A reader notices the harbour and not the author.
+
+
+## One chapter can be redone without throwing away the book ✅
+
+**Status: ✅ Done — 2026-09-04**
+
+**Found trying to rewrite CH-0001 after the style preset changed.** `reset --scope prose` is whole-book: redoing the first chapter deletes the other sixteen and every translation of them. The only alternative is deleting the file by hand, which leaves the plan reporting DRAFT as succeeded — the exact failure `reset_book`'s own docstring says it exists to prevent.
+
+**This is the same shape the translation scope already fixed**, and for the same reason: a rule written after the work is exactly the rule that work never met. The style preset gained three rules today; the chapters written before them are the chapters that need rewriting, and there is no way to rewrite one.
+
+**Fix.** `--chapter` narrows a scope to a single chapter. On `prose`: its manuscript file, its work directory, its reviews, its tasks and attempts, its entry in the book's closed list, and — because a chapter's translation is derived from prose that no longer exists — that chapter's file and completion marker in every locale. Nothing else moves.
+
+**The one thing to get right.** A chapter removed from the middle leaves the ones after it written against a version that is gone. That is already true of any revision and the canon audit is what catches it; what must not happen is the reset silently *renumbering* or leaving a locale claiming a chapter it no longer has.
+
+**What a chapter reset deliberately does not undo:** the consequences the chapter registered in `state.yaml`. They carry no chapter attribution — a consequence is a fact about the world, recorded by whichever chapter first established it — so there is nothing to filter on, and dropping the list would cost the sixteen chapters that also depend on it. The rewrite re-registers what it re-establishes; a fact that survives in the list but no longer in the prose is what the canon audit reads for.
+
+**Tasks:**
+- [x] `reset --book <id> --scope prose --chapter <CH>` removes one chapter's prose, work, reviews, tasks and attempts
+- [x] `--chapter` narrows `--scope translation` the same way, because a translation can be the only bad half and the filter is the same one
+- [x] `--chapter` is refused with `--scope design`, which has no per-chapter unit
+- [x] The tail the next chapter is written against is recomputed when the reset chapter was the last closed one
+- [x] It clears that chapter from the book's closed list and from every locale's completed list, and deletes its translated file
+- [x] It refuses a chapter the book does not have, naming the ones it does
+- [x] `--yes` is required, as every other reset requires it
+- [x] Test: one chapter is reset and the others keep their prose, their translations and their closed markers
+- [x] Test: the reset chapter is rewritten by the next run, and its translation follows
+- [x] Test: `--scope prose` without `--chapter` still removes what it removed before
+- [x] A translation task depends on the chapter before it in the book, not on the last one translated
+- [x] A dropped task's id leaves no surviving task depending on it
+- [x] Suite green: 744 passed, 405 subtests (era 726). Reinstall, commit & push
+
+**Measured while testing it, 2026-09-04.** Resetting CH-0001 and running again crashed with `RecursionError` inside `ready_frontier`'s depth walk. `TRANSLATE-<book>-<chapter>-<locale>` depended on the translation of `completed_chapters[-1]` — the last chapter *translated*, which is history and not structure. With the first chapter reset, the second is the last completed, so the first's new task depended on the second while the second still depended on the first. The dependency is now the latest completed chapter that precedes this one in the book's order, which still skips a refused chapter (a locale rule stops a chapter, never a book) and cannot point forward. `reset` also strips the dropped ids out of every surviving task's `deps`, so nothing is left waiting on a task that no longer exists.
+
+**Done when:** Rewriting one chapter costs one chapter.
