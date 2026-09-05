@@ -30,12 +30,12 @@ class RuntimeSyncTests(unittest.TestCase):
         """Reproduce a project generated before the effort ladder was corrected."""
         config = json.loads((self.project / "opencode.json").read_text())
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
-        model["options"]["reasoningEffort"] = "medium"
+        model["options"]["reasoning"]["effort"] = "medium"
         model["variants"] = {
-            "low": {"reasoningEffort": "low"},
-            "mid": {"reasoningEffort": "medium"},
-            "high": {"reasoningEffort": "high"},
-            "xhigh": {"reasoningEffort": "xhigh"},
+            "low": {"reasoning": {"effort": "low"}},
+            "mid": {"reasoning": {"effort": "medium"}},
+            "high": {"reasoning": {"effort": "high"}},
+            "xhigh": {"reasoning": {"effort": "xhigh"}},
         }
         (self.project / "opencode.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         agents = self.project / ".opencode" / "agents"
@@ -56,7 +56,7 @@ class RuntimeSyncTests(unittest.TestCase):
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
-        self.assertEqual(model["options"]["reasoningEffort"], "high")
+        self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertEqual(set(model["variants"]), {"low", "medium", "high", "max"})
         # Chorus catalog is restored as well (7 models by default).
         self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
@@ -112,7 +112,7 @@ class ChorusCatalogTests(unittest.TestCase):
         self.assertNotIn("openrouter/z-ai/glm-5.3", self.bf.CHORUS_DEFAULT_MODELS)
         entry = self.bf._opencode_config()["provider"]["openrouter"]["models"]["z-ai/glm-5.3-flash"]
         self.assertEqual(entry["options"]["provider"]["only"], ["z-ai"])
-        self.assertEqual(entry["options"]["reasoningEffort"], "high")
+        self.assertEqual(entry["options"]["reasoning"]["effort"], "high")
         self.assertEqual(sorted(entry["variants"]), ["high", "low", "max", "medium"])
         self.assertEqual(entry["limit"]["context"], 1048576)
 
@@ -120,7 +120,7 @@ class ChorusCatalogTests(unittest.TestCase):
         config = self.bf._opencode_config(["openrouter/newvendor/newmodel-1"])
         entry = config["provider"]["openrouter"]["models"]["newvendor/newmodel-1"]
         self.assertNotIn("provider", entry["options"])
-        self.assertEqual(entry["options"]["reasoningEffort"], self.bf.DEFAULT_EFFORT)
+        self.assertEqual(entry["options"]["reasoning"]["effort"], self.bf.DEFAULT_EFFORT)
 
     def test_an_advisor_without_its_own_lens_falls_back_to_the_generic_prompt(self):
         import tempfile

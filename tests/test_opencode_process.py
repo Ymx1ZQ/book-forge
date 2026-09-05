@@ -125,6 +125,99 @@ class WallClockTests(unittest.TestCase):
         self.assertIsNone(self.bf._session_id_in("Killed\n"))
 
 
+class InheritedStdinTests(unittest.TestCase):
+    """Seven calls launched from a background script produced zero provider events
+    in 900s each, while five replays of the same argv, environment and envelope
+    answered in 139-294s. opencode inherited the caller's stdin, and a live pipe
+    there is something it waits on. The seventeen chapters written before it were
+    protected only by having been launched with `nohup`."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def _with_a_live_pipe_on_fd_zero(self):
+        """Put an open pipe on fd 0, the way a background launcher does."""
+        read_end, write_end = os.pipe()
+        saved = os.dup(0)
+        os.dup2(read_end, 0)
+
+        def restore():
+            os.dup2(saved, 0)
+            for handle in (saved, read_end, write_end):
+                try:
+                    os.close(handle)
+                except OSError:
+                    pass
+
+        self.addCleanup(restore)
+
+    def test_a_child_that_reads_stdin_is_not_left_waiting_on_the_caller_s_pipe(self):
+        self._with_a_live_pipe_on_fd_zero()
+        started = time.monotonic()
+        result = self.bf._run_opencode_process(
+            ["sh", "-c", "cat > /dev/null; echo answered"],
+            cwd=Path.cwd(), env=dict(os.environ), timeout=20.0, what="call for writer",
+        )
+        self.assertEqual(result.stdout.strip(), "answered")
+        self.assertLess(time.monotonic() - started, 10, "the child waited on a pipe nobody was going to write to")
+
+    def test_the_probes_close_it_too(self):
+        seen = []
+        original = subprocess.run
+
+        def record(argv, **kwargs):
+            seen.append((list(argv), kwargs.get("stdin")))
+            return original(["true"], capture_output=True, text=True)
+
+        subprocess.run = record
+        self.addCleanup(lambda: setattr(subprocess, "run", original))
+        try:
+            self.bf._opencode_version("opencode")
+        except Exception:
+            pass
+        self.assertTrue(seen, "the version probe did not run")
+        for argv, stdin in seen:
+            self.assertEqual(stdin, subprocess.DEVNULL, f"{argv} left stdin inherited")
+
+
+class TheDeclaredBudgetReachesTheProviderTests(unittest.TestCase):
+    """`max_output_tokens` was a number written into the payload and read by the
+    model as advice: the request asked the provider for 32000 whatever the role
+    declared, so a model could spend the whole ceiling reasoning and have nothing
+    left to write. The cap is shared between reasoning and completion — an override
+    of 120 came back `output: 56, reasoning: 64` — so the budget cannot be a limit
+    on what a role writes. It is made room reasoning cannot take instead."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_the_cap_is_the_providers_own_default_plus_the_role_s_budget(self):
+        self.assertEqual(self.bf.OPENCODE_OUTPUT_TOKEN_MAX, 32000)
+        for role, (_input, output) in self.bf.ROLE_BUDGETS.items():
+            self.assertGreater(output, 0, role)
+            self.assertGreater(
+                self.bf.OPENCODE_OUTPUT_TOKEN_MAX + output, self.bf.OPENCODE_OUTPUT_TOKEN_MAX,
+                f"{role} would be given no room its reasoning cannot take",
+            )
+
+    def test_the_override_is_the_variable_opencode_reads(self):
+        # Read out of the binary and confirmed live before it was written down.
+        self.assertEqual(self.bf.OPENCODE_OUTPUT_TOKEN_MAX_ENV, "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX")
+
+    def test_the_effort_ladder_uses_the_key_the_provider_reads(self):
+        """`reasoningEffort` is not a key `@openrouter/ai-sdk-provider` knows: it
+        travelled as an unknown field and was dropped, so every variant set no
+        effort at all, which is why lowering it never helped any role."""
+        config = self.bf._opencode_config()
+        for model_id, entry in config["provider"]["openrouter"]["models"].items():
+            self.assertIn("reasoning", entry["options"], model_id)
+            self.assertIn("effort", entry["options"]["reasoning"], model_id)
+            self.assertNotIn("reasoningEffort", entry["options"], model_id)
+            for name, variant in entry.get("variants", {}).items():
+                self.assertIn("effort", variant.get("reasoning", {}), f"{model_id}/{name}")
+                self.assertNotIn("reasoningEffort", variant, f"{model_id}/{name}")
+
+
 class TimeoutReportingTests(unittest.TestCase):
     """A timeout after the provider accepted the call may already have been paid
     for, and that is a judgement for a person, not a silent retry."""

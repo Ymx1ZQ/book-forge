@@ -137,6 +137,41 @@ class TranslateTests(unittest.TestCase):
         recorded = json.loads(
             (self.project / f"books/{self.book}/translations/it-IT/refused.json").read_text())
         self.assertEqual(recorded["refused"][0]["chapter"], "CH-0002")
+        self.assertIsInstance(recorded["refused"][0]["when"], (int, float), "a refusal says when it happened")
+
+    def test_a_chapter_refused_once_and_translated_next_time_stops_being_listed(self):
+        """Landfall's record still named CH-0007 and CH-0010 while both were
+        translated: the file was written when a chapter was set aside and never
+        touched again when it later landed, so the one file a person opens after a
+        refusal to see what needs redoing was naming chapters that did not."""
+        bad = {"translated_markdown": "# Capitolo\n\nManca il numero.", "glossary_updates": [], "boundary": ""}
+        chapters = self.project / f"books/{self.book}/chapters"
+        source = self.project / f"books/{self.book}/manuscript/chapters"
+        for order in (2,):
+            (chapters / f"CH-{order:04d}.json").write_text(json.dumps({
+                "schema": 1, "book": self.book, "id": f"CH-{order:04d}", "order": order, "pov": "Mara",
+                "beats": ["Find signal"], "target_words": 30, "imports": ["UNI-0001#kernel"], "pivotal": None,
+            }))
+            (source / f"CH-{order:04d}.md").write_text(
+                f"# Chapter {order}\n\nMara finds signal {order} in the drowned city. "
+                "Memory changes every choice, but her name remains Mara.")
+        record = self.project / f"books/{self.book}/translations/it-IT/refused.json"
+
+        refusing = TranslationProvider([translated(1, 1)] + [bad] * self.bf.TRANSLATION_ATTEMPTS)
+        self.bf.translate_next(self.project, self.book, "it-IT", provider=refusing, run_all=True)
+        self.assertEqual([row["chapter"] for row in json.loads(record.read_text())["refused"]], ["CH-0002"])
+
+        landing = TranslationProvider([translated(2, 2)] * 3)
+        result = self.bf.translate_next(self.project, self.book, "it-IT", provider=landing, run_all=True)
+        self.assertEqual(json.loads(record.read_text())["refused"], [], "the chapter landed and left the list")
+        self.assertEqual(result["refused"], [])
+
+    def test_nothing_refused_is_written_down_rather_than_left_to_be_inferred(self):
+        provider = TranslationProvider([translated(1, 1), translated(2, 2)])
+        self.bf.translate_next(self.project, self.book, "it-IT", provider=provider, run_all=True)
+        record = self.project / f"books/{self.book}/translations/it-IT/refused.json"
+        self.assertTrue(record.is_file(), "an empty list is stated, not inferred from a missing file")
+        self.assertEqual(json.loads(record.read_text())["refused"], [])
 
 
 if __name__ == "__main__":

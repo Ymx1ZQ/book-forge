@@ -32,13 +32,13 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertNotIn("default_agent", config)
         self.assertNotIn("whitelist", config["provider"]["openrouter"])
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
-        self.assertEqual(model["options"]["reasoningEffort"], "high")
+        self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
         self.assertEqual(model["variants"], {
-            "low": {"reasoningEffort": "low"},
-            "medium": {"reasoningEffort": "medium"},
-            "high": {"reasoningEffort": "high"},
-            "max": {"reasoningEffort": "max"},
+            "low": {"reasoning": {"effort": "low"}},
+            "medium": {"reasoning": {"effort": "medium"}},
+            "high": {"reasoning": {"effort": "high"}},
+            "max": {"reasoning": {"effort": "max"}},
         })
 
         expected = {
@@ -99,6 +99,20 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertTrue(report["json_events"])
         self.assertTrue(report["session_resume"])
         self.assertEqual(set(report["variants"]), {"low", "medium", "high", "max"})
+        self.assertEqual(report["roles_without_an_agent"], [])
+
+    def test_a_project_behind_the_engine_s_roles_is_named_not_left_to_be_found(self):
+        """`.opencode/agents/` is written when a project is created and never again.
+        The locale-reader shipped with a prompt, a budget and seven tests, and
+        landfall's first translation after it dispatched a role the project could
+        not resolve — which for an advisory role is indistinguishable from clean."""
+        agent = self.project / ".opencode" / "agents" / "locale-reader.md"
+        self.assertTrue(agent.is_file())
+        agent.unlink()
+        self.assertEqual(self.bf._agents_behind_the_engine(self.project), ["locale-reader"])
+        self.assertEqual(self.bf.verify_runtime(self.project)["roles_without_an_agent"], ["locale-reader"])
+        self.bf.sync_runtime(self.project)
+        self.assertEqual(self.bf._agents_behind_the_engine(self.project), [], "runtime sync writes what the engine is missing")
 
 
 class ChorusPinResolutionTests(unittest.TestCase):

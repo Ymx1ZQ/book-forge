@@ -536,12 +536,20 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
             cfg = {"default_effort": DEFAULT_EFFORT, "variants": VARIANT_EFFORTS}
         model_id = mid.split("/", 1)[1]
         variants = cfg["variants"]  # type: ignore[index]
-        options: dict[str, object] = {"reasoningEffort": cfg["default_effort"]}
+        # `reasoning: {effort}`, not `reasoningEffort`. The OpenRouter provider
+        # spreads a model's options verbatim into the request body and reads
+        # `reasoning`; `reasoningEffort` is not a key it knows, so it travelled as
+        # an unknown field and was dropped, and every variant on this ladder set no
+        # effort at all. That is why lowering the effort never helped on any role
+        # that spent its ceiling — the lever was not connected to anything. Recorded
+        # in the plan as a mystery for two days before the key was read out of the
+        # provider bundled in the binary.
+        options: dict[str, object] = {"reasoning": {"effort": cfg["default_effort"]}}
         if "provider" in cfg:
             options["provider"] = cfg["provider"]
         entry: dict[str, object] = {
             "options": options,
-            "variants": {name: {"reasoningEffort": effort} for name, effort in variants.items()},  # type: ignore[union-attr]
+            "variants": {name: {"reasoning": {"effort": effort}} for name, effort in variants.items()},  # type: ignore[union-attr]
         }
         if "limit" in cfg:
             entry["limit"] = cfg["limit"]  # type: ignore[index]
@@ -1086,6 +1094,7 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
         "roles": {name: dict(zip(("model", "variant"), _role_pin(config, name))) for name in ROLE_SPECS},
         "chorus_models": chorus_models,
         "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
 
@@ -1443,10 +1452,24 @@ def _run_opencode_process(argv: list[str], *, cwd: Path | str, env: dict[str, st
 
     The group and not the child: opencode is a supervisor, and killing it alone
     leaves whatever it started running.
+
+    `stdin` is closed, and that is not a detail. Left inherited, opencode gets
+    whatever the caller had; when that is a live pipe — any non-interactive
+    launcher, a script, CI, cron, a supervisor — it blocks on it and the call
+    returns nothing for its whole wall clock, which the engine then records as
+    `produced no result in {timeout}s` and attributes to the provider. Measured on
+    landfall's CH-0002: seven calls launched from a background script produced
+    zero provider events in 900s each, while five replays of the same argv, the
+    same environment and the same envelope answered in 139-294s. The seventeen
+    chapters written before it were protected only by having been launched with
+    `nohup`, which points stdin at /dev/null as a side effect. No role reads
+    standard input — the envelope arrives as attached files and the prompt as an
+    argument — so there is nothing given up here.
     """
     process = subprocess.Popen(
         argv,
         cwd=str(cwd),
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1500,7 +1523,7 @@ _OPENCODE_CHECKED: set[str] = set()
 
 
 def _opencode_version(binary: str) -> tuple[str, tuple[int, ...]]:
-    raw = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    raw = subprocess.run([binary, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True).stdout.strip()
     return raw, tuple(int(value) for value in re.findall(r"\d+", raw)[:3])
 
 
@@ -1518,7 +1541,7 @@ def _verify_opencode_cli(binary: str) -> None:
         raise BookForgeError(
             f"book-forge requires OpenCode {'.'.join(map(str, OPENCODE_MINIMUM))} or newer; found {raw}"
         )
-    help_result = subprocess.run([binary, "run", "--help"], capture_output=True, text=True, check=True)
+    help_result = subprocess.run([binary, "run", "--help"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
     help_text = help_result.stdout + help_result.stderr
     missing = [flag for flag in OPENCODE_RUN_FLAGS if flag not in help_text]
     if missing:
@@ -1526,7 +1549,7 @@ def _verify_opencode_cli(binary: str) -> None:
             f"OpenCode {raw} does not support {', '.join(missing)} on `run`; book-forge dispatches every "
             "role through it and cannot run without them"
         )
-    probe = subprocess.run([binary, "debug", "agent", "--help"], capture_output=True, text=True)
+    probe = subprocess.run([binary, "debug", "agent", "--help"], stdin=subprocess.DEVNULL, capture_output=True, text=True)
     if probe.returncode != 0:
         raise BookForgeError(
             f"OpenCode {raw} has no `debug agent` subcommand; book-forge verifies each role's model pin "
@@ -1535,17 +1558,29 @@ def _verify_opencode_cli(binary: str) -> None:
     _OPENCODE_CHECKED.add(binary)
 
 
+def _agents_behind_the_engine(root: Path) -> list[str]:
+    """Roles the engine will dispatch that this project has no agent file for.
+
+    `.opencode/agents/` is written when a project is created and never again, so a
+    role added to the engine afterwards is silently unreachable — and for an
+    advisory role, unreachable is indistinguishable from clean. Naming them is what
+    turns that into something a person can see.
+    """
+    directory = root / ".opencode" / "agents"
+    return sorted(role for role in ROLE_SPECS if not (directory / f"{role}.md").is_file())
+
+
 def verify_runtime(project: Path | str) -> dict[str, object]:
     root = _project_root(project)
     binary = _opencode_binary()
-    version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    version = subprocess.run([binary, "--version"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True).stdout.strip()
     numbers = re.findall(r"\d+", version)
     if tuple(map(int, numbers[:3])) < (1, 18, 18):
         raise BookForgeError(f"OpenCode 1.18.18 or newer is required; found {version}")
-    models = subprocess.run([binary, "models", "openrouter"], capture_output=True, text=True, check=True).stdout
+    models = subprocess.run([binary, "models", "openrouter"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True).stdout
     if MODEL not in models:
         raise BookForgeError(f"Pinned model is unavailable: {MODEL}")
-    help_result = subprocess.run([binary, "run", "--help"], capture_output=True, text=True, check=True)
+    help_result = subprocess.run([binary, "run", "--help"], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
     help_text = help_result.stdout + help_result.stderr
     for required in ("--format", "--session", *OPENCODE_RUN_FLAGS):
         if required not in help_text:
@@ -1567,6 +1602,7 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
         "chorus_models": chorus_models,
         "chorus_enabled": _chorus_enabled(config),
         "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
 
@@ -3169,6 +3205,30 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
     )
     return sorted(stale)
 
+
+# What opencode asks the provider for when nobody says otherwise — its own
+# `OUTPUT_TOKEN_MAX`, read out of the binary and confirmed live. The cap covers
+# reasoning *and* completion together: a call made with the override set to 120
+# came back `output: 56, reasoning: 64`. So a role's declared output budget can
+# never be enforced as a limit on what it writes; what it can be is room that
+# reasoning cannot take, which is why the override below is the provider's own
+# default plus the role's budget rather than the budget alone.
+#
+# Measured over 288 answered calls on landfall, output and reasoning per call:
+#
+#   role                 out p50   out max   rsn p50   rsn max   sum max
+#   translation-critic       733      3031     21121     30425     31565
+#   technical-editor        1174      1721     24588     30762     31607
+#   reviser                 6069     13133     13592     25014     31264
+#   writer                  3954      9327     11597     23095     26699
+#   translator              4345      9966     10167     16344     25071
+#   cold-reader              590       968      3470      6377      6866
+#
+# The two roles whose answers come back empty are the two whose successful calls
+# reach 31565 and 31607 — they are not failing at random, they are running out of
+# room. No other role comes close.
+OPENCODE_OUTPUT_TOKEN_MAX = 32000
+OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),
@@ -7248,13 +7308,29 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     binary = _opencode_binary()
     _verify_opencode_cli(binary)
     environment = _opencode_environment()
-    resolved_result = _run_opencode_process(
-        [binary, "--pure", "debug", "agent", role],
-        cwd=root,
-        env=environment,
-        timeout=OPENCODE_PROBE_TIMEOUT,
-        what=f"agent probe for {role}",
-    )
+    def probe_agent() -> subprocess.CompletedProcess:
+        return _run_opencode_process(
+            [binary, "--pure", "debug", "agent", role],
+            cwd=root,
+            env=environment,
+            timeout=OPENCODE_PROBE_TIMEOUT,
+            what=f"agent probe for {role}",
+        )
+
+    resolved_result = probe_agent()
+    if resolved_result.returncode != 0 and not (root / ".opencode" / "agents" / f"{role}.md").is_file():
+        # `.opencode/agents/` is written when a project is created and never again,
+        # so a role added to the engine afterwards reaches an existing universe only
+        # through `runtime sync` — and nothing runs it. The `locale-reader` shipped
+        # with a prompt, a budget and seven tests, and landfall's first translation
+        # after it dispatched a role the project could not resolve. Regenerating from
+        # config is the same operation `runtime sync` performs, so the state stays
+        # reproducible and nothing here is written by hand. Guarded on the file being
+        # absent: an opencode that is broken for another reason must not make every
+        # call rewrite the runtime.
+        print(f"[{role}] the project has no agent for this role; regenerating its runtime from config", file=sys.stderr)
+        sync_runtime(root)
+        resolved_result = probe_agent()
     if resolved_result.returncode != 0:
         raise BookForgeError(f"OpenCode could not resolve agent {role}: {resolved_result.stderr.strip()}")
     resolved = json.loads(resolved_result.stdout)
@@ -7273,6 +7349,18 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             f"{expected_variant}. The project's .opencode/agents are stale — run "
             "`book-forge runtime sync` to regenerate them"
         )
+    # The role's declared budget, made real. Until now `max_output_tokens` was a
+    # number written into the payload and read by the model as advice, while the
+    # request always asked the provider for 32000 whatever the role declared — so
+    # a model could spend the whole ceiling reasoning and have nothing left to
+    # write, which is how the technical editor and the translation critic failed
+    # all night. The override is the provider's own default plus this role's
+    # budget, because the cap is shared between reasoning and completion: reasoning
+    # keeps exactly the room it has today, and the budget becomes room it cannot
+    # take.
+    declared = int(json.loads(envelope["bytes"]).get("max_output_tokens") or 0)
+    if declared > 0:
+        environment = {**environment, OPENCODE_OUTPUT_TOKEN_MAX_ENV: str(OPENCODE_OUTPUT_TOKEN_MAX + declared)}
     started = time.monotonic()
     envelope_path = attempt_dir / "envelope.json"
     _write_bytes_atomic(envelope_path, envelope["bytes"])
@@ -9643,14 +9731,19 @@ def _convergence(
     }
 
 
-def _ask_locale_reader(
-    root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner
+def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as well as what it is given
+    root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner,
+    unread_reason: list[str] | None = None,
 ) -> list[dict[str, object]]:
     """The chapter read by someone who cannot see where it came from.
 
     Advisory and never a stop: a reader that fails leaves the critic's findings
     standing, because a chapter with no second opinion is worse read, not unread.
+    `unread_reason` collects why it could not read, so the review can record the
+    difference between a reader that found nothing and a reader nobody asked.
     """
+    if unread_reason is None:
+        unread_reason = []
     task_id = f"LOCREAD-{book_id}-{chapter_id}-{locale}"
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
@@ -9701,6 +9794,10 @@ def _ask_locale_reader(
             except BookForgeError:
                 pass
         print(f"[locale-reader] {chapter_id} was not read: {str(unread)[:160]}", file=sys.stderr)
+        # "Nobody was asked" and "the reader found nothing" are opposite answers, and
+        # an empty list says the second. The reason travels so the review record can
+        # say which one it was.
+        unread_reason.append(str(unread)[:200])
         return []
 
 
@@ -9883,7 +9980,8 @@ def _review_translation(
             cited, aside = _cited_findings(value.get("findings"))
             findings.extend(cited)
             set_aside.extend(aside)
-            findings.extend(_ask_locale_reader(root, book_id, locale, chapter_id, translated, style, runner))
+            reader_unread: list[str] = []
+            findings.extend(_ask_locale_reader(root, book_id, locale, chapter_id, translated, style, runner, reader_unread))
             verdict = str(value.get("verdict") or "repairable")
             convergence = _convergence(previous, findings, verdict, bool(previous.get("repaired")))
             if convergence["verdict_inconsistent"]:
@@ -9903,6 +10001,10 @@ def _review_translation(
                     "schema": 1, "chapter": chapter_id, "verdict": verdict, "findings": findings,
                     "set_aside": set_aside, "machine_findings": machine_score, "mistaken": mistaken,
                     "convergence": convergence,
+                    # Empty when the reader read the chapter, whatever it found. A
+                    # reason here means nobody read it, which no count of findings
+                    # can tell you apart from a clean pass.
+                    "locale_reader_unread": reader_unread[0] if reader_unread else "",
                 }
             )})
             record_execution(
@@ -10262,6 +10364,39 @@ def _translate_one(
     raise BookForgeError("Unreachable translation state")
 
 
+def _record_refusals(locale_root: Path, locale: str, refused: list[dict[str, object]], *, now: float | None = None) -> list[dict[str, object]]:
+    """Rewrite the refusal record from what is on disk plus this run's refusals.
+
+    It used to be written only at the moment a chapter was set aside, and never
+    touched again when that chapter later landed. Landfall's still named CH-0007
+    and CH-0010 while both were translated, so the one file a person opens after a
+    refusal to see what needs redoing was naming chapters that did not. A chapter
+    with a translated file on disk is not refused any more, whoever produced it;
+    a chapter refused in this run replaces whatever it said before. The file is
+    written even when the list is empty, so "nothing refused" is stated rather
+    than inferred from an absence.
+    """
+    path = locale_root / "refused.json"
+    previous: list[dict[str, object]] = []
+    if path.is_file():
+        try:
+            recorded = _read_json(path).get("refused", [])
+        except (OSError, ValueError):
+            recorded = []
+        previous = [row for row in recorded if isinstance(row, dict)]
+    moment = time.time() if now is None else now
+    fresh = {str(row["chapter"]): {**row, "when": row.get("when", moment)} for row in refused}
+    kept = [
+        row for row in previous
+        if str(row.get("chapter") or "")
+        and str(row.get("chapter")) not in fresh
+        and not (locale_root / "chapters" / f"{row['chapter']}.md").is_file()
+    ]
+    rows = sorted([*kept, *fresh.values()], key=lambda row: str(row.get("chapter")))
+    _write_json(path, {"schema": 1, "locale": locale, "refused": rows})
+    return rows
+
+
 def translate_next(
     project: Path | str,
     book_id: str,
@@ -10294,18 +10429,21 @@ def translate_next(
         except TranslationRefused as no:
             # The gate worked and the chapter is what is wrong. Record it and carry
             # on: a locale rule stops a chapter, never a book.
-            refused.append({"chapter": next_source.stem, "why": str(no)})
+            refused.append({"chapter": next_source.stem, "why": str(no), "when": time.time()})
             print(f"[translator] {next_source.stem} set aside: {no}", file=sys.stderr)
-            _write_json(
-                locale_root / "refused.json",
-                {"schema": 1, "locale": canonical, "refused": refused},
-            )
+            # Written inside the loop as well as at the end, so a run that dies
+            # halfway still leaves the chapters it set aside on the record.
+            _record_refusals(locale_root, canonical, refused)
             if not run_all:
                 raise
         if not run_all:
             break
+    # Every run rewrites it, including the one that refused nothing: a chapter that
+    # landed since the last refusal has to leave the list, and the run that does
+    # that is usually the run with nothing to report.
+    standing = _record_refusals(locale_root, canonical, refused)
     if not results and not refused:
-        return {"state": "current", "book": book_id, "locale": canonical, "calls": 0, "chapters": [], "refused": []}
+        return {"state": "current", "book": book_id, "locale": canonical, "calls": 0, "chapters": [], "refused": standing}
     if refused:
         print(
             f"[translator] {len(refused)} chapter(s) the locale would not accept: "
@@ -10318,7 +10456,7 @@ def translate_next(
         "locale": canonical,
         "calls": sum(int(result["calls"]) for result in results),
         "chapters": [result["chapter"] for result in results],
-        "refused": refused,
+        "refused": standing,
     }
 
 

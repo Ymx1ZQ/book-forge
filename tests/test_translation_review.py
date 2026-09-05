@@ -895,6 +895,36 @@ class AReaderWhoCannotSeeTheSourceTests(TranslationReviewFixture):
         self.assertIn("locale-reader", self.bf.ROLE_BUDGETS)
         self.assertGreater(self.bf.ROLE_BUDGETS["locale-reader"][1], 0)
 
+    def test_a_reader_nobody_could_ask_still_cannot_stop_the_run(self):
+        """The pass is advisory and must not raise by any route — not a refused
+        answer, not a provider that has never heard of the role."""
+        def refuses(role, envelope, attempt_dir):
+            raise RuntimeError("Agent locale-reader not found")
+
+        reason: list[str] = []
+        findings = self.bf._ask_locale_reader(
+            self.project, self.book, "it-IT", "CH-0001", "il testo", "lo stile", refuses, reason,
+        )
+        self.assertEqual(findings, [])
+        self.assertTrue(reason, "an unread chapter says why, so it is not read as a clean pass")
+        self.assertIn("locale-reader", reason[0])
+
+    def test_a_reader_that_read_and_found_nothing_leaves_no_reason_behind(self):
+        def answers(role, envelope, attempt_dir):
+            return {
+                "text": json.dumps({"summary": "chiaro", "followed": True, "stumbles": []}),
+                "provider": "openrouter", "model": envelope["payload"]["model"],
+                "variant": envelope["payload"]["variant"], "session_id": "ses-clean",
+                "tokens": {"input": 10, "output": 20}, "cost": 0.0, "latency_ms": 1, "finish": "stop",
+            }
+
+        reason: list[str] = []
+        findings = self.bf._ask_locale_reader(
+            self.project, self.book, "it-IT", "CH-0002", "il testo", "lo stile", answers, reason,
+        )
+        self.assertEqual(findings, [])
+        self.assertEqual(reason, [], "nothing found is not the same answer as nobody asked")
+
 
 if __name__ == "__main__":
     unittest.main()

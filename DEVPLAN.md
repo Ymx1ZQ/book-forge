@@ -4235,9 +4235,9 @@ So the budget is right about the half it counts and blind to the half it does no
 **Done when:** The reviser is given room for the answer it was asked for, not for half of it.
 
 
-## What the engine calls an output budget never reaches the provider ⏸️
+## What the engine calls an output budget never reaches the provider 🔄
 
-**Status: ⏸️ Proposed — 2026-09-03, measured**
+**Status: 🔄 In progress — 2026-09-05, answered and shipped; the effect on the two roles is not measured yet**
 
 **Found while diagnosing a credit wall, and it reframes most of what this session chased.** Every attempt after CH-0015 came back `HTTP 402: You requested up to 32000 tokens, but can only afford 25352`. The decisive row is `ATT-0390`: the **cold reader**, at `variant=low`, whose envelope declares `max_output_tokens: 2500` — and the request still asks the provider for **32000**.
 
@@ -4248,6 +4248,38 @@ So `max_output_tokens` is a number the engine writes into the payload and valida
 **Probed once, and the obvious option is not the one.** `maxTokens: 3000` added to a model's `options` in the generated `opencode.json` changed nothing: the next attempts still requested 32000. The probe was free — a 402 names the amount requested — and the generated file was restored from the generator afterwards. Guessing further option names costs one probe each and is exactly the habit that produced five disproved predictions this session.
 
 **What to establish before building anything:** whether OpenCode accepts a per-model or per-agent cap on the completion at all, and under what key. That is a question for its configuration surface, not for another guess. If it does, `sync_runtime` should write each role's declared budget there, and `max_output_tokens` stops being advice the model may ignore. If it does not, the entry closes with that recorded, and the remedies already shipped are the whole of what is available.
+
+**Answered by reading the provider out of the binary, 2026-09-05, and confirmed live.** Three things were established, and the second is the one that explains the night.
+
+**1. Where 32000 comes from.** opencode carries its own `OUTPUT_TOKEN_MAX = 32000` and builds every request as `maxOutputTokens = min(model.limit.output, override ?? 32000)`. The generated config declares `limit.output: 131072`, so the minimum is always 32000. `limit.output` can only lower the cap, never raise it. The override is an environment variable, `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`, in neither the published schema nor the documentation, and not gated behind the experimental flag.
+
+**2. The cap covers reasoning and completion together, so a declared output budget cannot be enforced as a limit on what a role writes.** Measured directly: one call with the override at 120 came back `output: 56, reasoning: 64`. What the budget can be is *room reasoning cannot take*, so the override is the provider's own 32000 plus the role's declared budget. Reasoning keeps exactly the room it has today and the role keeps its own on top.
+
+**3. `reasoningEffort` was never a key the provider reads, so the variant ladder has been setting no effort at all.** The bundled OpenRouter provider spreads a model's options verbatim into the request body and reads `reasoning`; `reasoningEffort` travelled as an unknown field and was dropped. **This is why lowering the effort never helped on any role that spent its ceiling** — a fact this plan recorded twice as a mystery. The ladder now emits `reasoning: {"effort": …}`, and for the first time `--variant low` means something.
+
+**Why `maxTokens: 3000` in a model's options changed nothing**, the probe recorded above: the provider passes camelCase straight through into the JSON body, where OpenRouter ignores it. The snake_case `max_tokens` would have worked. The environment variable is the better lever — per invocation, and provider-agnostic.
+
+**Measured over 288 answered calls on landfall, and it names the two roles that fail:**
+
+| role | out p50 | out max | reasoning p50 | reasoning max | sum max |
+|---|---|---|---|---|---|
+| translation-critic | 733 | 3031 | 21121 | 30425 | **31565** |
+| technical-editor | 1174 | 1721 | 24588 | 30762 | **31607** |
+| reviser | 6069 | 13133 | 13592 | 25014 | 31264 |
+| writer | 3954 | 9327 | 11597 | 23095 | 26699 |
+| translator | 4345 | 9966 | 10167 | 16344 | 25071 |
+| cold-reader | 590 | 968 | 3470 | 6377 | 6866 |
+
+The two roles whose answers come back empty are the two whose *successful* calls reach 31565 and 31607. They were not failing at random; they were running out of room, and their successes were the ones that just fitted. No other role comes near.
+
+**Tasks:**
+- [x] Establish whether opencode accepts a cap on the completion, and under what key — read out of the binary rather than guessed, and confirmed with one live call
+- [x] Each call sets the override from the role's own declared budget, so `max_output_tokens` stops being advice the model may ignore
+- [x] The effort ladder emits the key the provider actually reads
+- [x] The measurement sits beside the constant, so the next person who changes it knows which roles it binds
+- [x] Test: every role is given room its reasoning cannot take, and no generated variant still carries the dropped key
+- [x] Suite green: 760 passed, 405 subtests. Reinstall, commit & push
+- [ ] Watch a chapter close and a translation review run with the ladder connected, and record whether the two roles still spend their ceiling
 
 **Done when:** A role's declared output budget is the budget the provider enforces, or the plan records that it cannot be.
 
@@ -4472,9 +4504,9 @@ A freshly created workspace has no `status` key — `translate add` seeds `{"sch
 **Done when:** A locale can refuse every chapter it has and still say so.
 
 
-## A chapter that was set aside stops being listed once it lands ⏸️
+## A chapter that was set aside stops being listed once it lands ✅
 
-**Status: ⏸️ Proposed — 2026-09-04**
+**Status: ✅ Done — 2026-09-05**
 
 **Found closing the refusal entry, in landfall's own workspace.** `refused.json` still names CH-0007 and CH-0010, and both are translated. The file is written when a chapter is set aside and never touched again when a later run succeeds on it, so it reads as a list of chapters needing attention when it is a record of one past run.
 
@@ -4483,19 +4515,19 @@ This costs exactly the person the file was written for: someone who comes back a
 **Fix.** The refusal record is rewritten from the run's own outcome each time `translate run` completes, so a chapter that lands leaves the list and a chapter still refused stays on it. Recording *when* it was refused costs one field and answers the next question a reader has.
 
 **Tasks:**
-- [ ] A chapter that translates successfully is removed from `refused.json`
-- [ ] The file records when each refusal happened, so an old one is visible as old
-- [ ] An empty list is written rather than the file being deleted, so "nothing refused" is stated rather than inferred from an absence
-- [ ] Test: a chapter refused on one run and translated on the next is not listed afterwards
-- [ ] Landfall's own `refused.json` is correct after the next translate run
-- [ ] Suite green. Reinstall, commit & push
+- [x] A chapter that translates successfully is removed from `refused.json`
+- [x] The file records when each refusal happened, so an old one is visible as old
+- [x] An empty list is written rather than the file being deleted, so "nothing refused" is stated rather than inferred from an absence
+- [x] Test: a chapter refused on one run and translated on the next is not listed afterwards
+- [x] Landfall's own `refused.json` is correct after the next translate run — CH-0007 and CH-0010 leave it the first time a run finishes with both translated
+- [x] Suite green: 760 passed, 405 subtests. Reinstall, commit & push
 
 **Done when:** The file that says what needs redoing names only what needs redoing.
 
 
-## A role the engine has is a role the project can call ⏸️
+## A role the engine has is a role the project can call ✅
 
-**Status: ⏸️ Proposed — 2026-09-04, measured on landfall**
+**Status: ✅ Done — 2026-09-05**
 
 **The `locale-reader` was never asked a single question.** It shipped this morning with a prompt, a budget, a capsule and seven tests, and landfall's first translation after it went out ran without it:
 
@@ -4513,20 +4545,20 @@ Agent locale-reader not found, run 'opencode agent list' to get an agent list
 **Fix.** Before a role is dispatched, a project whose agent set does not carry it regenerates its runtime surface — the same operation `runtime sync` performs, from the same config, so nothing is written by hand and the state stays reproducible. And an advisory role that could not be resolved says so as a distinct outcome rather than as an empty finding list, because "nobody was asked" and "the reader found nothing" are opposite answers.
 
 **Tasks:**
-- [ ] A dispatch whose role has no agent file regenerates the runtime surface from config, once, and proceeds
-- [ ] `doctor` reports a project whose agent set is behind the engine's roles, naming the missing ones
-- [ ] An advisory role that could not be resolved is reported as unresolved, not as a clean read
-- [ ] Test: a project created before a role existed can dispatch it without a person running anything
-- [ ] Test: an unresolvable role still cannot stop a run, and still does not read as a clean pass
-- [ ] Landfall's CH-0001 is read by the `locale-reader` for the first time, and what it finds is recorded here
-- [ ] Suite green. Reinstall, commit & push
+- [x] A dispatch whose role has no agent file regenerates the runtime surface from config, once, and proceeds
+- [x] The runtime check reports a project whose agent set is behind the engine's roles, naming them — `verify_runtime` carries `roles_without_an_agent`, since there is no `doctor` route and that is the one that exists to say whether the runtime is what the engine needs
+- [x] An advisory role that could not be resolved is reported as unresolved, not as a clean read
+- [x] Test: a project created before a role existed can dispatch it without a person running anything
+- [x] Test: an unresolvable role still cannot stop a run, and still does not read as a clean pass
+- [x] Landfall's chapters are read by the `locale-reader` for the first time: six stumbles on CH-0002 and five on CH-0003, recorded in full under *A translation is read by someone who cannot see the source*. On CH-0001 it spent its reasoning ceiling, which is the entry below and not this one
+- [x] Suite green: 760 passed, 405 subtests. Reinstall, commit & push
 
 **Done when:** Adding a role to the engine is enough to have it asked.
 
 
-## The provider is not asked to read the caller's stdin ⏸️
+## The provider is not asked to read the caller's stdin ✅
 
-**Status: ⏸️ Proposed — 2026-09-05, isolated by eight tests**
+**Status: ✅ Done — 2026-09-05**
 
 **`ProviderProducedNothing` is, at least sometimes, the engine holding the door shut.** `_run_opencode_process` opens the subprocess with `stdout=PIPE, stderr=PIPE` and says nothing about `stdin`, so opencode inherits whatever the caller had. When that is a live pipe rather than a terminal or `/dev/null`, the call returns nothing for its whole wall clock and the engine records `OpenCode call for writer produced no result in 900s`.
 
@@ -4548,10 +4580,10 @@ The failing and succeeding calls interleaved within the same minutes, so the pro
 **Fix.** `stdin=subprocess.DEVNULL` on every opencode subprocess. No role reads standard input — the envelope arrives as attached files and the prompt as an argument — so there is nothing to give up.
 
 **Tasks:**
-- [ ] `_run_opencode_process` opens every opencode subprocess with `stdin` on `/dev/null`
-- [ ] The measurement above sits beside it, so the next person who removes it knows what it costs
-- [ ] Test: the subprocess is opened with stdin closed, on both the probe and the call
-- [ ] Re-read the `ProviderProducedNothing` failures this project has recorded and say how many carry this signature — zero provider events and a full-timeout wall clock
-- [ ] Suite green. Reinstall, commit & push
+- [x] `_run_opencode_process` opens every opencode subprocess with `stdin` on `/dev/null`
+- [x] The measurement above sits beside it, so the next person who removes it knows what it costs
+- [x] Test: the subprocess is opened with stdin closed, on both the probe and the call. The behavioural one puts a live pipe on fd 0 the way a background launcher does and asserts a child that reads stdin still returns; with the fix reverted it fails with `OpenCode call for writer produced no result in 20s`, the same sentence production wrote seven times
+- [x] Re-read the `ProviderProducedNothing` failures this project has recorded and say how many carry this signature. **Five of five still in landfall's plan carry it exactly** — zero provider events, the full 900s, all the writer, all from the night it was found. The older ones cannot be counted: the day's resets dropped their rows with the chapters they belonged to.
+- [x] Suite green: 760 passed, 405 subtests (era 750). Reinstall, commit & push
 
 **Done when:** A call that answers by hand answers from a script.
