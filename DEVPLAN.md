@@ -4235,9 +4235,9 @@ So the budget is right about the half it counts and blind to the half it does no
 **Done when:** The reviser is given room for the answer it was asked for, not for half of it.
 
 
-## What the engine calls an output budget never reaches the provider 🔄
+## What the engine calls an output budget never reaches the provider ✅
 
-**Status: 🔄 In progress — 2026-09-05, answered and shipped; the effect on the two roles is not measured yet**
+**Status: ✅ Done — 2026-09-05**
 
 **Found while diagnosing a credit wall, and it reframes most of what this session chased.** Every attempt after CH-0015 came back `HTTP 402: You requested up to 32000 tokens, but can only afford 25352`. The decisive row is `ATT-0390`: the **cold reader**, at `variant=low`, whose envelope declares `max_output_tokens: 2500` — and the request still asks the provider for **32000**.
 
@@ -4279,7 +4279,9 @@ The two roles whose answers come back empty are the two whose *successful* calls
 - [x] The measurement sits beside the constant, so the next person who changes it knows which roles it binds
 - [x] Test: every role is given room its reasoning cannot take, and no generated variant still carries the dropped key
 - [x] Suite green: 760 passed, 405 subtests. Reinstall, commit & push
-- [ ] Watch a chapter close and a translation review run with the ladder connected, and record whether the two roles still spend their ceiling
+- [x] Watch a chapter close and a translation review run with the ladder connected, and record whether the two roles still spend their ceiling. **Measured on landfall's CH-0001, the chapter the `locale-reader` had failed to read twice on exactly this ceiling: it read it, and `locale_reader_unread` came back empty.** Four stumbles, and the first of them is the class this whole thread started from — *«Date loro un naufragio da mettere sotto ferita»*, a word-for-word rendering of *to put under 'wound'* that means nothing in Italian, reported `blocking`. The repair replaced it with *«da scrivere sotto la voce 'ferita'»*, and *«l'ora disse peggio»* with *«l'ora pesò ancora di più»*. Both were defects a person had had to find by hand the day before.
+
+**Left standing and not this entry's business:** the mechanical locale checks raised four findings on that chapter and the critic called all four mistaken, which the engine now prints as *a check that is mostly wrong is a defect in the check*. That is the third run in a row where they scored zero, and the `su` rule removed yesterday was the same shape.
 
 **Done when:** A role's declared output budget is the budget the provider enforces, or the plan records that it cannot be.
 
