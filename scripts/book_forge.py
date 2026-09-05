@@ -7641,6 +7641,52 @@ def _resolve_catalogue_model(name: str) -> str:
     )
 
 
+def prune_glossary(project: Path | str, book_id: str, locale: str, *, apply: bool = False) -> dict[str, object]:
+    """Re-derive a glossary through the rule that now governs what enters it.
+
+    `_append_glossary` stops the next ordinary word from becoming a permanent row,
+    and does nothing about the ones already there — landfall reached 219 rows with
+    whole sentences among them, each read into every call for the rest of the book.
+    A route rather than a one-off script, because every project that ran the old
+    behaviour has the same rows and the fix has to reach them the same way.
+
+    Reports by default and changes nothing; `apply` moves what is not a term into
+    the locale's notes, where a one-time correction is still worth having.
+    """
+    root = _project_root(project)
+    locale_root = root / "books" / book_id / "translations" / locale
+    path = locale_root / "glossary.md"
+    kept, dropped = [], []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("- **") or "**" not in line[4:]:
+            kept.append(line)
+            continue
+        source, rest = line[4:].split("**", 1)
+        arrow = GLOSSARY_CONDITIONAL_ARROW if GLOSSARY_CONDITIONAL_ARROW in rest else "→"
+        target = rest.split(arrow, 1)[1].split(" — ", 1)[0] if arrow in rest else ""
+        if _is_glossary_term({"source": source, "translation": target, "note": ""}):
+            kept.append(line)
+        else:
+            dropped.append({"source": source.strip(), "translation": target.strip(), "row": line})
+    report = {
+        "book": book_id, "locale": locale,
+        "rows_before": sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("- **")),
+        "rows_after": sum(1 for line in kept if line.startswith("- **")),
+        "moved": len(dropped), "applied": apply,
+        "examples": [row["source"][:70] for row in dropped[:8]],
+    }
+    if apply and dropped:
+        _write_json(locale_root / "notes" / "from-the-glossary.json",
+                    {"schema": 1, "moved": dropped, "why": "not a term: kept beside the locale, not read into every call"})
+        _write_bytes_atomic(path, ("\n".join(kept).rstrip() + "\n").encode("utf-8"))
+    print(
+        f"[glossary] {report['rows_before']} row(s), {report['moved']} of them not terms"
+        + (" — moved to notes/from-the-glossary.json" if apply and dropped else " (reporting only; pass --apply to move them)"),
+        file=sys.stderr,
+    )
+    return report
+
+
 def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, locale and field
     project: Path | str,
     book_id: str,
@@ -7723,10 +7769,17 @@ def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, 
             result = runner(role, envelope, Path(claim["capsule"]).parent)
             mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
             value = _parse_contract_json(str(result["text"]))
+            # Counted, not disqualifying. The normal path gives a translator two
+            # repairs after a validation failure and this route gives none, so a
+            # candidate that breaks one locale rule on its first attempt would drop
+            # out of the comparison entirely — and on the first real bake-off the
+            # incumbent did, on the possessive rule, leaving nothing to compare it
+            # against. A rule broken is a defect and belongs in the score with the
+            # rest. Only an answer nobody can read is unusable.
             problems = _translation_validation(source, {**value, "_locale": locale}, checks)
-            if problems:
-                raise BookForgeError("; ".join(problems))
             translated = str(value["translated_markdown"])
+            if not translated.strip():
+                raise BookForgeError("no translated_markdown")
             _complete_model_task(root, task_id, claim, {path: translated.rstrip() + "\n"}, result, envelope)
             words = len(re.findall(r"\b[\w’'-]+\b", translated, re.UNICODE))
             findings = _ask_locale_reader(
@@ -7734,12 +7787,15 @@ def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, 
                 task_id=f"BAKEREAD-{slug}-{book_id}-{chapter_id}-{locale}",
             )
             counted = [f for f in findings if str(f.get("severity")) in {"blocking", "warning"}]
+            total = len(counted) + len(problems)
             row.update({
                 "state": "drafted",
                 "words": words,
-                "defects": len(counted),
+                "defects": total,
+                "read_defects": len(counted),
+                "rule_breaks": problems,
                 "blocking": sum(1 for f in counted if f["severity"] == "blocking"),
-                "defects_per_1000_words": round(len(counted) * 1000 / max(1, words), 2),
+                "defects_per_1000_words": round(total * 1000 / max(1, words), 2),
                 "cost": float(result.get("cost") or 0.0),
                 "seconds": round(time.monotonic() - started, 1),
                 "path": path,
@@ -9807,6 +9863,52 @@ def _translation_validation(source: str, value: dict[str, object], checks: dict[
     return problems
 
 
+# What a glossary row is for: a name or a coinage whose rendering must not vary
+# across the book. Landfall's grew to 216 rows and holds `By then → A quel punto`,
+# `gleams → brilla` and a whole sentence recorded because one chapter got its tense
+# wrong once. The cost is not disk: the glossary is read into every translator,
+# critic, reviser and repair call for the rest of the book, and it is the authority
+# the critic cites, so an ordinary word promoted to a fixed rendering turns a
+# defensible synonym elsewhere into a finding.
+GLOSSARY_MAX_SOURCE_WORDS = 4
+# One definition of "a word" for every count in this file.
+WORD_RE = r"[\w\u2019'-]+"
+
+
+def _is_glossary_term(row: dict[str, object]) -> bool:
+    """Whether a returned update belongs in the book's glossary or in the chapter's record.
+
+    The translator says which it meant in `kind`, because it knows and no rule here
+    can read its mind — the same move as the reader's `natural` and the row's `✗`.
+    The lengths are the backstop for an answer that omits the field or gets it wrong,
+    and they are properties of the row rather than a list of words: a source side
+    longer than a term is a sentence, and a target side longer than the matcher can
+    verify is a row that could never be checked anyway.
+    """
+    kind = str(row.get("kind") or "").strip().casefold()
+    if kind in {"note", "chapter", "correction"}:
+        return False
+
+    def _shortest(text: str) -> int:
+        # Counted the way the matcher reads the row, not on the raw string. A term
+        # is long on the page because it carries a gloss and its alternatives —
+        # `the Wall (the tidal bore) / tide-wall / bore` is one name written three
+        # ways, and counting that raw refused sixty-one of landfall's rows, most of
+        # them the book's own coinages. The shortest alternative is the term.
+        pieces = [
+            re.findall(WORD_RE, re.sub(r"\*+", "", re.sub(r"\([^)]*\)", "", piece)), re.UNICODE)
+            for piece in re.split(r"[/;,]", text)
+        ]
+        counts = [len(piece) for piece in pieces if piece]
+        return min(counts) if counts else 0
+
+    source = _shortest(str(row.get("source") or ""))
+    target = _shortest(str(row.get("translation") or ""))
+    if not source or not target:
+        return False
+    return source <= GLOSSARY_MAX_SOURCE_WORDS and target <= GLOSSARY_MAX_TARGET_WORDS
+
+
 def _append_glossary(glossary: str, updates: list[dict[str, object]]) -> str:
     existing = set()
     for line in glossary.splitlines():
@@ -9816,11 +9918,34 @@ def _append_glossary(glossary: str, updates: list[dict[str, object]]) -> str:
     for row in updates:
         if not isinstance(row, dict) or not {"source", "translation", "note"} <= row.keys():
             raise BookForgeError("Glossary update is missing source, translation, or note")
+        if not _is_glossary_term(row):
+            continue
         source = str(row["source"])
         if source.casefold() not in existing:
             lines.append(f"- **{source}** → {row['translation']} — {row['note']}")
             existing.add(source.casefold())
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _record_chapter_notes(
+    locale_root: Path, chapter_id: str, updates: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """What the translator learned doing this chapter, kept where it belongs.
+
+    Not discarded — a one-time correction is worth having next to the chapter it
+    came from. It just does not become a rule every later chapter pays to read.
+    """
+    kept = [row for row in updates if isinstance(row, dict) and not _is_glossary_term(row)]
+    path = locale_root / "notes" / f"{chapter_id}.json"
+    if kept:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(path, {"schema": 1, "chapter": chapter_id, "notes": kept})
+        print(
+            f"[glossary] {chapter_id}: {len(kept)} update(s) recorded against the chapter rather than "
+            "promoted to the book's glossary",
+            file=sys.stderr,
+        )
+    return kept
 
 
 def _ensure_locale_artifacts(root: Path, book_id: str, locale: str) -> None:
@@ -11034,6 +11159,7 @@ def _translate_one(
                 else:
                     _record_unapplied(root, book_id, locale, chapter_id, actionable)
             calls += 1
+        _record_chapter_notes(locale_root, chapter_id, list(value["glossary_updates"]))
         glossary = _append_glossary((locale_root / "glossary.md").read_text(encoding="utf-8"), list(value["glossary_updates"]))
         completed = list(state.get("completed_chapters", []))
         if chapter_id not in completed:
@@ -12592,9 +12718,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task")
     run.add_argument("--next", action="store_true")
     translate = commands.add_parser("translate")
-    translate.add_argument("action", choices=("add", "next", "run", "status", "review"))
+    translate.add_argument("action", choices=("add", "next", "run", "status", "review", "glossary"))
     translate.add_argument("--chapter", help="With review: read back one chapter instead of every translated one")
     translate.add_argument("--until-clean", action="store_true", help="With review: keep reading a chapter back until it converges, makes no progress, or hits the pass cap")
+    translate.add_argument("--apply", action="store_true", help="With glossary: move rows that are not terms into the locale's notes; without it, report only")
     translate.add_argument("book")
     translate.add_argument("locale")
     audit = commands.add_parser("audit")
@@ -12752,6 +12879,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(add_translation(args.project, args.book, args.locale), sort_keys=True))
         elif args.command == "translate" and args.action == "review":
             print(json.dumps(review_translation(args.project, args.book, args.locale, chapter_id=args.chapter, until_clean=args.until_clean), sort_keys=True))
+        elif args.command == "translate" and args.action == "glossary":
+            print(json.dumps(prune_glossary(args.project, args.book, args.locale, apply=args.apply), sort_keys=True))
         elif args.command == "translate" and args.action == "status":
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))

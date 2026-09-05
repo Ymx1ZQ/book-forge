@@ -4714,16 +4714,16 @@ A `note` is written to the review file and reaches no repair. The role built to 
 - [ ] The bake-off runs on the four flash candidates, scored by the monolingual reader — language defects per thousand words, per candidate — and never by similarity to a reference translation, which refinement is measured to lower while raising judged quality. The table is recorded here
 - [ ] The winner is pinned in landfall and the default `translator` effort in `ROLE_SPECS` is set from what the bake-off showed; if it is gemini, `translation-critic` moves off it in the same edit
 - [x] The glossary is checked against itself, on a `✗` marker rather than on prose — landfall's prohibition was written **Never «il Muro»** in bold and every check walked past it. The same marker gave a second check nobody asked for: a *forbidden* rendering present in a chapter, which finds all five «il Muro» chapters mechanically. Extending the row to `bore` was needed first, because CH-0011 and CH-0016 say «a bore» in English and the row only covered `the Wall`
-- [ ] `glossary_updates` stops promoting a chapter's repair note to a permanent row — see the entry below
+- [x] `glossary_updates` stops promoting a chapter's repair note to a permanent row — see the entry below
 - [ ] Suite green. Reinstall, commit & push
 - [ ] Regenerate landfall CH-0001 to CH-0003 in Italian through the rebuilt path, and re-measure the two paragraphs above against their ten defects
 
 **Done when:** The two paragraphs the user could not read come back with their ten defects gone, the reader's `note` findings are the ones that stayed notes, and the translator's model and effort are the ones a bake-off picked.
 
 
-## A chapter's repair note does not become a rule for the book ⏸️
+## A chapter's repair note does not become a rule for the book ✅
 
-**Status: ⏸️ Proposed — 2026-09-05**
+**Status: ✅ Done — 2026-09-06**
 
 **The translator returns `glossary_updates` and the engine promotes every row to the permanent glossary.** Landfall's has grown to 216 rows, and rows like `By then → A quel punto`, `gleams → brilla` and `The Wall took the shelf the way it always took it → Il Cavallone prese le secche come le prendeva sempre` are in it. None of these is a term of the book: the first two are ordinary vocabulary a translator does not need told, and the third is a whole sentence recorded because one chapter got its tense wrong once.
 
@@ -4734,10 +4734,10 @@ A `note` is written to the review file and reaches no repair. The role built to 
 **Fix.** A returned update is admitted as a glossary row when it fixes a term; otherwise it is recorded against the chapter, where the next chapter's boundary can carry it without the whole book paying for it. The test is a property of the row, not a word list: a source side that is a phrase rather than a term, a note that describes a one-time correction rather than a standing rendering, a target side longer than the check can verify.
 
 **Tasks:**
-- [ ] A returned update is classified before it is promoted, and the rule is a property of the row
-- [ ] What is not a term is recorded against the chapter instead of the book
-- [ ] Test: an ordinary-word update and a whole-sentence update do not reach the glossary; a coined term does
-- [ ] Landfall's glossary is re-derived through the new rule, and the count before and after is recorded here
-- [ ] Suite green. Reinstall, commit & push
+- [x] A returned update is classified before it is promoted. The translator returns `kind` — `term` or `note` — because it knows which it meant; the lengths are the backstop, counted on the row's **shortest alternative with glosses stripped**, the way the matcher reads it
+- [x] What is not a term is recorded in `translations/<locale>/notes/<chapter>.json` instead of the book's glossary
+- [x] Test: an ordinary-word update and a whole-sentence update do not reach the glossary; a coined term does; a rendering longer than the matcher can check never does whatever it calls itself
+- [x] Landfall's glossary re-derived: **219 → 190 rows, 29 moved**. The first version of the rule refused **61**, and the data said it was wrong — among them `the Wall (the tidal bore) / tide-wall / bore`, `Vent, Lens, Vault, Watch, Loom, Keel`, `pit-water / pit-tea / pit-bread`: the book's own coinages, long on the page because a term carries its gloss and its alternatives. Counting the shortest alternative took it to 29, and those 29 are whole sentences of prose. Shipped as `translate glossary <book> <locale> [--apply]`, a route and not a one-off script, because every project that ran the old behaviour carries the same rows
+- [x] Suite green: 800 passed, 405 subtests. Reinstall, commit & push
 
 **Done when:** The glossary holds the book's terms and nothing else.

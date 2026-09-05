@@ -46,3 +46,21 @@ Every pass now records what it found in a form the next pass can compare: a fing
 `--until-clean` reads a chapter back until one of four things happens, and the report says which: **clean**, no actionable finding left; **no-progress**, a count that did not fall from the pass before; **nothing-applied**, a repair that changed nothing, so the next pass would read the same text and ask the same question; or **cap**, `REVIEW_PASS_CAP` passes. Without the flag it reads once, as before.
 
 Two signals are reported whenever they occur, and stay reported for the whole run once they have. A finding that comes back unchanged after a repair that claimed to apply it means the repair did not land — worse than one that refused, because the refusal was at least recorded. And a verdict of `faithful` beside a finding that changes meaning is a critic contradicting itself in one answer: the findings stand, the verdict is recorded as inconsistent, and the run says so.
+
+## What the glossary is allowed to hold
+
+A glossary row is a name or a coinage whose rendering must not vary anywhere in the book. Everything else the translator learns doing a chapter — an ordinary word it had to think about, a tense it got wrong once, a sentence it would render the same way again — is kept beside the chapter in `translations/<locale>/notes/<chapter>.json` and costs the book nothing.
+
+The distinction is not guessed. The translator returns `kind` on each update, `term` or `note`, because it knows which it meant; the lengths are the backstop for an answer that omits the field or gets it wrong, counted on the row's shortest alternative with glosses stripped, because `the Wall (the tidal bore) / tide-wall / bore` is one name written three ways and counting it raw refuses the book's own coinages.
+
+It matters because a row is not stored, it is *read*: into every translator, critic, reviser and repair call for the rest of the book, and cited as the authority against every later chapter. An ordinary word promoted to a fixed rendering turns a defensible synonym in chapter twelve into a finding. The book this was built for reached 219 rows holding `By then → A quel punto` and whole sentences of prose.
+
+`translate glossary <book> <locale>` re-derives an existing glossary through that rule and reports; `--apply` moves what is not a term into `notes/from-the-glossary.json`. It is a route rather than a one-off script because every project that ran the old behaviour carries the same rows.
+
+## Comparing translators
+
+`bakeoff <book> <chapter> --locale <tag> --models a,b,c` translates one chapter under each model on an identical capsule and promotes none of them. Drafts land in `books/<book>/work/<chapter>/bakeoff-<locale>/<slug>/`.
+
+Scored by the monolingual reader and never against a reference translation: refinement is measured to lower string similarity while human readers rate the result better, so ranking by distance from a model answer orders the candidates backwards. What is counted is what a reader of the target language stumbles on, plus the locale rules the text breaks, per thousand words; ties go to the cheaper model.
+
+A locale rule broken does not disqualify a candidate. The normal path gives a translator two repairs after a validation failure and this route gives none, so a first-attempt rule break would drop a model out of the comparison entirely — which is what happened to the incumbent on the first real bake-off, leaving nothing to compare it against. It is counted as a defect instead. Only an answer nobody can parse is `unusable`.

@@ -200,3 +200,5 @@ class NumberLocalizationTests(unittest.TestCase):
     def test_an_integer_is_not_confused_with_a_decimal(self):
         wrong = "# Capitolo\n\nIl Campo ronzava a 58 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
         self.assertIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(wrong)))
+
+

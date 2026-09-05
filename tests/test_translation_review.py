@@ -1416,3 +1416,52 @@ class TheTranslatorIsComparedTheWayTheWriterIsTests(TranslationReviewFixture):
         translation capsule would carry `you are the writer` into the call."""
         self.assertEqual(self.bf.CANDIDATE_MODELS[self.bf._translator_candidate_name(GLM)], (GLM, "translator"))
         self.assertEqual(self.bf.CANDIDATE_MODELS[self.bf._writer_candidate_name(GLM)], (GLM, "writer"))
+
+
+class TheGlossaryHoldsTheBooksTermsAndNothingElseTests(TranslationReviewFixture):
+    """landfall's glossary reached 216 rows and holds `By then → A quel punto`,
+    `gleams → brilla`, and a whole sentence recorded because one chapter got its
+    tense wrong once. Every row is read into every translator, critic, reviser and
+    repair call for the rest of the book, and is the authority the critic cites — so
+    an ordinary word promoted to a fixed rendering turns a defensible synonym in a
+    later chapter into a finding."""
+
+    def row(self, source, translation, **over):
+        return {"source": source, "translation": translation, "note": "x", **over}
+
+    def test_a_coined_term_becomes_a_row(self):
+        out = self.bf._append_glossary("- **a** → b — n\n", [self.row("tide-chalk", "gesso di marea")])
+        self.assertIn("tide-chalk", out)
+
+    def test_an_ordinary_word_the_translator_marks_a_note_does_not(self):
+        out = self.bf._append_glossary("- **a** → b — n\n", [self.row("By then", "A quel punto", kind="note")])
+        self.assertNotIn("By then", out)
+
+    def test_a_whole_sentence_never_becomes_a_row_however_it_is_labelled(self):
+        """The backstop for an answer that omits `kind` or gets it wrong: a source
+        side longer than a term is a sentence, whatever it calls itself."""
+        long_row = self.row(
+            "The Wall took the shelf the way it always took it",
+            "Il Cavallone prese le secche come le prendeva sempre",
+            kind="term",
+        )
+        self.assertNotIn("took the shelf", self.bf._append_glossary("- **a** → b — n\n", [long_row]))
+
+    def test_a_rendering_longer_than_the_matcher_can_check_never_becomes_a_row(self):
+        wordy = self.row("prayer", "Pray your salt lasts you all the way to it and back", kind="term")
+        self.assertNotIn("Pray your salt", self.bf._append_glossary("- **a** → b — n\n", [wordy]))
+
+    def test_what_is_not_a_term_is_kept_beside_the_chapter(self):
+        locale_root = self.project / f"books/{self.book}/translations/it"
+        kept = self.bf._record_chapter_notes(
+            locale_root, "CH-0001",
+            [self.row("tide-chalk", "gesso di marea"), self.row("By then", "A quel punto", kind="note")],
+        )
+        self.assertEqual([row["source"] for row in kept], ["By then"])
+        written = json.loads((locale_root / "notes" / "CH-0001.json").read_text())
+        self.assertEqual([row["source"] for row in written["notes"]], ["By then"])
+
+    def test_a_chapter_with_only_terms_writes_no_note_file(self):
+        locale_root = self.project / f"books/{self.book}/translations/it"
+        self.bf._record_chapter_notes(locale_root, "CH-0002", [self.row("tide-chalk", "gesso di marea")])
+        self.assertFalse((locale_root / "notes" / "CH-0002.json").exists())
