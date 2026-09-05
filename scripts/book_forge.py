@@ -224,11 +224,25 @@ def _writer_candidate_name(model: str) -> str:
     return f"writer-{_chorus_slug(model)}"
 
 
+def _translator_candidate_name(model: str) -> str:
+    return f"translator-{_chorus_slug(model)}"
+
+
 # Every model in the catalogue offers `high`, and it is the only step `qwen3.8-flash`
 # offers at all. Pinning the candidates to it compares three models rather than
 # three efforts, and the winner is kept at the effort its draft was read at.
 BAKEOFF_VARIANT = "high"
 WRITER_CANDIDATE_MODELS: dict[str, str] = {_writer_candidate_name(m): m for m in CHORUS_MODEL_CONFIGS}
+TRANSLATOR_CANDIDATE_MODELS: dict[str, str] = {_translator_candidate_name(m): m for m in CHORUS_MODEL_CONFIGS}
+# Both families in one map, role -> (model, the role whose prompt and budget it uses).
+# A candidate is a pin and nothing else: the agent file carries the model, the steps
+# and the permissions, and the instruction comes from the base role's prompt. They
+# are kept apart by base role because an agent whose body says *you are the writer*
+# answering a translation capsule is a contamination nobody would find in the output.
+CANDIDATE_MODELS: dict[str, tuple[str, str]] = {
+    **{role: (model, "writer") for role, model in WRITER_CANDIDATE_MODELS.items()},
+    **{role: (model, "translator") for role, model in TRANSLATOR_CANDIDATE_MODELS.items()},
+}
 
 
 def _project_config(root: Path) -> dict[str, object]:
@@ -254,8 +268,8 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     the whole pipeline onto it. A project names its exception under `roles.<role>`
     in book-forge.yaml and nothing else moves.
     """
-    if role in WRITER_CANDIDATE_MODELS:
-        return WRITER_CANDIDATE_MODELS[role], BAKEOFF_VARIANT
+    if role in CANDIDATE_MODELS:
+        return CANDIDATE_MODELS[role][0], BAKEOFF_VARIANT
     if role == CHORUS_SYNTHESIZER_AGENT:
         cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
         variant = str(cfg.get("default_effort", "max")) if isinstance(cfg, dict) else "max"
@@ -848,25 +862,30 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
             "You have no tools and must not assume context outside the supplied envelope.\n"
         ).encode("utf-8"),
     )
-    # One writer per candidate model, so a bake-off has every pin it needs live at once.
-    writer_mode, _writer_variant, writer_steps = ROLE_SPECS["writer"]
-    for mid in models:
-        _write_bytes_atomic(
-            agents / f"{_writer_candidate_name(mid)}.md",
-            (
-                "---\n"
-                f"description: Book Forge writer role, pinned to {mid}.\n"
-                f"mode: {writer_mode}\nmodel: {mid}\nvariant: {BAKEOFF_VARIANT}\nsteps: {writer_steps}\n"
-                'permission:\n  "*": deny\n'
-                "---\n\n"
-                "You are the Book Forge writer role. Return only the task's requested output contract. "
-                "You have no tools and must not assume context outside the supplied envelope.\n"
-            ).encode("utf-8"),
-        )
+    # One agent per candidate model per base role, so a bake-off has every pin it
+    # needs live at once — and the translator family exists for the same reason the
+    # writer's does: the role whose output a reader could not follow is the one no
+    # comparison had ever covered.
+    for base, namer in (("writer", _writer_candidate_name), ("translator", _translator_candidate_name)):
+        base_mode, _base_variant, base_steps = ROLE_SPECS[base]
+        for mid in models:
+            _write_bytes_atomic(
+                agents / f"{namer(mid)}.md",
+                (
+                    "---\n"
+                    f"description: Book Forge {base} role, pinned to {mid}.\n"
+                    f"mode: {base_mode}\nmodel: {mid}\nvariant: {BAKEOFF_VARIANT}\nsteps: {base_steps}\n"
+                    'permission:\n  "*": deny\n'
+                    "---\n\n"
+                    f"You are the Book Forge {base} role. Return only the task's requested output contract. "
+                    "You have no tools and must not assume context outside the supplied envelope.\n"
+                ).encode("utf-8"),
+            )
     allowed = (
         set(ROLE_SPECS)
         | {_chorus_advisor_name(m) for m in models}
         | {_writer_candidate_name(m) for m in models}
+        | {_translator_candidate_name(m) for m in models}
         | {CHORUS_SYNTHESIZER_AGENT}
     )
     for stale in agents.glob("*.md"):
@@ -1656,7 +1675,7 @@ def add_task(
     root = _project_root(project)
     plan = _load_plan(root)
     if (
-        role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role not in WRITER_CANDIDATE_MODELS
+        role not in ROLE_SPECS and role not in CHORUS_ADVISOR_SPECS and role not in CANDIDATE_MODELS
     ) or role in {"book-forge-orchestrator", "book-forge-smoke"}:
         raise BookForgeError(f"Invalid worker role: {role}")
     if any(task["id"] == task_id for task in plan["tasks"]):
@@ -3260,9 +3279,9 @@ ROLE_BUDGETS = {
 for _adv in list(CHORUS_ADVISOR_SPECS):
     ROLE_BUDGETS[_adv] = (16000, 3000)
 ROLE_BUDGETS[CHORUS_SYNTHESIZER_AGENT] = (16000, 4000)
-# A writer candidate is the writer: same envelope, same allowance, another pin.
-for _cand in WRITER_CANDIDATE_MODELS:
-    ROLE_BUDGETS[_cand] = ROLE_BUDGETS["writer"]
+# A candidate is its base role: same envelope, same allowance, another pin.
+for _cand, (_cand_model, _cand_base) in CANDIDATE_MODELS.items():
+    ROLE_BUDGETS[_cand] = ROLE_BUDGETS[_cand_base]
 
 
 def _enforce_budgets(root: Path) -> bool:
@@ -3396,9 +3415,9 @@ def build_envelope(
     # is held to the same register, and is measured against the same budget. Asking
     # it under its own name would give it a smaller envelope than the role it is
     # standing in for, and the comparison would be of two envelopes.
-    base_role = "writer" if role in WRITER_CANDIDATE_MODELS else role
-    if prompt_role is None and role in WRITER_CANDIDATE_MODELS:
-        prompt_role = "writer"
+    base_role = CANDIDATE_MODELS[role][1] if role in CANDIDATE_MODELS else role
+    if prompt_role is None and role in CANDIDATE_MODELS:
+        prompt_role = base_role
     default_input, output_budget = ROLE_BUDGETS[base_role]
     budget = default_input if input_budget is None else input_budget
     if input_budget is None:
@@ -7307,7 +7326,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     if (
         role not in ROLE_SPECS
         and role not in CHORUS_ADVISOR_SPECS
-        and role not in WRITER_CANDIDATE_MODELS
+        and role not in CANDIDATE_MODELS
         and role != CHORUS_SYNTHESIZER_AGENT
     ):
         raise BookForgeError(f"Role cannot run headlessly: {role}")
@@ -7620,6 +7639,147 @@ def _resolve_catalogue_model(name: str) -> str:
     raise BookForgeError(
         f"Not a catalogue model: {name}. Known: {', '.join(sorted(CHORUS_MODEL_CONFIGS))}"
     )
+
+
+def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, locale and field
+    project: Path | str,
+    book_id: str,
+    chapter_id: str,
+    locale: str,
+    models: list[str],
+    *,
+    provider=None,
+) -> dict[str, object]:
+    """Translate one chapter under several models, score each, promote none.
+
+    The writer has had a bake-off since the beginning and the translator never did,
+    so the one role whose output a person could not read is the one no comparison
+    had ever covered — and it was pinned to the writer's model because that is what
+    the project happened to be using.
+
+    **Scored by the monolingual reader, never against a reference translation.**
+    Refinement is measured to lower string similarity while human readers rate the
+    result better (arXiv 2306.03856), so similarity to a model answer would rank the
+    candidates backwards. What is counted is what a reader of the target language
+    stumbles on, per thousand words, which is the defect this whole entry is about.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    locale_root = root / "books" / book_id / "translations" / locale
+    if not locale_root.is_dir():
+        raise BookForgeError(f"No translation workspace for {locale}")
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    source = (root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md").read_text(encoding="utf-8")
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    resolved: list[str] = []
+    for name in models:
+        model = _resolve_catalogue_model(str(name).strip())
+        if model not in resolved:
+            resolved.append(model)
+    if len(resolved) < 2:
+        raise BookForgeError("A bake-off compares at least two models")
+    config = _project_config(root)
+    catalogue = list(_chorus_models_from_config(config))
+    union = catalogue + [model for model in resolved if model not in catalogue]
+    _write_json(root / "opencode.json", _opencode_config(union, config))
+    _write_agents(root, union, config)
+
+    prefix = f"books/{book_id}/work/{chapter_id}/bakeoff-{locale}"
+    checks = _locale_checks(locale_root)
+    rows: list[dict[str, object]] = []
+    for model in resolved:
+        slug = _chorus_slug(model)
+        role = _translator_candidate_name(model)
+        task_id = f"BAKETR-{slug}-{book_id}-{chapter_id}-{locale}"
+        path = f"{prefix}/{slug}/translation.md"
+        if not any(task["id"] == task_id for task in _load_plan(root)["tasks"]):
+            add_task(root, task_id, role, priority=40, outputs=[path])
+        else:
+            _reopen_task(root, task_id)
+        row: dict[str, object] = {"model": model, "variant": BAKEOFF_VARIANT, "state": "unusable"}
+        started = time.monotonic()
+        claim = None
+        try:
+            envelope = build_envelope(
+                root,
+                role=role,
+                task_capsule={
+                    "book": book_id,
+                    "chapter": chapter_id,
+                    "source_language": _read_json(root / "book-forge.yaml")["source_language"],
+                    "target_locale": locale,
+                    "source_markdown": source,
+                    "contract": contract,
+                    "locale_style": style,
+                    "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
+                    "metadata": _read_json(locale_root / "metadata.yaml"),
+                },
+                imports=list(contract.get("imports", [])),
+                state={"previous_boundary": ""},
+                tools=[],
+                max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+            )
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            result = runner(role, envelope, Path(claim["capsule"]).parent)
+            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            value = _parse_contract_json(str(result["text"]))
+            problems = _translation_validation(source, {**value, "_locale": locale}, checks)
+            if problems:
+                raise BookForgeError("; ".join(problems))
+            translated = str(value["translated_markdown"])
+            _complete_model_task(root, task_id, claim, {path: translated.rstrip() + "\n"}, result, envelope)
+            words = len(re.findall(r"\b[\w’'-]+\b", translated, re.UNICODE))
+            findings = _ask_locale_reader(
+                root, book_id, locale, chapter_id, translated, style, runner,
+                task_id=f"BAKEREAD-{slug}-{book_id}-{chapter_id}-{locale}",
+            )
+            counted = [f for f in findings if str(f.get("severity")) in {"blocking", "warning"}]
+            row.update({
+                "state": "drafted",
+                "words": words,
+                "defects": len(counted),
+                "blocking": sum(1 for f in counted if f["severity"] == "blocking"),
+                "defects_per_1000_words": round(len(counted) * 1000 / max(1, words), 2),
+                "cost": float(result.get("cost") or 0.0),
+                "seconds": round(time.monotonic() - started, 1),
+                "path": path,
+                "worst": [str(f.get("translated") or "")[:160] for f in counted[:3]],
+            })
+        except Exception as unusable:  # noqa: BLE001 - one candidate failing is data, not a stop
+            row.update({"state": "unusable", "detail": str(unusable)[:200],
+                        "seconds": round(time.monotonic() - started, 1)})
+            if claim is not None:
+                try:
+                    _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unusable)[:200])
+                except BookForgeError:
+                    pass
+            print(f"[bakeoff] {slug} produced no usable translation: {row['detail']}", file=sys.stderr)
+        rows.append(row)
+
+    ranked = sorted(
+        [row for row in rows if row["state"] == "drafted"],
+        key=lambda row: (row["defects_per_1000_words"], row["cost"]),
+    )
+    index = {
+        "schema": 1, "book": book_id, "chapter": chapter_id, "locale": locale,
+        "scored_by": "locale-reader, defects per thousand words",
+        "candidates": rows,
+        "ranking": [row["model"] for row in ranked],
+    }
+    _write_json(root / prefix / "bakeoff.json", index)
+    for row in rows:
+        if row["state"] == "drafted":
+            print(
+                f"[bakeoff] {row['model']}: {row['defects']} defect(s) in {row['words']} words "
+                f"= {row['defects_per_1000_words']}/1000, ${row['cost']:.4f}, {row['seconds']}s",
+                file=sys.stderr,
+            )
+    print(
+        f"[bakeoff] {len(ranked)}/{len(resolved)} translations of {chapter_id} in {prefix}/. "
+        "Nothing promoted: read them and pin the winner in book-forge.yaml, then `runtime sync`.",
+        file=sys.stderr,
+    )
+    return index
 
 
 def draft_bakeoff(
@@ -9927,7 +10087,7 @@ def _convergence(
 
 def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as well as what it is given
     root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner,
-    unread_reason: list[str] | None = None,
+    unread_reason: list[str] | None = None, task_id: str | None = None,
 ) -> list[dict[str, object]]:
     """The chapter read by someone who cannot see where it came from.
 
@@ -9945,7 +10105,7 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
             _read_one_slice(
                 root, book_id, locale, chapter_id, translated, style, runner, unread_reason,
                 passage=passage, first=first, last=last, of=len(slices),
-                whole=translated if index == 0 else "",
+                whole=translated if index == 0 else "", task_id=task_id,
             )
         )
     # Renumbered across the chapter: each call counts its own from one, and two
@@ -9959,9 +10119,9 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
 def _read_one_slice(  # noqa: PLR0913 - one call over one run of paragraphs
     root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner,
     unread_reason: list[str],
-    *, passage: str, first: int, last: int, of: int, whole: str,
+    *, passage: str, first: int, last: int, of: int, whole: str, task_id: str | None = None,
 ) -> list[dict[str, object]]:
-    task_id = f"LOCREAD-{book_id}-{chapter_id}-{locale}"
+    task_id = task_id or f"LOCREAD-{book_id}-{chapter_id}-{locale}"
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
         add_task(root, task_id, "locale-reader", priority=80, outputs=[])
@@ -12468,6 +12628,7 @@ def build_parser() -> argparse.ArgumentParser:
     bakeoff.add_argument("book")
     bakeoff.add_argument("chapter")
     bakeoff.add_argument("--models", required=True, help="Comma-separated models to draft this chapter with; nothing is promoted")
+    bakeoff.add_argument("--locale", help="Compare translators instead of writers: each model translates this chapter into the locale and the monolingual reader scores it")
     export = commands.add_parser("export")
     export.add_argument("book")
     export.add_argument("--lang", required=True)
@@ -12601,7 +12762,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "advance":
             print(json.dumps(advance_book(args.project, args.book, locales=args.locale, until=args.until), sort_keys=True))
         elif args.command == "bakeoff":
-            print(json.dumps(draft_bakeoff(args.project, args.book, args.chapter, [m.strip() for m in args.models.split(",") if m.strip()]), sort_keys=True))
+            chosen = [m.strip() for m in args.models.split(",") if m.strip()]
+            if args.locale:
+                print(json.dumps(translate_bakeoff(args.project, args.book, args.chapter, args.locale, chosen), sort_keys=True))
+            else:
+                print(json.dumps(draft_bakeoff(args.project, args.book, args.chapter, chosen), sort_keys=True))
         elif args.command == "export":
             results = {}
             if args.format in {"epub", "all"}:

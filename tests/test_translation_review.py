@@ -1349,3 +1349,70 @@ class ASliceIsReadAndRewrittenOnItsOwnTests(TranslationReviewFixture):
         self.bf.review_translation(self.project, self.book, "it", provider=provider)
         kept = (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text()
         self.assertEqual(kept.strip(), chapter.strip())
+
+
+class TheTranslatorIsComparedTheWayTheWriterIsTests(TranslationReviewFixture):
+    """`bakeoff` has compared writers since the beginning and never translators, so
+    the role whose output a reader could not follow is the one no comparison covered.
+    landfall's translator was pinned to `glm-5.3-flash` because that is the writer's
+    model, and nothing had ever measured it against another."""
+
+    def bake(self, reader_by_model):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+
+        class Bench:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, role, envelope, attempt_dir):
+                payload = envelope["payload"]
+                self.calls.append(role)
+                model = payload["model"]
+                if role == "locale-reader":
+                    stumbles = reader_by_model.get(self.pinned, [])
+                    text = json.dumps({"summary": "letto", "followed": True, "stumbles": stumbles})
+                else:
+                    self.pinned = model
+                    text = translation(GOOD_BODY)
+                return {
+                    "text": text, "provider": "openrouter", "model": model,
+                    "variant": payload["variant"], "session_id": "ses",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 400},
+                    "cost": 0.002, "latency_ms": 50, "finish": "stop",
+                }
+
+        bench = Bench()
+        bench.pinned = ""
+        return self.bf.translate_bakeoff(
+            self.project, self.book, "CH-0001", "it", [MODEL, GLM], provider=bench,
+        ), bench
+
+    def stumble(self, sentence):
+        return {"sentence": sentence, "why": "non è italiano", "natural": False, "severity": "warning"}
+
+    def test_the_candidate_the_reader_stumbles_on_least_ranks_first(self):
+        index, _ = self.bake({
+            MODEL: [self.stumble("una frase")],
+            GLM: [self.stumble("una"), self.stumble("due"), self.stumble("tre")],
+        })
+        self.assertEqual(index["ranking"][0], MODEL)
+        self.assertEqual(index["scored_by"], "locale-reader, defects per thousand words")
+
+    def test_every_candidate_is_scored_per_thousand_words_and_nothing_is_promoted(self):
+        index, _ = self.bake({MODEL: [], GLM: [self.stumble("una frase")]})
+        for row in index["candidates"]:
+            self.assertEqual(row["state"], "drafted")
+            self.assertIn("defects_per_1000_words", row)
+        chapter = (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text()
+        self.assertIn("Masticava gesso di marea", chapter, "the bake-off must not touch the translation")
+
+    def test_a_bake_off_needs_two_models(self):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.translate_bakeoff(self.project, self.book, "CH-0001", "it", [MODEL], provider=None)
+
+    def test_a_translator_candidate_answers_on_the_translator_prompt(self):
+        """The agent body says which role it is, so a writer pin answering a
+        translation capsule would carry `you are the writer` into the call."""
+        self.assertEqual(self.bf.CANDIDATE_MODELS[self.bf._translator_candidate_name(GLM)], (GLM, "translator"))
+        self.assertEqual(self.bf.CANDIDATE_MODELS[self.bf._writer_candidate_name(GLM)], (GLM, "writer"))
