@@ -4328,7 +4328,7 @@ The batch variant is the same model at half price, and this role already takes s
 
 ## A draft is published in the book's order, not in the order it was translated ✅
 
-**Status: ✅ Done — 2026-09-04**
+**Status: ✅ Done — 2026-09-05, both branches**
 
 **Found publishing seventeen translated chapters.** `Draft publication refused: completed chapters out of order`. The locale's `completed_chapters` reads `… CH-0006, CH-0008, CH-0009, CH-0011, CH-0007, CH-0010, CH-0012 …` — the order in which chapters *finished*, not the order they are read in. CH-0007 and CH-0010 finished late because they were refused once and retried, which is exactly what the set-aside-and-carry-on fix shipped yesterday is for.
 
@@ -4346,6 +4346,9 @@ So the gate refuses a state its sibling feature now produces routinely. The list
 - [x] Test: a completed chapter the book does not have is still refused
 - [x] Suite green: 720 passed, 405 subtests (era 716). Reinstall, commit & push
 - [x] Landfall's Italian publishes with all seventeen chapters in order — verified in the epub's spine, `chapter-0001` through `chapter-0017`, and the four files are on Drive at their existing ids
+- [x] **The source branch of the same gate, which was left as it was.** Publishing the English after CH-0001, CH-0002 and CH-0003 were rewritten failed with `Draft publication refused: closed chapters out of order`: `closed_chapters` reads `CH-0004 … CH-0017, CH-0001, CH-0002, CH-0003`, because a rewritten chapter closes late. `reset --chapter` makes that the ordinary case rather than the rare one. The fix is the one already written and justified twenty lines above, applied to the branch that reads `closed_chapters` instead of `completed_chapters`
+- [x] Test: a book whose closed log is out of order publishes a draft, and its chapters come out in the outline's order
+- [x] Test: a closed chapter the book does not have is still refused. Suite green: 750 passed, 405 subtests (era 746)
 
 **Done when:** A chapter that was retried reads in its own place, and the publication gate stops rejecting the retry it asked for.
 
@@ -4518,3 +4521,36 @@ Agent locale-reader not found, run 'opencode agent list' to get an agent list
 - [ ] Suite green. Reinstall, commit & push
 
 **Done when:** Adding a role to the engine is enough to have it asked.
+
+
+## The provider is not asked to read the caller's stdin ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-05, isolated by eight tests**
+
+**`ProviderProducedNothing` is, at least sometimes, the engine holding the door shut.** `_run_opencode_process` opens the subprocess with `stdout=PIPE, stderr=PIPE` and says nothing about `stdin`, so opencode inherits whatever the caller had. When that is a live pipe rather than a terminal or `/dev/null`, the call returns nothing for its whole wall clock and the engine records `OpenCode call for writer produced no result in 900s`.
+
+**Measured on CH-0002, seven failures against five successes, with one variable moved:**
+
+| how the call was made | stdin | outcome |
+|---|---|---|
+| `run --next` from a script started in a background shell | inherited pipe | 7 calls, **0 events**, 900s each |
+| the same argv replayed by hand, foreground | terminal-backed | 294s, answered |
+| replayed with the engine's own `_opencode_environment()` | terminal-backed | 241s, answered |
+| replayed with `start_new_session=True` as the engine sets it | terminal-backed | 139s, answered |
+| replayed as probe-then-run, the engine's exact sequence | terminal-backed | 219s, answered |
+| `run --next` from the same script with `< /dev/null` | `/dev/null` | **226s, answered, first attempt** |
+
+The failing and succeeding calls interleaved within the same minutes, so the provider was answering throughout. Ruled out first, each by a test rather than by reasoning: the model (a small prompt answered), the agent file (`runtime sync` had only added `locale-reader.md`, the writer's was byte-identical), the envelope (the same bytes answered by hand four times), the environment and the mcp-stripped config, `start_new_session`, the `debug agent` probe that precedes every call, and the git snapshot opencode takes at step start (`git status` on this tree runs in 27ms).
+
+**Why it surfaced now and not in the seventeen chapters before.** Those runs were launched with `nohup`, which points stdin at `/dev/null` as a side effect. The first run launched without it was the first to hang. So the engine has always had this and has been protected by an accident of how it was called — which is the worst shape for a defect, because the protection disappears the moment someone runs it from CI, a supervisor, a cron entry, or any launcher that hands its child a pipe.
+
+**Fix.** `stdin=subprocess.DEVNULL` on every opencode subprocess. No role reads standard input — the envelope arrives as attached files and the prompt as an argument — so there is nothing to give up.
+
+**Tasks:**
+- [ ] `_run_opencode_process` opens every opencode subprocess with `stdin` on `/dev/null`
+- [ ] The measurement above sits beside it, so the next person who removes it knows what it costs
+- [ ] Test: the subprocess is opened with stdin closed, on both the probe and the call
+- [ ] Re-read the `ProviderProducedNothing` failures this project has recorded and say how many carry this signature — zero provider events and a full-timeout wall clock
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A call that answers by hand answers from a script.

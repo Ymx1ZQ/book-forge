@@ -140,6 +140,34 @@ class NavigationTests(EpubTests):
         self.assertNotIn("author", self.bf.add_book(self.base, "Unnamed"))
 
 
+class ASourceDraftPublishesInTheBookSOrderTests(EpubTests):
+    """The same gate on the branch that reads `closed_chapters`, which was left as it
+    was. Publishing landfall's English after its first three chapters were rewritten
+    failed with `closed chapters out of order`: the log read `CH-0004 … CH-0017,
+    CH-0001, CH-0002, CH-0003`, because a rewritten chapter closes last.
+    `reset --chapter` makes that the ordinary case."""
+
+    def close_in_order(self, order):
+        chapters = sorted(p.stem for p in (self.base / f"books/{self.book}/manuscript/chapters").glob("CH-*.md"))
+        state_path = self.base / f"books/{self.book}/state.yaml"
+        state = json.loads(state_path.read_text())
+        state["closed_chapters"] = order(list(chapters))
+        state_path.write_text(json.dumps(state))
+        return chapters
+
+    def test_a_closed_log_out_of_order_still_publishes_in_the_books_order(self):
+        chapters = self.close_in_order(lambda c: list(reversed(c)))
+        assembly = self.bf.assemble_edition(self.base, self.book, "en", draft=True)
+        got = [str(row.get("id") or row.get("chapter")) for row in assembly["chapters"]]
+        self.assertEqual(got, list(chapters), "the reader gets the book's order, not the log's")
+
+    def test_a_closed_chapter_the_book_does_not_have_is_still_refused(self):
+        self.close_in_order(lambda c: c + ["CH-9999"])
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.assemble_edition(self.base, self.book, "en", draft=True)
+        self.assertIn("unknown chapter", str(caught.exception))
+
+
 class ADraftPublishesInTheBookSOrderTests(EpubTests):
     """Landfall's Italian was refused with `completed chapters out of order`: the log
     read `… CH-0009, CH-0011, CH-0007, CH-0010 …` because CH-0007 and CH-0010 were

@@ -10814,11 +10814,15 @@ def assemble_edition(project: Path | str, book_id: str, language: str, draft: bo
             closed = state.get("closed_chapters") or []
             if not isinstance(closed, list) or not closed:
                 raise BookForgeError("Draft publication refused: no closed chapters available for review (write at least one chapter)")
+            # The same reading the translated branch above already takes: the log
+            # records when a chapter closed, and a chapter rewritten after the book
+            # moved on closes last. `reset --chapter` makes that ordinary rather than
+            # rare — landfall's read `CH-0004 … CH-0017, CH-0001, CH-0002, CH-0003`
+            # after the first three were redone. A chapter the book does not have is
+            # still refused; where a chapter sits is the outline's business.
             if not all(ch in expected for ch in closed):
                 raise BookForgeError("Draft publication refused: closed chapters contain unknown chapter")
-            if closed != sorted(closed, key=lambda x: expected.index(x) if x in expected else 999):
-                raise BookForgeError("Draft publication refused: closed chapters out of order")
-            export_chapters = [str(c) for c in closed]
+            export_chapters = [str(ch) for ch in expected if ch in set(closed)]
             manuscript_root = root / "books" / book_id / "manuscript" / "chapters"
         else:
             if state.get("closed_chapters") != expected:
