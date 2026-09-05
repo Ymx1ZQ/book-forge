@@ -1215,7 +1215,7 @@ class TheRevisionIsGatedOnHavingMovedNoFactsTests(TranslationReviewFixture):
         """The cheap half of the gate. A digit the source does not have is caught
         without a model and without a call — and a number spelled out in words is
         not, which is the whole reason the check below exists as well."""
-        moved = self.CHAPTER + "\n\nErano 14 lampade."
+        moved = self.CHAPTER.replace("contava le lampade", "contava 14 lampade", 1)
         _, provider, chapter, record = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
         self.assertNotIn("14", chapter)
         self.assertFalse(record["applied"])
@@ -1248,3 +1248,104 @@ class TheRevisionIsGatedOnHavingMovedNoFactsTests(TranslationReviewFixture):
             [row["after"] for row in provider.checked["changed"]], ["faceva il conto delle lampade"]
         )
         self.assertIn("source_markdown", provider.checked)
+
+
+class AGlossaryIsReadAgainstItselfTests(TranslationReviewFixture):
+    """landfall's glossary said `the Wall → il Cavallone` with **Never «il Muro»**
+    written into the note and the reason recorded, and two thirds of the way down
+    the same file fixed the watch formula as «Il Muro è libero», *fissa ad ogni
+    ricorrenza*. Nothing read a glossary against itself, so the review meant to take
+    «il Muro» out of five chapters would have put it back through the formula."""
+
+    def glossary(self, extra):
+        path = self.project / f"books/{self.book}/translations/it/glossary.md"
+        path.write_text(path.read_text() + extra, encoding="utf-8")
+        return path.read_text()
+
+    def test_a_row_that_uses_what_another_row_forbids_is_reported(self):
+        text = self.glossary(
+            "- **the Wall / tide-wall** → il Cavallone — the bore. ✗ «il Muro» because Italian has one word for wall.\n"
+            "- **Wall's clear** → «Il Muro è libero» — the watch formula, fixed at every recurrence.\n"
+        )
+        problems = self.bf._glossary_self_contradictions(text)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("forbids 'il Muro'", problems[0])
+
+    def test_rows_that_agree_are_not_reported(self):
+        text = self.glossary(
+            "- **the Wall / tide-wall** → il Cavallone — the bore. ✗ «il Muro» because Italian has one word for wall.\n"
+            "- **Wall's clear** → «Il Cavallone è libero» — the watch formula, fixed at every recurrence.\n"
+        )
+        self.assertEqual(self.bf._glossary_self_contradictions(text), [])
+
+    def test_a_forbidden_rendering_in_a_chapter_is_a_finding(self):
+        """The term is quoted mid-sentence on purpose. A capitalised term is matched
+        with its case, because that is what tells `the Wall` from an ordinary wall,
+        and the cost is that a sentence-initial `The Wall` is not seen. The existing
+        compliance check has always behaved this way and was scored at that setting,
+        so it is recorded here rather than changed underneath that measurement."""
+        text = self.glossary(
+            "- **the Wall / tide-wall** → il Cavallone — the bore. ✗ «il Muro» because Italian has one word for wall.\n"
+        )
+        findings = self.bf._glossary_compliance(
+            "By dusk the Wall came home on the hour.", "Al tramonto il Muro tornò a casa all'ora.", text
+        )
+        self.assertTrue([row for row in findings if "forbids" in row], findings)
+
+    def test_a_forbidden_rendering_is_not_a_finding_when_the_source_never_uses_the_term(self):
+        """The conjunction is what keeps an ordinary word out of the report: the
+        chapter has to be rendering *this* term for the prohibition to apply."""
+        text = self.glossary(
+            "- **the Wall / tide-wall** → il Cavallone — the bore. ✗ «il Muro» because Italian has one word for wall.\n"
+        )
+        findings = self.bf._glossary_compliance(
+            "She put her hand on the stone.", "Appoggiò la mano al Muro della torre.", text
+        )
+        self.assertEqual([row for row in findings if "forbids" in row], [])
+
+    def test_a_row_without_the_mark_declares_no_prohibition(self):
+        """Prose is not read: the row that mattered said **Never «il Muro»** in bold
+        English and every check in the engine walked past it."""
+        text = self.glossary(
+            "- **the Wall / tide-wall** → il Cavallone — the bore, **Never «il Muro»**, Italian has one word.\n"
+            "- **Wall's clear** → «Il Muro è libero» — the watch formula.\n"
+        )
+        self.assertEqual(self.bf._glossary_self_contradictions(text), [])
+
+
+class ASliceIsReadAndRewrittenOnItsOwnTests(TranslationReviewFixture):
+    """Measured on landfall's CH-0001, 45 paragraphs in one call each: the reader was
+    allowed six stumbles and reported three, and the reviser — told in as many words
+    to read the whole chapter and not stop at the findings — rewrote exactly the three
+    sentences it had been handed. Neither was short of allowance. Both were short of
+    attention, which is a property of how much text one call holds."""
+
+    def test_a_long_chapter_is_read_and_revised_in_runs_of_paragraphs(self):
+        long_chapter = "# Titolo\n\n" + "\n\n".join(f"Paragrafo numero uno di prova {n}." for n in range(40))
+        slices = self.bf._paragraph_slices(long_chapter)
+        self.assertGreater(len(slices), 1)
+        self.assertEqual("\n\n".join(text for _, _, text in slices), long_chapter)
+
+    def test_a_short_chapter_is_still_one_call(self):
+        """The engine must not pay four calls for a chapter that fits in one."""
+        self.assertEqual(len(self.bf._paragraph_slices("uno\n\ndue\n\ntre")), 1)
+
+    def test_every_paragraph_belongs_to_exactly_one_slice(self):
+        text = "\n\n".join(f"riga {n}" for n in range(37))
+        slices = self.bf._paragraph_slices(text)
+        covered = [n for first, last, _ in slices for n in range(first, last + 1)]
+        self.assertEqual(covered, list(range(1, 38)))
+
+    def test_a_slice_that_loses_a_paragraph_is_dropped_and_the_original_kept(self):
+        """The chapter is rebuilt by joining the pieces, so a slice that merges two
+        paragraphs moves the book's structure everywhere downstream of it."""
+        chapter = "# La chiatta dell'alba\n\n" + GOOD_BODY
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)],
+            critic={"findings": [], "verdict": "faithful"},
+            reviser={"revised_markdown": "una riga sola dove ce n'erano due", "changed": []},
+        )
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        kept = (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text()
+        self.assertEqual(kept.strip(), chapter.strip())

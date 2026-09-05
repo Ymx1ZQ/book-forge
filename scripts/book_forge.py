@@ -8540,13 +8540,40 @@ REVIEW_MAX_FINDINGS = 6
 # What the monolingual reader may return. Small for the same reason the critic's is:
 # an answer bounded in the question is an answer that arrives.
 LOCALE_READER_MAX_FINDINGS = 6
+# How much of a chapter one monolingual call is asked to hold. Measured on
+# landfall's CH-0001, 45 paragraphs read in one call: the reader had a bound of six
+# and reported three, so the bound was never what stopped it — attention over a long
+# text was. Raising the bound is the move that was already measured and lost, the
+# unbounded question having returned nothing at all in four attempts out of four.
+# Slicing turns the same allowance onto a quarter of the text instead.
+LOCALE_SLICE_PARAGRAPHS = 12
 # The revision check answers one clause per moved pair and usually an empty list,
 # so it is the smallest ask in the engine. It is deliberately not the critic's 9000:
 # a bound that invites an essay gets one, and this question has no essay in it.
 REVISION_CHECK_MAX_OUTPUT = 2000
 
 
-def _locale_reader_capsule(chapter_id: str, translated: str, style: str) -> dict[str, object]:
+def _paragraph_slices(text: str, size: int = LOCALE_SLICE_PARAGRAPHS) -> list[tuple[int, int, str]]:
+    """The chapter in consecutive runs of paragraphs, as (first, last, text).
+
+    Paragraph-wise and joined back with the separator it was split on, so a slice
+    nobody changes reassembles into the byte-identical chapter — the reviser's gate
+    compares against the source and a reassembly that drifts would fail every time
+    for a reason that has nothing to do with the writing.
+    """
+    paragraphs = text.split("\n\n")
+    if len(paragraphs) <= size:
+        return [(1, len(paragraphs), text)]
+    return [
+        (start + 1, min(start + size, len(paragraphs)), "\n\n".join(paragraphs[start:start + size]))
+        for start in range(0, len(paragraphs), size)
+    ]
+
+
+def _locale_reader_capsule(  # noqa: PLR0913 - a slice needs to know which one it is
+    chapter_id: str, translated: str, style: str,
+    *, passage: str | None = None, first: int = 0, last: int = 0, of: int = 0, whole: str = "",
+) -> dict[str, object]:
     """What the reader is given, and — the point of the role — what it is denied.
 
     The critic reads the source and the translation side by side, and that is why it
@@ -8562,12 +8589,20 @@ def _locale_reader_capsule(chapter_id: str, translated: str, style: str) -> dict
     reported as unreadable rather than excused as agreed — the glossary is the
     critic's authority and this role exists to be outside it.
     """
-    return {
+    capsule: dict[str, object] = {
         "chapter": chapter_id,
-        "translated_markdown": translated,
+        "translated_markdown": translated if passage is None else passage,
         "locale_style": style,
         "answer_bound": f"Report at most {LOCALE_READER_MAX_FINDINGS} stumbles, worst first.",
     }
+    if passage is not None and of > 1:
+        capsule["passage"] = f"paragraphs {first} to {last} of {of}"
+        if whole:
+            # Only the first slice carries it, and only to be summarised. A reader
+            # shown eleven paragraphs cannot say what the chapter is about, and that
+            # question is the one that finds the defect living in no single sentence.
+            capsule["whole_chapter_for_the_summary"] = whole
+    return capsule
 
 
 def _locale_reader_findings(value: object) -> list[dict[str, object]]:
@@ -9336,8 +9371,14 @@ def _forbidden_form_problems(translated: str, checks: dict[str, object]) -> list
     return problems
 
 
-def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
-    """The glossary's rows as (source alternatives, target alternatives)."""
+def _glossary_terms(glossary: str, *, with_notes: bool = False) -> list[tuple]:
+    """The glossary's rows as (source alternatives, target alternatives).
+
+    With `with_notes`, each row carries its note as a third element. The note is
+    where a row says what its rendering does not cover and what it forbids, and it
+    has to come out of the same parse as the terms — a second walk over the file
+    with its own row filter drifts from this one the first time either changes.
+    """
     rows = []
     unmatchable: list[str] = []
     for line in glossary.splitlines():
@@ -9370,6 +9411,7 @@ def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
         # to may contain the separator — `on a chain (log/ledger)` was cut in half
         # and left `ledger)` standing as a term, which the check then hunted for in
         # every chapter and never found, because nobody had written it.
+        note = rest.split(" — ", 1)[1] if " — " in rest else ""
         sources = [_clean(piece) for piece in _clean(source_part).split("/")]
         targets = [_clean(piece) for piece in re.split(r"[/,]", _clean(target_part))]
         sources = [value for value in sources if len(value) >= 4]
@@ -9377,7 +9419,8 @@ def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
         if sources and targets:
             # Longest first, so a row offering both `fen-gate` and `the gate` is
             # judged on the specific alternative when the chapter contains it.
-            rows.append((sorted(sources, key=len, reverse=True), targets))
+            ordered = sorted(sources, key=len, reverse=True)
+            rows.append((ordered, targets, note) if with_notes else (ordered, targets))
     return rows
 
 
@@ -9394,8 +9437,30 @@ GLOSSARY_MAX_TARGET_WORDS = 6
 # under the harbour counter. On the arrow rather than in the note, because the note
 # is prose and prose drifts: a marker a person can reword is a marker that breaks.
 GLOSSARY_CONDITIONAL_ARROW = "→?"
+# A row may name renderings it forbids: `✗ il Muro`, in the note, one per mark. It
+# is a marker rather than prose for the same reason the conditional arrow is —
+# landfall's row for the tidal bore said **Never «il Muro»** in words, and nothing
+# read it, so a second row two thirds down the file fixed the watch formula as
+# «Il Muro è libero» and a review would have put back exactly what the first row
+# existed to remove. A rule a maintainer can rephrase is a rule that breaks.
+GLOSSARY_FORBIDDEN_MARK = "✗"
+_GLOSSARY_FORBIDDEN_RE = re.compile(
+    GLOSSARY_FORBIDDEN_MARK + r"\s*(?:«([^»]+)»|“([^”]+)”|`([^`]+)`|\"([^\"]+)\"|([^,;.—]+))"
+)
 _GLOSSARY_UNMATCHABLE_REPORTED: set[str] = set()
 _GLOSSARY_FUNCTION_WORDS = {"il", "lo", "la", "i", "gli", "le", "un", "una", "di", "del", "della", "dei", "delle", "da", "a", "e", "the", "of", "l'"}
+
+
+def _flags(term: str) -> int:
+    """Case sensitivity for a glossary term, decided by the term.
+
+    A capitalised term is a name, and English tells `the Wall` from `wall` by the
+    capital alone. Folding the case there turns every ordinary wall into a missing
+    proper noun. Module level because the forbidden-rendering check needs the same
+    rule, and a copy of it would drift.
+    """
+    capitalised = any(word[:1].isupper() for word in re.findall(r"[\w']+", term)[1:] or re.findall(r"[\w']+", term))
+    return re.UNICODE if capitalised else re.IGNORECASE | re.UNICODE
 
 
 def _term_pattern(term: str, *, drop_leading_article: bool = False) -> str:
@@ -9455,13 +9520,6 @@ def _glossary_compliance(source: str, translated: str, glossary: str) -> list[st
     wrong, and a heuristic inside a blocking check is how a book deadlocks. It is
     exact enough to be worth a repair call and not to be trusted with a refusal.
     """
-    def _flags(term: str) -> int:
-        # A capitalised term is a name, and English tells `the Wall` from `wall`
-        # by the capital alone. Folding the case there turns every ordinary wall
-        # into a missing proper noun.
-        capitalised = any(word[:1].isupper() for word in re.findall(r"[\w']+", term)[1:] or re.findall(r"[\w']+", term))
-        return re.UNICODE if capitalised else re.IGNORECASE | re.UNICODE
-
     findings = []
     for sources, targets in _glossary_terms(glossary):
         matchable = [value for value in targets if len(value.split()) <= GLOSSARY_MAX_TARGET_WORDS]
@@ -9491,7 +9549,62 @@ def _glossary_compliance(source: str, translated: str, glossary: str) -> list[st
         ):
             continue
         findings.append(f"glossary: the source uses {used!r} and the translation never renders it as {targets[0]!r}")
+    # The other half of a row: what it says must never be used. Until now the
+    # glossary could only report a rendering that was missing, never one that was
+    # present and banned — so «il Muro» survived in five chapters of a book whose
+    # glossary had forbidden it in bold, and only a person reading the Italian
+    # found it. Gated on the source using the row's term, so an ordinary word that
+    # happens to match somewhere else in the chapter is not a finding.
+    for sources, rendering in _glossary_forbidden(glossary):
+        if not any(re.search(_term_pattern(value), source, _flags(value)) for value in sources):
+            continue
+        if re.search(_term_pattern(rendering, drop_leading_article=True), translated, _flags(rendering)):
+            findings.append(
+                f"glossary: the row for {sources[0]!r} forbids {rendering!r} and the translation uses it"
+            )
     return findings
+
+
+def _glossary_forbidden(glossary: str) -> list[tuple[list[str], str]]:
+    """Rows that name a rendering they forbid, as (the row's source terms, the rendering).
+
+    Read off the note, which is where a maintainer writes the reason, and marked so
+    it is found: the row that mattered had its prohibition in bold English prose and
+    every check in this engine walked past it.
+    """
+    forbidden: list[tuple[list[str], str]] = []
+    for sources, _targets, note in _glossary_terms(glossary, with_notes=True):
+        for match in _GLOSSARY_FORBIDDEN_RE.finditer(note):
+            rendering = next((group for group in match.groups() if group), "").strip(" *«»`\"")
+            if len(rendering) >= 3:
+                forbidden.append((sources, rendering))
+    return forbidden
+
+
+def _glossary_self_contradictions(glossary: str) -> list[str]:
+    """Rows of one glossary that disagree with each other. No model, no call.
+
+    landfall carried two: `the Wall → il Cavallone`, whose note forbids «il Muro»
+    and records why two readers lost half a chapter to it, and `Wall's clear →
+    «Il Muro è libero»`, marked *fissa ad ogni ricorrenza*. Nothing read a glossary
+    against itself, so the review meant to take «il Muro» out of five chapters
+    would have written it back in through the watch formula.
+    """
+    rows = _glossary_terms(glossary)
+    forbidden = _glossary_forbidden(glossary)
+    problems = []
+    for sources, rendering in forbidden:
+        pattern = _term_pattern(rendering, drop_leading_article=True)
+        for other_sources, other_targets in rows:
+            if other_sources == sources:
+                continue
+            for target in other_targets:
+                if re.search(pattern, target, _flags(rendering)):
+                    problems.append(
+                        f"glossary: the row for {sources[0]!r} forbids {rendering!r} and the row for "
+                        f"{other_sources[0]!r} renders it {target!r}"
+                    )
+    return sorted(set(problems))
 
 
 def _translation_validation(source: str, value: dict[str, object], checks: dict[str, object] | None = None) -> list[str]:
@@ -9825,6 +9938,29 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
     """
     if unread_reason is None:
         unread_reason = []
+    slices = _paragraph_slices(translated)
+    found: list[dict[str, object]] = []
+    for index, (first, last, passage) in enumerate(slices):
+        found.extend(
+            _read_one_slice(
+                root, book_id, locale, chapter_id, translated, style, runner, unread_reason,
+                passage=passage, first=first, last=last, of=len(slices),
+                whole=translated if index == 0 else "",
+            )
+        )
+    # Renumbered across the chapter: each call counts its own from one, and two
+    # slices both reporting `R-01` collide in the review file and in the fingerprints
+    # the convergence check compares between passes.
+    for number, row in enumerate(found, start=1):
+        row["id"] = f"R-{number:02d}"
+    return found
+
+
+def _read_one_slice(  # noqa: PLR0913 - one call over one run of paragraphs
+    root: Path, book_id: str, locale: str, chapter_id: str, translated: str, style: str, runner,
+    unread_reason: list[str],
+    *, passage: str, first: int, last: int, of: int, whole: str,
+) -> list[dict[str, object]]:
     task_id = f"LOCREAD-{book_id}-{chapter_id}-{locale}"
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
@@ -9836,7 +9972,10 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
         envelope = build_envelope(
             root,
             role="locale-reader",
-            task_capsule=_locale_reader_capsule(chapter_id, translated, style),
+            task_capsule=_locale_reader_capsule(
+                chapter_id, translated, style,
+                passage=passage, first=first, last=last, of=of, whole=whole,
+            ),
             imports=[],
             state={},
             tools=[],
@@ -9849,7 +9988,7 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
         _refuse_empty_answer("locale-reader", chapter_id, result)
         value = _parse_contract_json(str(result["text"]))
         findings = _locale_reader_findings(value)
-        if not value.get("followed", True):
+        if not value.get("followed", True) and whole:
             # A reader who cannot say what the chapter is about has found the largest
             # defect in it, and it lives in no single sentence.
             print(
@@ -9882,8 +10021,9 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
         return []
 
 
-def _locale_reviser_capsule(
-    chapter_id: str, translated: str, style: str, glossary: str, findings: list[dict[str, object]]
+def _locale_reviser_capsule(  # noqa: PLR0913 - a slice needs to know which one it is
+    chapter_id: str, translated: str, style: str, glossary: str, findings: list[dict[str, object]],
+    *, first: int = 0, last: int = 0, of: int = 0,
 ) -> dict[str, object]:
     """What the reviser writes with, and what it is denied.
 
@@ -9902,7 +10042,7 @@ def _locale_reviser_capsule(
     agreed; the reviser writes, and a rewrite that renames the book's fixed terms
     trades one defect for a worse one. It arrives framed as a list of names.
     """
-    return {
+    capsule: dict[str, object] = {
         "chapter": chapter_id,
         "chapter_markdown": translated,
         "locale_style": style,
@@ -9916,6 +10056,9 @@ def _locale_reviser_capsule(
             if str(row.get("translated") or "").strip()
         ],
     }
+    if of > 1:
+        capsule["passage"] = f"paragraphs {first} to {last} of {of}"
+    return capsule
 
 
 def _bilingual_repair_findings(findings: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -10071,41 +10214,24 @@ def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules a
     style = (locale_root / "style.md").read_text(encoding="utf-8")
     glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
     translated = str(value["translated_markdown"])
-    task_id = f"LOCREV-{book_id}-{chapter_id}-{locale}"
     record_path = f"books/{book_id}/translations/{locale}/revisions/{chapter_id}.json"
-    plan = _load_plan(root)
-    if not any(task["id"] == task_id for task in plan["tasks"]):
-        add_task(
-            root,
-            task_id,
-            "locale-reviser",
-            priority=83,
-            chapter_order=int(contract.get("order", 0)),
-            outputs=[record_path],
-        )
-    else:
-        _reopen_task(root, task_id)
     claim = None
     try:
-        envelope = build_envelope(
-            root,
-            role="locale-reviser",
-            task_capsule=_locale_reviser_capsule(chapter_id, translated, style, glossary, findings),
-            imports=[],
-            state={},
-            tools=[],
-            max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
-        )
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        attempt_dir = Path(claim["capsule"]).parent
-        result = runner("locale-reviser", envelope, attempt_dir)
-        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-        _refuse_empty_answer("locale-reviser", chapter_id, result)
-        answer = _parse_contract_json(str(result["text"]))
-        revised = answer.get("revised_markdown")
-        if not isinstance(revised, str) or not revised.strip():
-            raise BookForgeError("the reviser returned no chapter")
-        changed = answer.get("changed") if isinstance(answer.get("changed"), list) else []
+        # Sliced for the same reason the reader is, and measured on the same run:
+        # told to read the whole chapter and not stop at the findings, the reviser
+        # rewrote exactly the three sentences the reader had named and nothing else.
+        # An instruction not to do the minimum does not beat a short passage.
+        slices = _paragraph_slices(translated)
+        pieces: list[str] = []
+        changed: list[dict[str, object]] = []
+        for first, last, passage in slices:
+            piece, rewrites = _revise_one_slice(
+                root, book_id, locale, chapter_id, contract, passage, style, glossary, findings,
+                first=first, last=last, of=len(slices), runner=runner,
+            )
+            pieces.append(piece)
+            changed.extend(rewrites)
+        revised = "\n\n".join(pieces)
         candidate = {**value, "translated_markdown": revised}
         rejected = _translation_validation(source, {**candidate, "_locale": locale}, _locale_checks(locale_root))
         before = set(_glossary_compliance(source, translated, glossary))
@@ -10117,22 +10243,21 @@ def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules a
                 _revision_moved_meaning(root, book_id, locale, chapter_id, source, list(changed), runner=runner)
             )
         applied = bool(revised.strip() != translated.strip()) and not rejected
-        manifest = stage_outputs(root, claim["attempt"], {record_path: _json_bytes({
+        record_id = f"LOCREVREC-{book_id}-{chapter_id}-{locale}"
+        if not any(row["id"] == record_id for row in _load_plan(root)["tasks"]):
+            add_task(root, record_id, "locale-reviser", priority=83,
+                     chapter_order=int(contract.get("order", 0)))
+        else:
+            _reopen_task(root, record_id)
+        _execute_materialized_task(root, record_id, {record_path: _json_bytes({
             "schema": 1,
             "chapter": chapter_id,
+            "slices": len(slices),
             "applied": applied,
             "changed": changed,
             # Empty when the revision was taken. A reason here is the gate speaking.
             "rejected": rejected,
         })})
-        record_execution(
-            root,
-            claim["attempt"],
-            claim["fence"],
-            output_hash=_sha256_bytes(_json_bytes(manifest)),
-            telemetry=_provider_telemetry(result, envelope),
-        )
-        promote_task(root, claim["attempt"], claim["fence"])
         if rejected:
             print(
                 f"[locale-reviser] {chapter_id}: the revision was refused and the translation kept — "
@@ -10150,13 +10275,70 @@ def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules a
     except Exception as unrevised:
         # Advisory in its failure the way the reader is: a chapter that could not be
         # revised is a chapter that reads worse, not one that stops the run.
+        print(f"[locale-reviser] {chapter_id} was not revised: {str(unrevised)[:160]}", file=sys.stderr)
+        return None
+
+
+def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
+    root: Path, book_id: str, locale: str, chapter_id: str, contract: dict[str, object],
+    passage: str, style: str, glossary: str, findings: list[dict[str, object]],
+    *, first: int, last: int, of: int, runner,
+) -> tuple[str, list[dict[str, object]]]:
+    """One passage rewritten, or handed back exactly as it came.
+
+    A slice that comes back with a different number of paragraphs is dropped and the
+    original kept: the chapter is rebuilt by joining these pieces, so a slice that
+    quietly merges two paragraphs or loses one moves the whole book's structure, and
+    the whole-chapter gate downstream would report it as a defect of the writing.
+    """
+    task_id = f"LOCREV-{book_id}-{chapter_id}-{locale}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, "locale-reviser", priority=83,
+                 chapter_order=int(contract.get("order", 0)))
+    else:
+        _reopen_task(root, task_id)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root,
+            role="locale-reviser",
+            task_capsule=_locale_reviser_capsule(
+                chapter_id, passage, style, glossary, findings, first=first, last=last, of=of,
+            ),
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        result = runner("locale-reviser", envelope, Path(claim["capsule"]).parent)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        _refuse_empty_answer("locale-reviser", chapter_id, result)
+        answer = _parse_contract_json(str(result["text"]))
+        revised = answer.get("revised_markdown")
+        if not isinstance(revised, str) or not revised.strip():
+            raise BookForgeError("the reviser returned no passage")
+        if len(revised.split("\n\n")) != len(passage.split("\n\n")):
+            raise BookForgeError(
+                f"paragraphs {first}-{last} came back as {len(revised.split(chr(10) + chr(10)))} "
+                f"of {len(passage.split(chr(10) + chr(10)))}"
+            )
+        rewrites = answer.get("changed") if isinstance(answer.get("changed"), list) else []
+        _set_attempt_failure(root, claim["attempt"], block=False, reason="passage revised")
+        return revised, [row for row in rewrites if isinstance(row, dict)]
+    except Exception as unrevised:
         if claim is not None:
             try:
                 _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unrevised)[:200])
             except BookForgeError:
                 pass
-        print(f"[locale-reviser] {chapter_id} was not revised: {str(unrevised)[:160]}", file=sys.stderr)
-        return None
+        print(
+            f"[locale-reviser] {chapter_id} paragraphs {first}-{last} kept as they were: "
+            f"{str(unrevised)[:120]}",
+            file=sys.stderr,
+        )
+        return passage, []
 
 
 def _score_machine_findings(
@@ -10221,6 +10403,13 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
     locale_root = root / "books" / book_id / "translations" / locale
     glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
     style = (locale_root / "style.md").read_text(encoding="utf-8")
+    # Said once per pass and not as a finding: a repair cannot fix it, because the
+    # defect is in the glossary and not in the chapter. It is reported here because
+    # this is where the glossary is read, and a contradiction silently decides which
+    # of two rows a translator obeys.
+    contradictions = _glossary_self_contradictions(glossary)
+    for problem in contradictions:
+        print(f"[glossary] {problem}", file=sys.stderr)
     findings: list[dict[str, object]] = [
         {
             "id": f"G-{index:02d}",
@@ -10370,6 +10559,9 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
                     # reason here means nobody read it, which no count of findings
                     # can tell you apart from a clean pass.
                     "locale_reader_unread": reader_unread,
+                    # Not a finding and not repairable: two rows of the glossary
+                    # disagree and a person has to decide which one is the book's.
+                    "glossary_contradictions": contradictions,
                 }
             )})
             record_execution(
