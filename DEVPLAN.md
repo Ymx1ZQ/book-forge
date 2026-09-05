@@ -4589,3 +4589,59 @@ The failing and succeeding calls interleaved within the same minutes, so the pro
 - [x] Suite green: 760 passed, 405 subtests (era 750). Reinstall, commit & push
 
 **Done when:** A call that answers by hand answers from a script.
+
+
+## A glossary finding names a rendering the translation is actually missing ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-05, measured across all seventeen chapters**
+
+**The engine started saying it itself.** `[translation-critic] CH-0001: the mechanical checks were right 0 time(s) out of 4 — a check that is mostly wrong is a defect in the check`. That line has now printed on three runs in a row.
+
+**Scored over the whole book: 32 findings raised, 28 the critic called mistaken, 4 held.** Eighty-seven per cent wrong.
+
+| chapter | raised | mistaken | held | | chapter | raised | mistaken | held |
+|---|---|---|---|---|---|---|---|---|
+| CH-0001 | 4 | 4 | 0 | | CH-0010 | 3 | 2 | 1 |
+| CH-0002 | 3 | 3 | 0 | | CH-0012 | 2 | 1 | 1 |
+| CH-0003 | 5 | 5 | 0 | | CH-0013 | 1 | 1 | 0 |
+| CH-0004 | 1 | 0 | 1 | | CH-0014 | 4 | 4 | 0 |
+| CH-0005 | 2 | 2 | 0 | | CH-0015 | 1 | 1 | 0 |
+| CH-0007 | 1 | 1 | 0 | | CH-0016 | 3 | 3 | 0 |
+| CH-0008 | 2 | 1 | 1 | | **total** | **32** | **28** | **4** |
+
+**All 28 come from one check.** Not the forbidden-form patterns, which raised nothing here: every wrong finding is `_glossary_compliance`, the pass that asks whether a term the source uses reaches the translation in its agreed rendering. It fails in three distinct ways, each confirmed by running the code rather than by reading it.
+
+**One: the whole target cell becomes the string the translation must contain, markdown and caveats included.** `_glossary_terms` takes everything between `→` and the note separator. Given the row
+
+```
+- **clear eye / clear-eyed** → occhio limpido; **dagli occhi limpidi solo di una persona** — Binta's sight.
+```
+
+the required rendering comes back as `'occhio limpido; **dagli occhi limpidi solo di una persona**'`, asterisks and all, and no translation will ever contain it. **The glossary is written for a person and read by a matcher, and the matcher's contract is nowhere declared** — so writing a clearer note breaks the check. That row is mine, added on 2026-09-04 to stop a calque, and it manufactured a false positive in every chapter that mentions the caste. Fourteen rows now ask for a rendering longer than six words, which is the same failure in a milder form: a translator will legitimately vary a phrase that long.
+
+**Two: a row's condition lives in the note, and the note is discarded.** `ledger → a una catena` applies to chained logs; the check applied it to the shore ledger under the harbour counter and reported a correct sentence as a missing rendering.
+
+**Three: the pattern is anchored at the end and not at the start.** `_term_pattern` appends `\b` and prepends nothing, so `re.search` for `wake` matches inside `awake` — measured, it returns True on *the crew were awake*. Twelve rows have a source term of five characters or fewer (`nave`, `Rift`, `Quiet`, `Vess`, `warp`), and each is free to match inside a longer word.
+
+**The check is worth repairing rather than removing, and the four that held are why.** `reed-beds` had come out as `letti di canne` where the locale forbids `letti` for beds of reeds, and the repair landed `distese di canne`. `a held breath` had become `fiato`, breaking a formulaic recurrence the chapter and the ones after it depend on. Neither is reachable by reading the Italian alone, and neither is reachable by the monolingual reader, which by design cannot see the glossary.
+
+**What the noise costs, and it is not the prose.** A mistaken finding is dropped before the repair, so nothing wrong is written into the chapter. What it consumes is the translation critic: every machine finding is handed to it to adjudicate and it writes a verdict and a reason for each. That is the role at 60% of this project's spend and the one measured running out of room at 31565 tokens — so twenty-eight wrong findings were paid for twice, once to raise and once to dismiss, on the one role that cannot afford either.
+
+**Fix.** The matcher gets a contract the glossary can be written against, and the three defects go:
+- The required rendering is the first alternative only, taken before any `;`, and any markdown is stripped. A row that wants to say more says it in the note, where the check does not look.
+- A rendering longer than a stated number of words is not machine-checkable and is skipped, with the row named once so the glossary can be rewritten if the term matters.
+- The term pattern is anchored at both ends.
+- A row whose note carries a condition is out of the check's reach and should say so in a way the parser can see. The cheapest form is a marker the row carries — the alternative is teaching the matcher to read English, which is not a check any more.
+
+**Tasks:**
+- [ ] The required rendering is the first alternative before a `;`, with markdown stripped
+- [ ] The term pattern is anchored at the start as well as the end, and `wake` stops matching inside `awake`
+- [ ] A rendering too long to be matched literally is skipped rather than reported, and the skipped rows are named once per run so the glossary can be fixed
+- [ ] A row can declare itself conditional and be left to the human reader
+- [ ] Test: each of the three modes, on the exact rows that produced them here
+- [ ] Test: the four findings that held still hold
+- [ ] Re-score the seventeen chapters and record the new raised/held/mistaken here
+- [ ] Landfall's glossary rows that cannot be checked are rewritten or marked
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** The critic stops spending its answer on findings that were never there.
