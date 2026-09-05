@@ -7687,6 +7687,100 @@ def prune_glossary(project: Path | str, book_id: str, locale: str, *, apply: boo
     return report
 
 
+def _bakeoff_translation(  # noqa: PLR0913 - one candidate, everything one translation needs
+    root: Path, book_id: str, chapter_id: str, locale: str, model: str, prefix: str,
+    *, contract: dict[str, object], source: str, style: str, locale_root: Path,
+    checks: dict[str, object], runner,
+) -> dict[str, object]:
+    """One candidate's translation and score, with the one retry the normal path gives.
+
+    Without it the route measures luck on the first call as much as translation. On
+    the first real bake-off, one candidate returned no JSON object and OpenCode closed
+    on another after seventeen seconds, and both were recorded as though they could
+    not translate Italian. Neither failure was about Italian.
+    """
+    slug = _chorus_slug(model)
+    role = _translator_candidate_name(model)
+    task_id = f"BAKETR-{slug}-{book_id}-{chapter_id}-{locale}"
+    path = f"{prefix}/{slug}/translation.md"
+    row: dict[str, object] = {"model": model, "variant": BAKEOFF_VARIANT, "state": "unusable"}
+    started = time.monotonic()
+    for attempt_number in (1, 2):
+        if not any(task["id"] == task_id for task in _load_plan(root)["tasks"]):
+            add_task(root, task_id, role, priority=40, outputs=[path])
+        else:
+            _reopen_task(root, task_id)
+        claim = None
+        try:
+            envelope = build_envelope(
+                root,
+                role=role,
+                task_capsule={
+                    "book": book_id,
+                    "chapter": chapter_id,
+                    "source_language": _read_json(root / "book-forge.yaml")["source_language"],
+                    "target_locale": locale,
+                    "source_markdown": source,
+                    "contract": contract,
+                    "locale_style": style,
+                    "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
+                    "metadata": _read_json(locale_root / "metadata.yaml"),
+                },
+                imports=list(contract.get("imports", [])),
+                state={"previous_boundary": ""},
+                tools=[],
+                max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
+            )
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            result = runner(role, envelope, Path(claim["capsule"]).parent)
+            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            value = _parse_contract_json(str(result["text"]))
+            # Counted, not disqualifying. This route gives no repairs where the normal
+            # path gives two, so a first-attempt rule break would drop a model out of
+            # the comparison entirely — and the incumbent went that way on the first
+            # real bake-off, leaving nothing to compare it against.
+            problems = _translation_validation(source, {**value, "_locale": locale}, checks)
+            translated = str(value["translated_markdown"])
+            if not translated.strip():
+                raise BookForgeError("no translated_markdown")
+            _complete_model_task(root, task_id, claim, {path: translated.rstrip() + "\n"}, result, envelope)
+            words = len(re.findall(WORD_RE, translated, re.UNICODE))
+            findings = _ask_locale_reader(
+                root, book_id, locale, chapter_id, translated, style, runner,
+                task_id=f"BAKEREAD-{slug}-{book_id}-{chapter_id}-{locale}",
+            )
+            counted = [f for f in findings if str(f.get("severity")) in {"blocking", "warning"}]
+            total = len(counted) + len(problems)
+            row.update({
+                "state": "drafted",
+                "attempts": attempt_number,
+                "words": words,
+                "defects": total,
+                "read_defects": len(counted),
+                "rule_breaks": problems,
+                "blocking": sum(1 for f in counted if f["severity"] == "blocking"),
+                "defects_per_1000_words": round(total * 1000 / max(1, words), 2),
+                "cost": float(result.get("cost") or 0.0),
+                "seconds": round(time.monotonic() - started, 1),
+                "path": path,
+                "worst": [str(f.get("translated") or "")[:160] for f in counted[:3]],
+            })
+            return row
+        except Exception as unusable:  # noqa: BLE001 - one candidate failing is data, not a stop
+            row.update({"state": "unusable", "detail": str(unusable)[:200], "attempts": attempt_number,
+                        "seconds": round(time.monotonic() - started, 1)})
+            if claim is not None:
+                try:
+                    _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unusable)[:200])
+                except BookForgeError:
+                    pass
+            if attempt_number == 1:
+                print(f"[bakeoff] {slug} failed its first call, asking again: {row['detail']}", file=sys.stderr)
+                continue
+            print(f"[bakeoff] {slug} produced no usable translation: {row['detail']}", file=sys.stderr)
+    return row
+
+
 def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, locale and field
     project: Path | str,
     book_id: str,
@@ -7734,82 +7828,11 @@ def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, 
     checks = _locale_checks(locale_root)
     rows: list[dict[str, object]] = []
     for model in resolved:
-        slug = _chorus_slug(model)
-        role = _translator_candidate_name(model)
-        task_id = f"BAKETR-{slug}-{book_id}-{chapter_id}-{locale}"
-        path = f"{prefix}/{slug}/translation.md"
-        if not any(task["id"] == task_id for task in _load_plan(root)["tasks"]):
-            add_task(root, task_id, role, priority=40, outputs=[path])
-        else:
-            _reopen_task(root, task_id)
-        row: dict[str, object] = {"model": model, "variant": BAKEOFF_VARIANT, "state": "unusable"}
-        started = time.monotonic()
-        claim = None
-        try:
-            envelope = build_envelope(
-                root,
-                role=role,
-                task_capsule={
-                    "book": book_id,
-                    "chapter": chapter_id,
-                    "source_language": _read_json(root / "book-forge.yaml")["source_language"],
-                    "target_locale": locale,
-                    "source_markdown": source,
-                    "contract": contract,
-                    "locale_style": style,
-                    "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8"),
-                    "metadata": _read_json(locale_root / "metadata.yaml"),
-                },
-                imports=list(contract.get("imports", [])),
-                state={"previous_boundary": ""},
-                tools=[],
-                max_output_tokens=min(6000, max(1000, int(contract.get("target_words", 2000)) * 2)),
-            )
-            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-            result = runner(role, envelope, Path(claim["capsule"]).parent)
-            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-            value = _parse_contract_json(str(result["text"]))
-            # Counted, not disqualifying. The normal path gives a translator two
-            # repairs after a validation failure and this route gives none, so a
-            # candidate that breaks one locale rule on its first attempt would drop
-            # out of the comparison entirely — and on the first real bake-off the
-            # incumbent did, on the possessive rule, leaving nothing to compare it
-            # against. A rule broken is a defect and belongs in the score with the
-            # rest. Only an answer nobody can read is unusable.
-            problems = _translation_validation(source, {**value, "_locale": locale}, checks)
-            translated = str(value["translated_markdown"])
-            if not translated.strip():
-                raise BookForgeError("no translated_markdown")
-            _complete_model_task(root, task_id, claim, {path: translated.rstrip() + "\n"}, result, envelope)
-            words = len(re.findall(r"\b[\w’'-]+\b", translated, re.UNICODE))
-            findings = _ask_locale_reader(
-                root, book_id, locale, chapter_id, translated, style, runner,
-                task_id=f"BAKEREAD-{slug}-{book_id}-{chapter_id}-{locale}",
-            )
-            counted = [f for f in findings if str(f.get("severity")) in {"blocking", "warning"}]
-            total = len(counted) + len(problems)
-            row.update({
-                "state": "drafted",
-                "words": words,
-                "defects": total,
-                "read_defects": len(counted),
-                "rule_breaks": problems,
-                "blocking": sum(1 for f in counted if f["severity"] == "blocking"),
-                "defects_per_1000_words": round(total * 1000 / max(1, words), 2),
-                "cost": float(result.get("cost") or 0.0),
-                "seconds": round(time.monotonic() - started, 1),
-                "path": path,
-                "worst": [str(f.get("translated") or "")[:160] for f in counted[:3]],
-            })
-        except Exception as unusable:  # noqa: BLE001 - one candidate failing is data, not a stop
-            row.update({"state": "unusable", "detail": str(unusable)[:200],
-                        "seconds": round(time.monotonic() - started, 1)})
-            if claim is not None:
-                try:
-                    _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unusable)[:200])
-                except BookForgeError:
-                    pass
-            print(f"[bakeoff] {slug} produced no usable translation: {row['detail']}", file=sys.stderr)
+        row = _bakeoff_translation(
+            root, book_id, chapter_id, locale, model, prefix,
+            contract=contract, source=source, style=style, locale_root=locale_root,
+            checks=checks, runner=runner,
+        )
         rows.append(row)
 
     ranked = sorted(
