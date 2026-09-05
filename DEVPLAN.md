@@ -4591,9 +4591,9 @@ The failing and succeeding calls interleaved within the same minutes, so the pro
 **Done when:** A call that answers by hand answers from a script.
 
 
-## A glossary finding names a rendering the translation is actually missing ⏸️
+## A glossary finding names a rendering the translation is actually missing ✅
 
-**Status: ⏸️ Proposed — 2026-09-05, measured across all seventeen chapters**
+**Status: ✅ Done — 2026-09-05**
 
 **The engine started saying it itself.** `[translation-critic] CH-0001: the mechanical checks were right 0 time(s) out of 4 — a check that is mostly wrong is a defect in the check`. That line has now printed on three runs in a row.
 
@@ -4627,21 +4627,31 @@ the required rendering comes back as `'occhio limpido; **dagli occhi limpidi sol
 
 **What the noise costs, and it is not the prose.** A mistaken finding is dropped before the repair, so nothing wrong is written into the chapter. What it consumes is the translation critic: every machine finding is handed to it to adjudicate and it writes a verdict and a reason for each. That is the role at 60% of this project's spend and the one measured running out of room at 31565 tokens — so twenty-eight wrong findings were paid for twice, once to raise and once to dismiss, on the one role that cannot afford either.
 
-**Fix.** The matcher gets a contract the glossary can be written against, and the three defects go:
+**Fix.** The matcher gets a contract the glossary can be written against, and the defects go. **Two more surfaced while building it, and both are worse than the three that were proposed:**
 - The required rendering is the first alternative only, taken before any `;`, and any markdown is stripped. A row that wants to say more says it in the note, where the check does not look.
 - A rendering longer than a stated number of words is not machine-checkable and is skipped, with the row named once so the glossary can be rewritten if the term matters.
 - The term pattern is anchored at both ends.
 - A row whose note carries a condition is out of the check's reach and should say so in a way the parser can see. The cheapest form is a marker the row carries — the alternative is teaching the matcher to read English, which is not a check any more.
 
+**Four: a gloss containing the separator is cut in half.** `**on a chain (log/ledger)**` was split on the slash before the parenthetical was removed, so `ledger)` stood as a term of its own and was hunted for in every chapter. Three rows had this shape and between them they accounted for a third of everything raised.
+
+**Five, and it is the one that mattered: a four-letter English word gave up its last letter.** Dropping an ending is how `mano della palude` recognises `mani della palude`, and it was applied to both sides of the row. On English it turned `By then` into the pattern `by the` — one of the commonest sequences in the language. The check reported that row **eleven times across a book that writes `by then` in three chapters**. English inflects by adding, which the open tail already covers, so the rule now follows the flag that says which side is the locale's.
+
+**Re-scored over all seventeen chapters after each fix: 75 raised, then 38, then 29.** The first number is not comparable with the 32 measured from the review records — those were what each chapter raised against the glossary as it stood when it was translated, and the glossary has since grown to 216 rows. What is comparable is the sequence: the parenthetical fix took a third of it, and the English-inflection fix took a third of what was left. No single row dominates what remains; the largest is four.
+
+**And what remains is true.** Two of the survivors are `the Wall`, whose rendering changed to `il Cavallone` on 2026-09-04. Five chapters still say `il Muro` — the word two readers could not tell from the tower wall — and the check is the thing that found them.
+
 **Tasks:**
-- [ ] The required rendering is the first alternative before a `;`, with markdown stripped
-- [ ] The term pattern is anchored at the start as well as the end, and `wake` stops matching inside `awake`
-- [ ] A rendering too long to be matched literally is skipped rather than reported, and the skipped rows are named once per run so the glossary can be fixed
-- [ ] A row can declare itself conditional and be left to the human reader
-- [ ] Test: each of the three modes, on the exact rows that produced them here
-- [ ] Test: the four findings that held still hold
-- [ ] Re-score the seventeen chapters and record the new raised/held/mistaken here
-- [ ] Landfall's glossary rows that cannot be checked are rewritten or marked
-- [ ] Suite green. Reinstall, commit & push
+- [x] The required rendering is the first alternative before a `;`, with markdown stripped
+- [x] The term pattern is anchored at the start as well as the end, and `wake` stops matching inside `awake`
+- [x] A rendering too long to be matched literally is skipped rather than reported, and the skipped rows are named once per run so the glossary can be fixed
+- [x] A row can declare itself conditional and be left to the human reader — `→?` in place of the arrow, on the arrow rather than in the note, because a marker a person can reword is a marker that breaks
+- [x] A gloss containing the row's own separator is not cut in half
+- [x] A four-letter English term keeps its ending; the rule follows the side that inflects
+- [x] Test: each of the five modes, on the exact rows that produced them here
+- [x] Test: the four findings that held still hold
+- [x] Re-score the seventeen chapters and record it here: 75 → 38 → 29 as the parenthetical and the English-inflection fixes landed
+- [x] Landfall's glossary rows that cannot be checked are marked — twelve of them, each a phrase a translator is meant to read rather than reproduce
+- [x] Suite green: 768 passed, 405 subtests (era 760). Reinstall, commit & push
 
 **Done when:** The critic stops spending its answer on findings that were never there.

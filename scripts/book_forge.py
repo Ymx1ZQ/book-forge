@@ -9212,7 +9212,13 @@ def add_translation(project: Path | str, book_id: str, locale: str) -> dict[str,
         )
         (stage / "glossary.md").write_text(
             f"---\nid: {locale_id}-GLOSS\n---\n\n# Locale Glossary\n\n<!-- bf:block terms -->\n"
-            "Record names, honorifics, register, character dialogue voices, and do-not-translate terms here.\n",
+            "Record names, honorifics, register, character dialogue voices, and do-not-translate terms here.\n\n"
+            "One row is `- **source / alternative** → rendering — the note`. The rendering is checked "
+            "against every translation, so keep it to the words that must appear and put everything else "
+            "in the note after the em dash: anything following a `;` is not checked, and a rendering longer "
+            f"than {GLOSSARY_MAX_TARGET_WORDS} words is skipped and named. When the rendering depends on "
+            f"something the checker cannot see, write `{GLOSSARY_CONDITIONAL_ARROW}` in place of the arrow "
+            "and the row is left to the translator.\n",
             encoding="utf-8",
         )
         (stage / "chapters").mkdir()
@@ -9305,16 +9311,25 @@ def _forbidden_form_problems(translated: str, checks: dict[str, object]) -> list
 def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
     """The glossary's rows as (source alternatives, target alternatives)."""
     rows = []
+    unmatchable: list[str] = []
     for line in glossary.splitlines():
         if not line.startswith("- **") or "** → " not in line:
+            if not (line.startswith("- **") and f"** {GLOSSARY_CONDITIONAL_ARROW} " in line):
+                continue
+            # A row that declares its rendering conditional is read by the
+            # translator and left alone by the matcher. It is not a parse failure.
             continue
         source_part, rest = line[4:].split("**", 1)
         target_part = rest.split("→", 1)[1].split(" — ", 1)[0]
+        # Everything after the first `;` is the row talking to the translator, not
+        # the rendering. It used to be required verbatim, markdown and all, so a row
+        # that explained itself could never be satisfied by any translation.
+        target_part = target_part.split(";", 1)[0]
         def _clean(piece: str) -> str:
             # A gloss in brackets belongs to neither side of the row. Stripping it
             # from the source only left `i ripetitori a specchio (via degli specchi)`
             # being looked for with its own explanation attached.
-            return re.sub(r"\([^)]*\)", "", piece).strip()
+            return re.sub(r"\*+", "", re.sub(r"\([^)]*\)", "", piece)).strip()
 
         # A source side carrying the row's note separator has its braces in the
         # wrong place, and which half is the term cannot be told apart from which
@@ -9323,8 +9338,12 @@ def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
         # words in English. A row nobody can read is a row nobody checks against.
         if "—" in source_part:
             continue
-        sources = [_clean(piece) for piece in source_part.split("/")]
-        targets = [_clean(piece) for piece in re.split(r"[/,]", target_part)]
+        # Cleaned before it is split, not after. A gloss naming what the row applies
+        # to may contain the separator — `on a chain (log/ledger)` was cut in half
+        # and left `ledger)` standing as a term, which the check then hunted for in
+        # every chapter and never found, because nobody had written it.
+        sources = [_clean(piece) for piece in _clean(source_part).split("/")]
+        targets = [_clean(piece) for piece in re.split(r"[/,]", _clean(target_part))]
         sources = [value for value in sources if len(value) >= 4]
         targets = [value for value in targets if len(value) >= 4]
         if sources and targets:
@@ -9338,6 +9357,16 @@ def _glossary_terms(glossary: str) -> list[tuple[list[str], list[str]]]:
 # words with the ending left open: `gesso di marea` must also match `gessi di marea`.
 # What separates an inflected form from a different word: one letter of ending.
 INFLECTION_TAIL = r"\w?"
+# A rendering longer than this cannot be matched literally: a translator will vary
+# a phrase that long and be right to. Landfall carried fourteen such rows and each
+# one reported a correct chapter. They are skipped and named rather than enforced.
+GLOSSARY_MAX_TARGET_WORDS = 6
+# The row's own way of saying its rendering depends on something the matcher cannot
+# see — `ledger →? a una catena` applies to chained logs and not to the shore ledger
+# under the harbour counter. On the arrow rather than in the note, because the note
+# is prose and prose drifts: a marker a person can reword is a marker that breaks.
+GLOSSARY_CONDITIONAL_ARROW = "→?"
+_GLOSSARY_UNMATCHABLE_REPORTED: set[str] = set()
 _GLOSSARY_FUNCTION_WORDS = {"il", "lo", "la", "i", "gli", "le", "un", "una", "di", "del", "della", "dei", "delle", "da", "a", "e", "the", "of", "l'"}
 
 
@@ -9359,6 +9388,13 @@ def _term_pattern(term: str, *, drop_leading_article: bool = False) -> str:
     term being looked up. English uses it to tell a proper noun from a common one:
     `the Wall` is the returning tide and `wall` is a wall, and dropping the article
     on that side reported the row against six ordinary walls.
+
+    `drop_leading_article` is set on the locale's side and nowhere else, so it also
+    says which language this is, and the four-letter rule follows it. Giving up the
+    last letter of a short word is how `mano della palude` recognises `mani della
+    palude`; done to English it turned the row `By then` into the pattern `by the`,
+    and the check reported it eleven times across a book that writes `by then` in
+    three chapters. English inflects by adding, which the open tail already covers.
     """
     words = re.findall(r"[\w']+", term, re.UNICODE)
     content = [word for word in words if word.casefold() not in _GLOSSARY_FUNCTION_WORDS]
@@ -9368,7 +9404,7 @@ def _term_pattern(term: str, *, drop_leading_article: bool = False) -> str:
     for word in words:
         if word.casefold() in _GLOSSARY_FUNCTION_WORDS:
             pieces.append(re.escape(word))
-        elif len(word) >= 5 or (len(word) >= 4 and len(content) > 1):
+        elif len(word) >= 5 or (drop_leading_article and len(word) >= 4 and len(content) > 1):
             # One letter, not any number of them. Inflection changes an ending;
             # derivation replaces it, and an open tail read `watch-lieutenancy`
             # as the term `watch-lieutenant` and called a correct rendering of
@@ -9376,10 +9412,12 @@ def _term_pattern(term: str, *, drop_leading_article: bool = False) -> str:
             pieces.append(re.escape(word[:-1]) + INFLECTION_TAIL)
         else:
             pieces.append(re.escape(word) + INFLECTION_TAIL)
-    # Anchored at the end, or the bounded tail buys nothing: the pattern is not
-    # anchored by default, so `lieutenan\w?` still matches the first ten letters
-    # of `lieutenancy` and the term is read into a word that is not it.
-    return r"[\s\-\u2010-\u2015]+".join(pieces) + r"\b" if pieces else ""
+    # Anchored at both ends. The tail was bounded and the head was not, so a short
+    # term matched inside a longer word: `wake` was found in `awake` and the row was
+    # reported against a chapter that never used it. Twelve of landfall's rows have
+    # a source term of five characters or fewer and every one of them was free to do
+    # this.
+    return r"\b" + r"[\s\-\u2010-\u2015]+".join(pieces) + r"\b" if pieces else ""
 
 
 def _glossary_compliance(source: str, translated: str, glossary: str) -> list[str]:
@@ -9398,6 +9436,21 @@ def _glossary_compliance(source: str, translated: str, glossary: str) -> list[st
 
     findings = []
     for sources, targets in _glossary_terms(glossary):
+        matchable = [value for value in targets if len(value.split()) <= GLOSSARY_MAX_TARGET_WORDS]
+        if not matchable:
+            # Reported, not enforced. A rendering this long is a sentence the
+            # translator is meant to read, and requiring it literally reported
+            # fourteen of landfall's rows against chapters that were correct.
+            row = f"{sources[0]} → {targets[0]}"
+            if row not in _GLOSSARY_UNMATCHABLE_REPORTED:
+                _GLOSSARY_UNMATCHABLE_REPORTED.add(row)
+                print(
+                    f"[glossary] {row!r} is longer than {GLOSSARY_MAX_TARGET_WORDS} words and is not checked; "
+                    f"shorten it or mark the row {GLOSSARY_CONDITIONAL_ARROW}",
+                    file=sys.stderr,
+                )
+            continue
+        targets = matchable
         used = next(
             (value for value in sources if re.search(_term_pattern(value), source, _flags(value))),
             None,

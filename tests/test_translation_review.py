@@ -188,6 +188,86 @@ class WhatTheGlossaryCheckFlagsTests(TranslationReviewFixture):
         )
 
 
+class WhatTheGlossaryCheckWasWrongAboutTests(TranslationReviewFixture):
+    """Scored over landfall's seventeen chapters the check raised 32 findings and
+    the critic called 28 of them mistaken. All 28 came from this pass, in three
+    ways. Each one below is the exact row that produced it."""
+
+    def test_the_rendering_stops_at_the_first_semicolon(self):
+        """The whole target cell became the string the translation had to contain,
+        markdown and caveats included, so no translation could ever satisfy it —
+        and the row was written to stop a calque, which made it worse."""
+        row = "- **clear eye / clear-eyed** → occhio limpido; **dagli occhi limpidi solo di una persona** — sight.\n"
+        self.assertEqual(self.bf._glossary_terms(row)[0][1], ["occhio limpido"])
+        self.assertEqual(
+            self.bf._glossary_compliance("Her clear eye read the water.", "Il suo occhio limpido leggeva l'acqua.", row),
+            [],
+        )
+
+    def test_a_short_term_is_not_found_inside_a_longer_word(self):
+        """`wake` matched inside `awake`: the pattern was anchored at the end and
+        open at the start, and twelve of landfall's rows are short enough to do it."""
+        row = "- **wake** → la scia — the water a hull leaves.\n"
+        self.assertEqual(self.bf._glossary_compliance("The crew were awake.", "L'equipaggio era sveglio.", row), [])
+        self.assertEqual(len(self.bf._glossary_compliance("The hull left a wake.", "Lo scafo lasciò una traccia.", row)), 1)
+
+    def test_a_rendering_too_long_to_match_is_named_rather_than_enforced(self):
+        """Fourteen rows asked for a rendering a translator will vary and be right
+        to. Requiring one literally reported chapters that were correct."""
+        row = "- **go count your chalk** → vatti a contare il gesso al caldo — a dismissive idiom.\n"
+        self.bf._GLOSSARY_UNMATCHABLE_REPORTED.clear()
+        self.assertEqual(self.bf._glossary_compliance("Go count your chalk.", "Vatti a contare il gesso.", row), [])
+        self.assertTrue(self.bf._GLOSSARY_UNMATCHABLE_REPORTED, "the row is named so the glossary can be fixed")
+
+    def test_a_row_can_declare_its_rendering_conditional_and_be_left_alone(self):
+        """`ledger → a una catena` applies to chained logs; the check applied it to
+        the shore ledger under the harbour counter. The condition lives in the note
+        and the matcher cannot read the note, so the row says so on the arrow."""
+        row = f"- **ledger** {self.bf.GLOSSARY_CONDITIONAL_ARROW} a una catena — only where the log is chained.\n"
+        self.assertEqual(self.bf._glossary_terms(row), [])
+        self.assertEqual(self.bf._glossary_compliance("The ledger lay open.", "Il registro era aperto.", row), [])
+
+    def test_a_gloss_containing_the_separator_is_not_cut_in_half(self):
+        """`on a chain (log/ledger)` was split on the slash before the gloss was
+        removed, so `ledger)` stood as a term and was hunted for in every chapter."""
+        row = "- **on a chain (log/ledger)** → a una catena — only where the log is chained.\n"
+        self.assertEqual(self.bf._glossary_terms(row)[0][0], ["on a chain"])
+        self.assertEqual(
+            self.bf._glossary_compliance("The ledger lay open.", "Il registro era aperto.", row),
+            [],
+            "the row is about a chained log and never named a term called `ledger)`",
+        )
+
+    def test_a_short_english_word_does_not_give_up_its_ending(self):
+        """Giving up the last letter is how `mano della palude` recognises `mani
+        della palude`. Done to English it turned the row `By then` into the pattern
+        `by the` and reported it eleven times across a book that writes `by then`
+        in three chapters."""
+        row = "- **By then** → A quel punto — a time adverbial.\n"
+        self.assertEqual(self.bf._glossary_compliance("He stood by the rail.", "Stava alla ringhiera.", row), [])
+        self.assertEqual(len(self.bf._glossary_compliance("By then the tide had turned.", "La marea era girata.", row)), 1)
+        self.assertEqual(self.bf._glossary_compliance("By then the tide had turned.", "A quel punto la marea era girata.", row), [])
+
+    def test_the_locale_side_still_inflects(self):
+        row = "- **fen-hand** → mano della palude — fixed.\n"
+        self.assertEqual(self.bf._glossary_compliance("A fen-hand waited.", "Le mani della palude aspettavano.", row), [])
+
+    def test_the_four_findings_that_held_still_hold(self):
+        """The check earns its place on these: neither is reachable by reading the
+        Italian alone, and neither is reachable by the monolingual reader, which by
+        design cannot see the glossary."""
+        reeds = "- **reed-beds** → distese di canne — never `letti` for beds of reeds.\n"
+        self.assertEqual(len(self.bf._glossary_compliance(
+            "Six hands cutting snails from the reed-beds.", "Sei mani a tagliare lumache dai letti di canne.", reeds)), 1)
+        self.assertEqual(self.bf._glossary_compliance(
+            "Six hands cutting snails from the reed-beds.", "Sei mani a tagliare lumache dalle distese di canne.", reeds), [])
+        breath = "- **a held breath** → un respiro trattenuto — a formulaic recurrence.\n"
+        self.assertEqual(len(self.bf._glossary_compliance(
+            "the sense of a held breath", "il senso di un fiato sospeso", breath)), 1)
+        self.assertEqual(self.bf._glossary_compliance(
+            "the sense of a held breath", "il senso di un respiro trattenuto", breath), [])
+
+
 class WhatTheCriticIsForTests(TranslationReviewFixture):
     def critic(self, findings, verdict="repairable"):
         return {"findings": findings, "verdict": verdict}
