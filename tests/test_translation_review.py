@@ -23,17 +23,40 @@ SOURCE = "# The Dawn Barge\n\n" + "She chewed tide-chalk on the tower and the Fa
 class ScriptedProvider:
     """Answers as whatever the envelope says will answer it, per role."""
 
-    def __init__(self, translations, critic=None):
+    def __init__(self, translations, critic=None, reader=None, reviser=None, revision_check=None):
         self.translations = list(translations)
         self.critic = critic
+        self.reader = reader
+        self.reviser = reviser
+        self.revision_check = revision_check
+        self.revised_with = None
+        self.checked = None
         self.calls = []
 
     def __call__(self, role, envelope, attempt_dir):
         payload = envelope["payload"]
         self.calls.append(role)
+        if role == "locale-reviser":
+            task = envelope["payload"]["task"]
+            self.revised_with = task
+            # Unchanged unless a test scripts otherwise: the reviser saying the
+            # chapter already reads as its language.
+            answer = self.reviser if self.reviser is not None else {
+                "revised_markdown": task["chapter_markdown"], "changed": [],
+            }
+            return {
+                "text": json.dumps(answer),
+                "provider": "openrouter", "model": envelope["payload"]["model"],
+                "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.0, "latency_ms": 10, "finish": "stop",
+            }
         if role == "locale-reader":
             # A reader that finds nothing is the common case and a real answer.
-            text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
+            text = json.dumps(self.reader if self.reader is not None else {"summary": "letto", "followed": True, "stumbles": []})
+        elif role == "translation-critic" and "changed" in envelope["payload"]["task"]:
+            self.checked = envelope["payload"]["task"]
+            text = json.dumps(self.revision_check if self.revision_check is not None else {"moved": []})
         elif role == "translation-critic":
             text = json.dumps(self.critic if self.critic is not None else {"findings": [], "verdict": "faithful"})
         else:
@@ -288,14 +311,14 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic([self.calque_finding()]),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader", "translator"])
+        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic", "translator"])
         self.assertIn("gesso di marea", (self.locale_root / "chapters" / "CH-0001.md").read_text())
 
     def test_a_finding_that_quotes_nothing_is_set_aside_and_drives_no_repair(self):
         vague = {"id": "01", "severity": "warning", "kind": "style", "issue": "si potrebbe migliorare"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([vague]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader"])
+        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["set_aside"]), 1)
         self.assertEqual(review["findings"], [])
@@ -304,7 +327,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         note = {**self.calque_finding(), "severity": "note"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([note]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader"])
+        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic"])
 
     def test_a_repair_refused_once_is_asked_again_and_the_second_one_lands(self):
         """CH-0003's repair came back carrying a forbidden form, was rightly refused,
@@ -359,6 +382,15 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             answers = 0
 
             def __call__(self, role, envelope, attempt_dir):
+                if role == "locale-reviser":
+                    # Unchanged: the reviser saying the chapter already reads as its language.
+                    return {
+                        "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                        "provider": "openrouter", "model": envelope["payload"]["model"],
+                        "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                        "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                        "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                    }
                 if role == "locale-reader":
                     # A reader that finds nothing is the common case and a real answer.
                     text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -404,6 +436,15 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
 
         class BlindOnFirst(ScriptedProvider):
             def __call__(self, role, envelope, attempt_dir):
+                if role == "locale-reviser":
+                    # Unchanged: the reviser saying the chapter already reads as its language.
+                    return {
+                        "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                        "provider": "openrouter", "model": envelope["payload"]["model"],
+                        "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                        "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                        "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                    }
                 if role == "locale-reader":
                     # A reader that finds nothing is the common case and a real answer.
                     text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -427,6 +468,15 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
     def test_a_critic_that_cannot_be_read_never_stops_the_translation(self):
         class BrokenCritic(ScriptedProvider):
             def __call__(self, role, envelope, attempt_dir):
+                if role == "locale-reviser":
+                    # Unchanged: the reviser saying the chapter already reads as its language.
+                    return {
+                        "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                        "provider": "openrouter", "model": envelope["payload"]["model"],
+                        "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                        "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                        "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                    }
                 if role == "locale-reader":
                     # A reader that finds nothing is the common case and a real answer.
                     text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -459,7 +509,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic(findings),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "translation-critic", "locale-reader", "translator"])
+        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic", "translator"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["findings"]), 12 + 2, "twelve cited findings plus the two the glossary found")
         self.assertEqual(review["set_aside"], [])
@@ -502,12 +552,12 @@ class TheChecksAreScoredByTheReaderTheyFeedTests(TranslationReviewFixture):
             {"id": "G-01", "verdict": "mistaken", "why": "il termine c'e', in altra forma"},
             {"id": "G-02", "verdict": "mistaken", "why": "la riga fissa un altro senso della parola"},
         ])
-        self.assertEqual(provider.calls, ["translation-critic", "locale-reader"], "no repair was asked for")
+        self.assertEqual(provider.calls, ["locale-reader", "locale-reviser", "translation-critic"], "no repair was asked for")
         self.assertFalse(report["reviewed"][0]["repaired"])
 
     def test_a_finding_the_critic_upholds_still_drives_the_repair(self):
         report, provider = self.review([{"id": "G-01", "verdict": "holds", "why": "manca davvero"}])
-        self.assertEqual(provider.calls, ["translation-critic", "locale-reader", "translator"])
+        self.assertEqual(provider.calls, ["locale-reader", "locale-reviser", "translation-critic", "translator"])
         self.assertTrue(report["reviewed"][0]["repaired"])
 
     def test_silence_on_a_finding_is_not_a_refutation(self):
@@ -570,6 +620,15 @@ class WhenAReviewIsFinishedTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
+            if role == "locale-reviser":
+                # Unchanged: the reviser saying the chapter already reads as its language.
+                return {
+                    "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                    "provider": "openrouter", "model": envelope["payload"]["model"],
+                    "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                    "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                }
             if role == "locale-reader":
                 # A reader that finds nothing is the common case and a real answer.
                 text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -734,6 +793,15 @@ class AChapterThatWasNotReadTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
+            if role == "locale-reviser":
+                # Unchanged: the reviser saying the chapter already reads as its language.
+                return {
+                    "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                    "provider": "openrouter", "model": envelope["payload"]["model"],
+                    "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                    "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                }
             if role == "locale-reader":
                 # A reader that finds nothing is the common case and a real answer.
                 text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -822,6 +890,15 @@ class WhenTheCriticSpendsItsCeilingTests(TranslationReviewFixture):
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
             self.calls.append(role)
+            if role == "locale-reviser":
+                # Unchanged: the reviser saying the chapter already reads as its language.
+                return {
+                    "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                    "provider": "openrouter", "model": envelope["payload"]["model"],
+                    "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                    "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                }
             if role == "locale-reader":
                 # A reader that finds nothing is the common case and a real answer.
                 text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -890,6 +967,15 @@ class TheAnswerBoundTests(TranslationReviewFixture):
 
         def __call__(self, role, envelope, attempt_dir):
             payload = envelope["payload"]
+            if role == "locale-reviser":
+                # Unchanged: the reviser saying the chapter already reads as its language.
+                return {
+                    "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                    "provider": "openrouter", "model": envelope["payload"]["model"],
+                    "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                    "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                    "cost": 0.0, "latency_ms": 10, "finish": "stop",
+                }
             if role == "locale-reader":
                 # A reader that finds nothing is the common case and a real answer.
                 text = json.dumps({"summary": "letto", "followed": True, "stumbles": []})
@@ -1008,3 +1094,157 @@ class AReaderWhoCannotSeeTheSourceTests(TranslationReviewFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhatTheReaderCallsUnnaturalIsRewrittenTests(TranslationReviewFixture):
+    """landfall's CH-0001 review, finding R-04, severity `note`, origin `reader`:
+    «senza di esso l'aria della palude le sedeva sul petto come un cappotto bagnato
+    a metà guardia». Italian does not seat air on a chest. The role built to find
+    that found it, graded it by what it cost to read — nothing — and the repair
+    filter keeps `blocking` and `warning` only, so the one role that could see the
+    defect filed it into the one grade that is dropped.
+
+    And where it goes now matters as much as that it goes: to the reviser, which
+    has never seen the English, and not to the repair, which has it open."""
+
+    def read_back(self, stumbles, reviser=None):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)],
+            critic={"findings": [], "verdict": "faithful"},
+            reader={"summary": "letto", "followed": True, "stumbles": stumbles},
+            reviser=reviser,
+        )
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return report, provider
+
+    def stumble(self, **over):
+        row = {
+            "sentence": "l'aria della palude le sedeva sul petto",
+            "why": "in italiano l'aria non si siede sul petto",
+            "severity": "note",
+        }
+        row.update(over)
+        return row
+
+    def review_file(self):
+        return json.loads(
+            (self.project / f"books/{self.book}/translations/it/reviews/CH-0001.json").read_text()
+        )
+
+    def test_a_smooth_sentence_no_writer_would_produce_reaches_the_reviser(self):
+        _, provider = self.read_back([self.stumble(natural=False)])
+        self.assertIn("locale-reviser", provider.calls)
+        self.assertEqual(
+            [row["sentence"] for row in provider.revised_with["findings"]],
+            ["l'aria della palude le sedeva sul petto"],
+        )
+
+    def test_it_never_reaches_the_call_that_has_the_source_open(self):
+        """Post-edited text carries more source interference than text written from
+        scratch, so repairing a calque beside its original is the defect's own cause."""
+        _, provider = self.read_back([self.stumble(natural=False)])
+        self.assertNotIn("translator", provider.calls)
+
+    def test_the_reviser_is_never_shown_the_source(self):
+        _, provider = self.read_back([self.stumble(natural=False)])
+        self.assertNotIn("source_markdown", provider.revised_with)
+        self.assertIn("chapter_markdown", provider.revised_with)
+
+    def test_the_floor_is_recorded_as_a_warning_not_left_a_note(self):
+        self.read_back([self.stumble(natural=False)])
+        raised = [row for row in self.review_file()["findings"] if row.get("origin") == "reader"]
+        self.assertEqual([row["severity"] for row in raised], ["warning"])
+        self.assertIs(raised[0]["natural"], False)
+
+    def test_a_note_the_reader_calls_natural_is_still_only_a_preference(self):
+        _, provider = self.read_back([self.stumble(natural=True)])
+        self.assertNotIn("translator", provider.calls)
+
+    def test_a_reader_that_omits_the_question_keeps_the_grade_it_gave(self):
+        """The field is new, so an answer without it behaves as it did before."""
+        self.read_back([self.stumble()])
+        raised = [row for row in self.review_file()["findings"] if row.get("origin") == "reader"]
+        self.assertEqual([row["severity"] for row in raised], ["note"])
+
+    def test_a_grade_above_the_floor_is_not_lowered_to_it(self):
+        self.read_back([self.stumble(severity="blocking", natural=False)])
+        raised = [row for row in self.review_file()["findings"] if row.get("origin") == "reader"]
+        self.assertEqual([row["severity"] for row in raised], ["blocking"])
+
+    def test_a_sentence_the_reader_could_not_understand_still_goes_to_the_source(self):
+        """`blocking` is not a language defect, it is a meaning one: the reader could
+        not recover what the sentence says, and only the source settles that."""
+        _, provider = self.read_back([self.stumble(severity="blocking", natural=False)])
+        self.assertIn("translator", provider.calls)
+
+
+class TheRevisionIsGatedOnHavingMovedNoFactsTests(TranslationReviewFixture):
+    """The rewrite is done without the source on purpose, and the ablation in the
+    refinement literature says that is exactly what costs fidelity. So the gate
+    fails closed: anything it cannot clear keeps the translation that validated."""
+
+    CHAPTER = "# La chiatta dell'alba\n\n" + GOOD_BODY
+
+    def read_back(self, revised, changed=None, revision_check=None, reader=None):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)],
+            critic={"findings": [], "verdict": "faithful"},
+            reader=reader,
+            reviser={"revised_markdown": revised, "changed": changed or []},
+            revision_check=revision_check,
+        )
+        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        chapter = (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text()
+        record = json.loads(
+            (self.project / f"books/{self.book}/translations/it/revisions/CH-0001.json").read_text()
+        )
+        return report, provider, chapter, record
+
+    def test_a_clean_revision_is_applied_and_lands_on_disk(self):
+        better = self.CHAPTER.replace("contava le lampade", "faceva il conto delle lampade")
+        _, _, chapter, record = self.read_back(
+            better, changed=[{"before": "contava le lampade", "after": "faceva il conto delle lampade", "why": "x"}]
+        )
+        self.assertIn("faceva il conto delle lampade", chapter)
+        self.assertTrue(record["applied"])
+        self.assertEqual(record["rejected"], [])
+
+    def test_a_revision_that_changes_a_number_does_not_survive(self):
+        """The cheap half of the gate. A digit the source does not have is caught
+        without a model and without a call — and a number spelled out in words is
+        not, which is the whole reason the check below exists as well."""
+        moved = self.CHAPTER + "\n\nErano 14 lampade."
+        _, provider, chapter, record = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
+        self.assertNotIn("14", chapter)
+        self.assertFalse(record["applied"])
+        self.assertIn("numbers differ from source", record["rejected"])
+        self.assertIsNone(provider.checked, "a revision already refused must cost no check call")
+
+    def test_a_revision_the_check_says_moved_a_fact_does_not_survive(self):
+        better = self.CHAPTER.replace("contava le lampade", "spegneva le lampade")
+        _, provider, chapter, record = self.read_back(
+            better,
+            changed=[{"before": "contava le lampade", "after": "spegneva le lampade", "why": "x"}],
+            revision_check={"moved": [{"before": "contava le lampade", "after": "spegneva le lampade",
+                                       "what_moved": "counting became extinguishing"}]},
+        )
+        self.assertIn("contava le lampade", chapter, "the translation that validated must be kept")
+        self.assertFalse(record["applied"])
+        self.assertIn("counting became extinguishing", " ".join(record["rejected"]))
+
+    def test_the_check_is_never_asked_when_the_reviser_changed_nothing(self):
+        _, provider, _, record = self.read_back(self.CHAPTER)
+        self.assertIsNone(provider.checked, "an unchanged chapter must cost no check call")
+        self.assertFalse(record["applied"])
+
+    def test_the_check_sees_the_pairs_and_the_source_and_not_the_chapter(self):
+        better = self.CHAPTER.replace("contava le lampade", "faceva il conto delle lampade")
+        _, provider, _, _ = self.read_back(
+            better, changed=[{"before": "contava le lampade", "after": "faceva il conto delle lampade", "why": "x"}]
+        )
+        self.assertEqual(
+            [row["after"] for row in provider.checked["changed"]], ["faceva il conto delle lampade"]
+        )
+        self.assertIn("source_markdown", provider.checked)

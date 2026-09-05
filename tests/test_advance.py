@@ -104,6 +104,15 @@ class ScriptedProvider:
             return self._envelope({"translated_markdown": PROSE_IT, "glossary_updates": [], "boundary": "Mara ha chiesto."}, role)
         if role == "translation-critic":
             return self._envelope({"findings": [], "verdict": "faithful"}, role)
+        if role == "locale-reviser":
+            # Unchanged: the reviser saying the chapter already reads as its language.
+            return {
+                "text": json.dumps({"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}),
+                "provider": "openrouter", "model": envelope["payload"]["model"],
+                "variant": envelope["payload"]["variant"], "session_id": "ses-rev",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.0, "latency_ms": 10, "finish": "stop",
+            }
         if role == "locale-reader":
             return self._envelope({"summary": "Mara asks the warden to open it.", "followed": True, "stumbles": []}, role)
         raise AssertionError(role)

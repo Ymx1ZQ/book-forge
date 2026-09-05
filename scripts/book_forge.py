@@ -86,6 +86,12 @@ ROLE_SPECS = {
     # A reader, not a reviewer. It is given the translation and the locale style and
     # nothing else — see `_locale_reader_capsule` for why the denial is the design.
     "locale-reader": ("all", "medium", 4),
+    # It writes, so it is pinned like the roles that write. Denied the source for the
+    # same reason the reader is: post-edited text carries more interference from the
+    # source language than text written from scratch (Toral 2019, five language
+    # directions), and the sentence has to be rebuilt by someone who cannot see the
+    # shape that produced it.
+    "locale-reviser": ("all", "medium", 7),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
@@ -3245,6 +3251,9 @@ ROLE_BUDGETS = {
     # It reads one chapter and answers in a few quoted stumbles: a small question
     # deliberately, since a reader who is asked for an essay starts writing one.
     "locale-reader": (16000, 3000),
+    # It returns the whole chapter and a record of every sentence it rewrote, so its
+    # allowance is the translator's with room for the record.
+    "locale-reviser": (16000, 7000),
     "judge": (10000, 2000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
@@ -8531,6 +8540,10 @@ REVIEW_MAX_FINDINGS = 6
 # What the monolingual reader may return. Small for the same reason the critic's is:
 # an answer bounded in the question is an answer that arrives.
 LOCALE_READER_MAX_FINDINGS = 6
+# The revision check answers one clause per moved pair and usually an empty list,
+# so it is the smallest ask in the engine. It is deliberately not the critic's 9000:
+# a bound that invites an essay gets one, and this question has no essay in it.
+REVISION_CHECK_MAX_OUTPUT = 2000
 
 
 def _locale_reader_capsule(chapter_id: str, translated: str, style: str) -> dict[str, object]:
@@ -8572,11 +8585,26 @@ def _locale_reader_findings(value: object) -> list[dict[str, object]]:
         if not quoted:
             # A stumble that quotes nothing cannot be repaired and cannot be checked.
             continue
+        severity = str(row.get("severity") or "warning")
+        natural = row.get("natural")
+        if natural is False and severity == "note":
+            # The floor, and the reason this role stopped earning its call. The old
+            # scale graded by what happened to the reader, and `note` meant "wrong
+            # but it did not stop you" — which is the definition of a calque, and
+            # `note` is the one grade the repair filter drops. landfall's CH-0001
+            # came back with R-04 `note`, «l'aria della palude le sedeva sul petto»,
+            # a construction Italian does not build; it was written to the review
+            # file and never repaired. The prompt now grades by defect rather than
+            # by reading speed, and this floor holds when a reader grades the old
+            # way anyway.
+            severity = "warning"
         findings.append({
             "id": f"R-{index:02d}",
-            "severity": str(row.get("severity") or "warning"),
+            "severity": severity,
             "kind": "readability",
             "origin": "reader",
+            # Recorded so the review file says why a smooth sentence was raised.
+            "natural": natural if isinstance(natural, bool) else None,
             "source": "",
             "translated": quoted,
             "rule": "reads as the target language",
@@ -9854,6 +9882,283 @@ def _ask_locale_reader(  # noqa: PLR0913 - the reader takes what it is denied as
         return []
 
 
+def _locale_reviser_capsule(
+    chapter_id: str, translated: str, style: str, glossary: str, findings: list[dict[str, object]]
+) -> dict[str, object]:
+    """What the reviser writes with, and what it is denied.
+
+    No `source_markdown`, and the chapter is handed over as `chapter_markdown` — a
+    text in a language, not the output of a translation. The denial is the same one
+    the reader gets and it is measured rather than tasteful: post-edited text is
+    simpler, more normalised and carries more source-language interference than
+    text written from scratch (Toral, *Post-editese: an Exacerbated Translationese*,
+    five language directions), and the literary follow-up finds post-edited features
+    sitting closer to the machine output than to human translation. A calque parses
+    when the original is on the page, which is why the repair that had the source
+    kept producing them.
+
+    The glossary is *not* denied, and that is the difference from the reader. The
+    reader is refused it so an unreadable term is reported rather than excused as
+    agreed; the reviser writes, and a rewrite that renames the book's fixed terms
+    trades one defect for a worse one. It arrives framed as a list of names.
+    """
+    return {
+        "chapter": chapter_id,
+        "chapter_markdown": translated,
+        "locale_style": style,
+        "glossary": glossary,
+        "findings": [
+            {
+                "sentence": str(row.get("translated") or ""),
+                "why": str(row.get("issue") or ""),
+            }
+            for row in findings
+            if str(row.get("translated") or "").strip()
+        ],
+    }
+
+
+def _bilingual_repair_findings(findings: list[dict[str, object]]) -> list[dict[str, object]]:
+    """What the repair-with-the-source is allowed to be asked to fix.
+
+    A finding the monolingual reader raised as `warning` says the sentence is not
+    how the language builds this. Handing it to the call that has the source open is
+    what produced the defect in the first place, so it goes to the reviser and stops
+    here. Its `blocking` findings do travel: a sentence whose sense a reader could
+    not recover is a meaning failure, and the source is the only thing that settles
+    what it was supposed to say.
+    """
+    return [
+        row
+        for row in findings
+        if str(row.get("severity")) in {"blocking", "warning"}
+        and (row.get("origin") != "reader" or str(row.get("severity")) == "blocking")
+    ]
+
+
+def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    source: str,
+    value: dict[str, object],
+    *,
+    runner,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """The read-back, in the order the work has to happen in.
+
+    Monolingual first: the reader sees the chapter as a text in its language and
+    says where it is not one, and the reviser rewrites those places without ever
+    being shown what they came from. Bilingual last, over whatever text survived
+    that, because the critic's competence is meaning and it reads a calque as
+    legible whenever the source explains it.
+
+    Returns the value to carry forward and the review record.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    unread: list[str] = []
+    language = _ask_locale_reader(
+        root, book_id, locale, chapter_id, str(value["translated_markdown"]), style, runner, unread
+    )
+    revised = _revise_in_locale(
+        root, book_id, locale, chapter_id, contract, source, value, language, runner=runner
+    )
+    carried = revised if revised is not None else value
+    review = _review_translation(
+        root, book_id, locale, chapter_id, contract, source, str(carried["translated_markdown"]),
+        runner=runner, language_findings=language, reader_unread=unread[0] if unread else "",
+    )
+    return carried, review
+
+
+def _revision_moved_meaning(
+    root: Path, book_id: str, locale: str, chapter_id: str, source: str, changed: list[dict[str, object]], *, runner
+) -> list[str]:
+    """The bilingual half of the gate: what the monolingual rewrite is not allowed to do.
+
+    Runs on the critic's pin and its own prompt, so it costs the role's model and
+    not its instruction — the question here is narrower than a review and a critic
+    asked its usual question would answer with its usual findings. The capsule
+    carries the source and the rewritten pairs only, so it stays small whatever the
+    chapter costs.
+
+    Fails closed by returning the pairs that moved. A check that cannot be reached
+    is not silence: `unreadable` comes back as a refusal, because the alternative is
+    shipping an unverified rewrite, and the whole reason the rewrite is done blind is
+    that nobody downstream can see what it did.
+    """
+    pairs = [
+        {"before": str(row.get("before") or ""), "after": str(row.get("after") or "")}
+        for row in changed
+        if isinstance(row, dict) and str(row.get("before") or "").strip() and str(row.get("after") or "").strip()
+    ]
+    if not pairs:
+        return []
+    task_id = f"LOCREVCHK-{book_id}-{chapter_id}-{locale}"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, "translation-critic", priority=83, outputs=[])
+    else:
+        _reopen_task(root, task_id)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root,
+            role="translation-critic",
+            task_capsule={"chapter": chapter_id, "source_markdown": source, "changed": pairs},
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=REVISION_CHECK_MAX_OUTPUT,
+            prompt_role="revision-check",
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        result = runner("translation-critic", envelope, Path(claim["capsule"]).parent)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        _refuse_empty_answer("translation-critic", chapter_id, result)
+        answer = _parse_contract_json(str(result["text"]))
+        rows = answer.get("moved") if isinstance(answer.get("moved"), list) else []
+        moved = [
+            f"the revision moved a fact: {str(row.get('what_moved') or '').strip()[:120]}"
+            for row in rows
+            if isinstance(row, dict)
+        ]
+        _set_attempt_failure(root, claim["attempt"], block=False, reason="revision checked")
+        return moved
+    except Exception as unread:
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unread)[:200])
+            except BookForgeError:
+                pass
+        return [f"the revision could not be checked for meaning: {str(unread)[:120]}"]
+
+
+def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules and its findings
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    source: str,
+    value: dict[str, object],
+    findings: list[dict[str, object]],
+    *,
+    runner,
+) -> dict[str, object] | None:
+    """One monolingual pass over the chapter, gated on having moved no facts.
+
+    A stage, not a repair: it runs on every chapter whether or not a reader raised
+    anything, because the reader answers under a hard bound of six over a chapter of
+    forty-odd paragraphs and cannot be the trigger for a defect that occurs several
+    times a paragraph.
+
+    **The gate fails closed.** The refinement literature that supports the rewrite
+    (arXiv 2306.03856) also finds, in its ablation, that anchoring to the source is
+    what holds fidelity — so a rewrite done without the source has to be checked for
+    fidelity afterwards or it buys naturalness with meaning. The revision faces the
+    same validation the translation passed, which compares numbers, structure and
+    length against the source, plus the glossary check as a regression: a rendering
+    the accepted translation had and the revision lost is the revision's fault. Fail
+    any of it and the translation that validated is kept and the reason recorded.
+
+    Returns the value to carry forward, or None when nothing changed.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
+    translated = str(value["translated_markdown"])
+    task_id = f"LOCREV-{book_id}-{chapter_id}-{locale}"
+    record_path = f"books/{book_id}/translations/{locale}/revisions/{chapter_id}.json"
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(
+            root,
+            task_id,
+            "locale-reviser",
+            priority=83,
+            chapter_order=int(contract.get("order", 0)),
+            outputs=[record_path],
+        )
+    else:
+        _reopen_task(root, task_id)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root,
+            role="locale-reviser",
+            task_capsule=_locale_reviser_capsule(chapter_id, translated, style, glossary, findings),
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = runner("locale-reviser", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        _refuse_empty_answer("locale-reviser", chapter_id, result)
+        answer = _parse_contract_json(str(result["text"]))
+        revised = answer.get("revised_markdown")
+        if not isinstance(revised, str) or not revised.strip():
+            raise BookForgeError("the reviser returned no chapter")
+        changed = answer.get("changed") if isinstance(answer.get("changed"), list) else []
+        candidate = {**value, "translated_markdown": revised}
+        rejected = _translation_validation(source, {**candidate, "_locale": locale}, _locale_checks(locale_root))
+        before = set(_glossary_compliance(source, translated, glossary))
+        rejected.extend(sorted(set(_glossary_compliance(source, revised, glossary)) - before))
+        if not rejected and revised.strip() != translated.strip():
+            # Only when there is something to check and the cheap half has passed:
+            # a revision already refused on numbers does not need a model to say so.
+            rejected.extend(
+                _revision_moved_meaning(root, book_id, locale, chapter_id, source, list(changed), runner=runner)
+            )
+        applied = bool(revised.strip() != translated.strip()) and not rejected
+        manifest = stage_outputs(root, claim["attempt"], {record_path: _json_bytes({
+            "schema": 1,
+            "chapter": chapter_id,
+            "applied": applied,
+            "changed": changed,
+            # Empty when the revision was taken. A reason here is the gate speaking.
+            "rejected": rejected,
+        })})
+        record_execution(
+            root,
+            claim["attempt"],
+            claim["fence"],
+            output_hash=_sha256_bytes(_json_bytes(manifest)),
+            telemetry=_provider_telemetry(result, envelope),
+        )
+        promote_task(root, claim["attempt"], claim["fence"])
+        if rejected:
+            print(
+                f"[locale-reviser] {chapter_id}: the revision was refused and the translation kept — "
+                f"{'; '.join(rejected)[:200]}",
+                file=sys.stderr,
+            )
+            return None
+        if not applied:
+            return None
+        print(
+            f"[locale-reviser] {chapter_id}: {len(changed)} sentence(s) rewritten as the target language",
+            file=sys.stderr,
+        )
+        return candidate
+    except Exception as unrevised:
+        # Advisory in its failure the way the reader is: a chapter that could not be
+        # revised is a chapter that reads worse, not one that stops the run.
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unrevised)[:200])
+            except BookForgeError:
+                pass
+        print(f"[locale-reviser] {chapter_id} was not revised: {str(unrevised)[:160]}", file=sys.stderr)
+        return None
+
+
 def _score_machine_findings(
     machine: list[dict[str, object]], verdicts: object
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
@@ -9887,7 +10192,7 @@ def _score_machine_findings(
     }
 
 
-def _review_translation(
+def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the monolingual one already found
     root: Path,
     book_id: str,
     locale: str,
@@ -9897,6 +10202,8 @@ def _review_translation(
     translated: str,
     *,
     runner,
+    language_findings: list[dict[str, object]] | None = None,
+    reader_unread: str = "",
 ) -> dict[str, object]:
     """Read the translation back against the source, and repair what is cited.
 
@@ -10033,8 +10340,13 @@ def _review_translation(
             cited, aside = _cited_findings(value.get("findings"))
             findings.extend(cited)
             set_aside.extend(aside)
-            reader_unread: list[str] = []
-            findings.extend(_ask_locale_reader(root, book_id, locale, chapter_id, translated, style, runner, reader_unread))
+            # The reader ran before this pass, not inside it: its findings are what
+            # the monolingual reviser was given, and they are carried here so the
+            # review file still records the whole read-back in one place. Routing
+            # them to the repair as well would send a sentence that is bad *as
+            # Italian* to the one call that has the English open, which is the
+            # condition that produces the defect.
+            findings.extend(language_findings or [])
             verdict = str(value.get("verdict") or "repairable")
             convergence = _convergence(previous, findings, verdict, bool(previous.get("repaired")))
             if convergence["verdict_inconsistent"]:
@@ -10057,7 +10369,7 @@ def _review_translation(
                     # Empty when the reader read the chapter, whatever it found. A
                     # reason here means nobody read it, which no count of findings
                     # can tell you apart from a clean pass.
-                    "locale_reader_unread": reader_unread[0] if reader_unread else "",
+                    "locale_reader_unread": reader_unread,
                 }
             )})
             record_execution(
@@ -10356,10 +10668,10 @@ def _translate_one(
             _set_attempt_failure(root, claim["attempt"], block=False, reason="pivotal-review-requested")
             continue
         if _translation_review_enabled(_read_json(root / "book-forge.yaml")):
-            review = _review_translation(
-                root, book_id, locale, chapter_id, contract, source, str(value["translated_markdown"]), runner=runner
+            value, review = _read_revise_and_review(
+                root, book_id, locale, chapter_id, contract, source, value, runner=runner
             )
-            actionable = [row for row in review["findings"] if str(row.get("severity")) in {"blocking", "warning"}]
+            actionable = _bilingual_repair_findings(review["findings"])
             if actionable:
                 repaired = _repair_translation(
                     root, book_id, locale, chapter_id, contract, source, value, actionable, runner=runner
@@ -10565,8 +10877,33 @@ def review_translation(
             passes += 1
             # Re-read: the pass before this one may have rewritten the chapter.
             translated = path.read_text(encoding="utf-8")
-            review = _review_translation(root, book_id, canonical, chapter, contract, source, translated, runner=runner)
-            actionable = _actionable(review["findings"])
+            # A chapter on disk has no translator answer beside it, so the value the
+            # stages pass around is rebuilt from the text. Only `translated_markdown`
+            # travels out of it; the other two keys exist because the validation the
+            # revision is gated on asks for them.
+            carried, review = _read_revise_and_review(
+                root, book_id, canonical, chapter, contract, source,
+                {"translated_markdown": translated, "glossary_updates": [], "boundary": "-"}, runner=runner,
+            )
+            revised = str(carried["translated_markdown"])
+            revision_landed = revised.strip() != translated.strip()
+            if revision_landed:
+                # Its own id: `LOCREV` already owns the revision record as its
+                # declared artifact, and materializing here would replace that
+                # declaration with the chapter path and orphan what it promoted.
+                apply_id = f"LOCREVAPPLY-{book_id}-{chapter}-{canonical}"
+                if not any(row["id"] == apply_id for row in _load_plan(root)["tasks"]):
+                    add_task(root, apply_id, "locale-reviser", priority=83,
+                             chapter_order=int(contract.get("order", 0)))
+                else:
+                    _reopen_task(root, apply_id)
+                _execute_materialized_task(
+                    root,
+                    apply_id,
+                    {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": revised.rstrip() + "\n"},
+                )
+                translated = revised
+            actionable = _bilingual_repair_findings(review["findings"])
             repaired = None
             if actionable:
                 repaired = _repair_translation(
@@ -10582,7 +10919,7 @@ def review_translation(
                     {f"books/{book_id}/translations/{canonical}/chapters/{chapter}.md": str(repaired["translated_markdown"]).rstrip() + "\n"},
                 )
             _record_pass_state(
-                root, book_id, canonical, chapter, review["convergence"], repaired is not None, translated
+                root, book_id, canonical, chapter, review["convergence"], repaired is not None or revision_landed, translated
             )
             inconsistent_seen = inconsistent_seen or bool(review["convergence"]["verdict_inconsistent"])
             not_landed_seen = max(not_landed_seen, len(review["convergence"]["not_landed"] or []))
@@ -10593,9 +10930,10 @@ def review_translation(
             if state in {"clean", "no-progress"}:
                 ended = state
                 break
-            if repaired is None:
+            if repaired is None and not revision_landed:
                 # Nothing was applied, so the next pass would read the same text and
-                # ask the same question.
+                # ask the same question. A revision that landed is an application:
+                # the next pass reads different text and the question is a new one.
                 ended = "nothing-applied"
                 break
         machine = review.get("machine") or {}
