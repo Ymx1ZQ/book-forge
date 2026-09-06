@@ -10533,8 +10533,16 @@ def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules a
         pieces: list[str] = []
         changed: list[dict[str, object]] = []
         for first, last, passage in slices:
+            # Filtered here, not asked for in the prompt. The reader now finds a
+            # chapter's worth — fifteen on landfall's CH-0001 against three when it
+            # read the whole thing in one call — and handing all fifteen to each
+            # twelve-paragraph passage makes most of them noise the model has to
+            # sort. It rewrote five of fifteen and two of those five moved a clause
+            # without touching the verb that was the defect.
+            mine = [row for row in findings if str(row.get("translated") or "").strip() and
+                    str(row["translated"]).strip()[:80] in passage]
             piece, rewrites = _revise_one_slice(
-                root, book_id, locale, chapter_id, contract, passage, style, glossary, findings,
+                root, book_id, locale, chapter_id, contract, passage, style, glossary, mine,
                 first=first, last=last, of=len(slices), runner=runner,
             )
             pieces.append(piece)

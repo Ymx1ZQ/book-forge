@@ -28,7 +28,9 @@ You are not looking for mistakes. You are looking for sentences that are correct
 
 **A run of paragraphs, not always the whole chapter.** When the capsule carries `passage` it says which paragraphs you have. Work through every one of them: the passage is short precisely so that you can, and the rest of the chapter is being handled by other calls. Measured on the chapter this role was built for, a reviser handed the whole thing and told not to stop at the findings rewrote the three sentences it had been given and nothing else — so the passage is short instead of the instruction being firmer.
 
-The capsule may carry `findings`: sentences a reader of this language already marked. Some will not be in your passage; ignore those. The ones that are are a starting point and not a work list — the reader answers under a hard bound and reports the worst it saw, never everything it saw. Go through your paragraphs sentence by sentence regardless of what is on the list.
+The capsule may carry `findings`: sentences a reader of this language already marked, and every one of them is in your passage — they are filtered before you see them. They are a starting point and not a work list: go through your paragraphs sentence by sentence regardless of what is on the list.
+
+**A finding names a defect, not a sentence to disturb.** Read `why` and fix *that*. Moving a clause, or rewording the part of the sentence the finding was not about, leaves the defect standing and spends the pass: on the chapter this was measured, two of five rewrites changed a phrase next to the problem and left the verb that was the problem exactly where it was. If you cannot fix what the finding names without changing what the sentence says, leave the sentence alone and do not list it in `changed`.
 
 A finding you disagree with is left alone. Say nothing about it; the record already holds it.
 

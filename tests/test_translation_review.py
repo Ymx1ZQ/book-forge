@@ -1119,13 +1119,30 @@ class WhatTheReaderCallsUnnaturalIsRewrittenTests(TranslationReviewFixture):
         return report, provider
 
     def stumble(self, **over):
+        # Quoted out of the fixture chapter, because a finding is filtered to the
+        # passage it belongs to before the reviser sees it. The sentence this class
+        # is really about — «l'aria della palude le sedeva sul petto», landfall's
+        # R-04 — is in the docstring; the mechanism is the same.
         row = {
-            "sentence": "l'aria della palude le sedeva sul petto",
-            "why": "in italiano l'aria non si siede sul petto",
+            "sentence": "la Fede contava le lampade",
+            "why": "in italiano non si dice così",
             "severity": "note",
         }
         row.update(over)
         return row
+
+    def test_a_finding_outside_this_passage_never_reaches_it(self):
+        """The reader now finds a chapter's worth — fifteen on landfall's CH-0001
+        against three when it read the whole thing at once — and handing all fifteen
+        to each twelve-paragraph passage makes most of them noise the model sorts
+        instead of working. It rewrote five of fifteen."""
+        _, provider = self.read_back([
+            self.stumble(natural=False),
+            {"sentence": "una frase che in questo capitolo non c'è", "why": "x",
+             "natural": False, "severity": "warning"},
+        ])
+        handed = [row["sentence"] for row in provider.revised_with["findings"]]
+        self.assertEqual(handed, ["la Fede contava le lampade"])
 
     def review_file(self):
         return json.loads(
@@ -1137,7 +1154,7 @@ class WhatTheReaderCallsUnnaturalIsRewrittenTests(TranslationReviewFixture):
         self.assertIn("locale-reviser", provider.calls)
         self.assertEqual(
             [row["sentence"] for row in provider.revised_with["findings"]],
-            ["l'aria della palude le sedeva sul petto"],
+            ["la Fede contava le lampade"],
         )
 
     def test_it_never_reaches_the_call_that_has_the_source_open(self):
