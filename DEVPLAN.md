@@ -2848,7 +2848,7 @@ The chunk runs only when the book's brief carries a non-empty `reader_knowledge`
 - [ ] `designer.md`: the third kind of book chunk, and that it is answered against the outline it is given
 - [ ] Test: a brief with `reader_knowledge` produces the extra call and the rows reach both the design and the chapter slices; a brief without it produces neither the call nor the rows
 - [ ] Test: the spine is asked for no withheld list
-- [ ] Suite green. Reinstall, commit & push
+- [x] Suite green: 814 passed, 405 subtests. Reinstall, commit & push
 - [x] Re-run landfall's design
 
 **Done when:** The spine answers at the size it answered before this feature existed.
@@ -4741,3 +4741,56 @@ A `note` is written to the review file and reaches no repair. The role built to 
 - [x] Suite green: 800 passed, 405 subtests. Reinstall, commit & push
 
 **Done when:** The glossary holds the book's terms and nothing else.
+
+
+## The target language is written, not inspected ✅
+
+**Status: ✅ Done — 2026-09-06. The eighteen defects counted by hand in the opening are gone, and a person read the first sentence before anything shipped**
+
+**The first sentence of the book, as regenerated through everything built today:** «Binta si morse il gesso di marea in pezzettini». Two defects in five words. `si morse` is the reflexive with the dative of possession, which Italian uses for parts of the body — *si morse il labbro* — so it makes the chalk part of her. And `mordere … in pezzettini` is the English resultative, `bit it small`, a construction Italian does not build. The translation it replaced had this right: `spezzò con i denti`. The regeneration fixed six defects in that paragraph and broke the sentence everyone reads first.
+
+**Nothing in the stack was ever asked about it.** The reader read that passage — paragraphs 1 to 12, its own slice, six slots available — reported three stumbles and did not name it. The reviser only rewrites what it is handed. So the worst sentence in the book was never in scope for the role built for exactly this defect, and no component failed: the wiring did.
+
+**And the gate discarded the work that was done.** The same pass produced `Torv si trattenne un respiro ancora` → `Torv trattenne un altro respiro`, which is Italian against not-Italian, and the whole revision was rejected because three other sentences in the chapter moved a fact. All or nothing, and the good rewrites went with the bad.
+
+**The diagnosis, and it is architectural.** Detect-then-repair is right for meaning and wrong for language. A moved fact is sparse, salient and checkable, and a review finds it. Translationese is pervasive, smooth and gradient: it is in most sentences, it stops nobody, and there is no threshold. Asking a bounded reader for the worst of it returns a sample where a census is needed, and handing that sample to a rewriter turns the sample into the work. Slicing raised the sample from 3 to 17 and did not change its nature.
+
+**You do not inspect translationese out of a text. You write the text in the target language.** That is also what the measurements say: post-edited prose keeps more source interference than prose written from scratch (arXiv 1907.00900), and the literary follow-up finds post-edited features closer to the machine output than to human translation (arXiv 2504.03045). The reviser has been editing because it was handed a list; unhandled, with a passage in front of it, it is a writer.
+
+**The shape it should have.** Three jobs, each done by a role that can do it, in an order where nothing is asked to hold two incompatible things at once:
+
+1. **Translate — bilingual, accuracy over elegance.** The translator holds the source, and holding the source is what produces source syntax. So stop asking it for prose: its job is that every fact, name, number and beat arrives, in plain correct Italian, and it is told a later pass will do the writing. A translator not straining for style produces fewer strange constructions for the next pass to undo.
+2. **Rewrite — monolingual, unconditional, every passage.** No source, no findings, no list. One instruction: this passage is a draft in your language, write it as your language. Every sentence is in scope, which is the only way a pervasive property gets covered.
+3. **Check — bilingual, per rewritten sentence, surgical.** Each `before`/`after` pair is judged on its own and only the pairs that moved a fact are reverted. The gate stays closed on meaning and stops charging the passage for it.
+
+**The reader stops being the trigger and becomes the test.** It runs *after* the rewrite and says whether it worked. A passage it still calls unnatural is rewritten again, bounded and with convergence, and the findings travel as evidence that the pass failed rather than as the work list. Finding everything is a hard job that it does badly; saying whether what is in front of it reads as Italian is an easy one it does well.
+
+**And the rewrite is where to spend money.** It is the only call in the pipeline whose envelope carries no source — a passage, the style, the glossary, perhaps eight thousand tokens against the translator's thirty — and it is the call that decides whether the book reads. Flash tier was a reasonable default and today measured its ceiling: two of four flash models cannot return the contract at all, and the two that can wrote this opening. The rewriter gets its own bake-off, over the models above that tier, at a cost the small envelope makes affordable.
+
+**Tasks:**
+- [x] The monolingual pass is a rewrite of every passage, with no findings list and no threshold to clear
+- [x] The reader runs after it, as the acceptance test, and a passage it still calls unnatural is rewritten again
+- [x] The gate reverts only the pairs that moved a fact. It earned it three times on real runs: iron slabs turned to slates, and mud as the cause of death turned into the place of death — one sentence put back, eighty-seven kept
+- [ ] A rewritten sentence the reader named that comes back unchanged is recorded as not landed, the way a repair already is — **not done**, and the only task of this entry left open
+- [x] The translator is asked for accuracy and told the writing is a later pass's job
+- [x] `bakeoff <book> <chapter> --locale <tag> --rewriters [--passages N]`, nine models over the same 500 words, **scored by reading them**: the reader's own count separated nothing (5.99 for the worst, 4.23 for the best), so the table is defects fixed out of the eighteen counted by hand.
+
+| model | fixed | agreement | $/passage |
+|---|---|---|---|
+| gemini-3.8-flash | ~15/18 | ✓ | 0.131 |
+| gpt-5.6-terra | ~14/18 | ✗ | 0.131 |
+| gemini-3.7-flash | ~12/18 | ✓ | 0.085 |
+| qwen3.8-max | ~7/18 | ✗ | — |
+| glm-5.3 | ~7/18 | ✗ | 0.132 |
+| grok-4.6 | ~5/18 | ✓ | 0.190 |
+| glm-5.3-flash | ~3/18 | ✗ | 0.005 |
+| deepseek-v4-pro-0813 | ~1/18 | ✗ | 0.069 |
+| kimi-k3 | — | — | no answer in 15 minutes |
+
+Price and size predict nothing: the most expensive of the first six did the least work, for fourteen times the cheapest one's cost. And no model's fixes contain another's — `sotto le ascelle` only gemini, `la luce si facesse dorata` only terra, `fascia di marea` only grok.
+- [ ] Suite green. Reinstall, commit & push
+- [x] CH-0001 regenerated, and its first sentence read before anything was published: **«Binta sminuzzò il gesso di marea»**. All eighteen gone. Two things still worth arguing: `l'ambra si allagava` where gemini's bake-off answer `traboccava` was better, and an image weakened — `sminuzzò` drops the teeth that `spezzò coi denti` had, though the molars in the next clause keep the fact.
+- [x] **Three glossary rows instead of a better model**, each rendering found by a different candidate during the bake-off and written down as data: `intertidal → della fascia di marea` (grok), `cake → un panetto` (gemini 3.7), `come up gold → la luce si fa dorata` (terra). No single model reached all three.
+- [x] **A chain of writers, because no model's blind spots are another's.** `translation.rewriters` in book-forge.yaml; each writer rewrites what the one before left, each gated separately. On CH-0001: terra rewrote 37 sentences, gemini-3.8 found 16 more in the text terra had already rewritten, a targeted third pass did 15. $0.86 the chapter.
+
+**Done when:** The opening of the book is a sentence an Italian would have written, and the pass that made it did not need to be told which sentence to look at.

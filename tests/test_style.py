@@ -77,7 +77,7 @@ class StyleEnvelopeTests(unittest.TestCase):
             self.assertIn("Desire runs on deferral", self._role_prompt(role))
 
     def test_the_style_pass_carries_it_under_its_own_lens(self):
-        prompt = self._role_prompt("advisor-google-gemini-3-7-flash", prompt_role="style-review")
+        prompt = self._role_prompt("advisor-google-gemini-3-8-flash", prompt_role="style-review")
         self.assertIn("Desire runs on deferral", prompt)
 
     def test_roles_that_judge_facts_do_not_carry_it(self):
@@ -85,7 +85,7 @@ class StyleEnvelopeTests(unittest.TestCase):
             self.assertNotIn("Desire runs on deferral", self._role_prompt(role))
 
     def test_an_advisor_under_its_chorus_lens_does_not_carry_it(self):
-        self.assertNotIn("Desire runs on deferral", self._role_prompt("advisor-google-gemini-3-7-flash"))
+        self.assertNotIn("Desire runs on deferral", self._role_prompt("advisor-google-gemini-3-8-flash"))
 
     def test_changing_the_register_changes_the_envelope_hash(self):
         before = self.bf.build_envelope(self.project, role="writer", task_capsule=dict(self.contract), imports=[], state={}, tools=[], max_output_tokens=1000)["hash"]

@@ -311,14 +311,14 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic([self.calque_finding()]),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["translator", "locale-reviser", "locale-reader", "translation-critic", "translator"])
         self.assertIn("gesso di marea", (self.locale_root / "chapters" / "CH-0001.md").read_text())
 
     def test_a_finding_that_quotes_nothing_is_set_aside_and_drives_no_repair(self):
         vague = {"id": "01", "severity": "warning", "kind": "style", "issue": "si potrebbe migliorare"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([vague]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic"])
+        self.assertEqual(provider.calls, ["translator", "locale-reviser", "locale-reader", "translation-critic"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["set_aside"]), 1)
         self.assertEqual(review["findings"], [])
@@ -327,7 +327,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
         note = {**self.calque_finding(), "severity": "note"}
         provider = ScriptedProvider([translation(GOOD_BODY)], critic=self.critic([note]))
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic"])
+        self.assertEqual(provider.calls, ["translator", "locale-reviser", "locale-reader", "translation-critic"])
 
     def test_a_repair_refused_once_is_asked_again_and_the_second_one_lands(self):
         """CH-0003's repair came back carrying a forbidden form, was rightly refused,
@@ -509,7 +509,7 @@ class WhatTheCriticIsForTests(TranslationReviewFixture):
             critic=self.critic(findings),
         )
         self.translate(provider)
-        self.assertEqual(provider.calls, ["translator", "locale-reader", "locale-reviser", "translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["translator", "locale-reviser", "locale-reader", "translation-critic", "translator"])
         review = json.loads((self.locale_root / "reviews" / "CH-0001.json").read_text())
         self.assertEqual(len(review["findings"]), 12 + 2, "twelve cited findings plus the two the glossary found")
         self.assertEqual(review["set_aside"], [])
@@ -552,12 +552,12 @@ class TheChecksAreScoredByTheReaderTheyFeedTests(TranslationReviewFixture):
             {"id": "G-01", "verdict": "mistaken", "why": "il termine c'e', in altra forma"},
             {"id": "G-02", "verdict": "mistaken", "why": "la riga fissa un altro senso della parola"},
         ])
-        self.assertEqual(provider.calls, ["locale-reader", "locale-reviser", "translation-critic"], "no repair was asked for")
+        self.assertEqual(provider.calls, ["locale-reviser", "locale-reader", "translation-critic"], "no repair was asked for")
         self.assertFalse(report["reviewed"][0]["repaired"])
 
     def test_a_finding_the_critic_upholds_still_drives_the_repair(self):
         report, provider = self.review([{"id": "G-01", "verdict": "holds", "why": "manca davvero"}])
-        self.assertEqual(provider.calls, ["locale-reader", "locale-reviser", "translation-critic", "translator"])
+        self.assertEqual(provider.calls, ["locale-reviser", "locale-reader", "translation-critic", "translator"])
         self.assertTrue(report["reviewed"][0]["repaired"])
 
     def test_silence_on_a_finding_is_not_a_refutation(self):
@@ -1196,74 +1196,93 @@ class WhatTheReaderCallsUnnaturalIsRewrittenTests(TranslationReviewFixture):
         self.assertIn("translator", provider.calls)
 
 
-class TheRevisionIsGatedOnHavingMovedNoFactsTests(TranslationReviewFixture):
+class TheRewriteIsGatedSentenceBySentenceTests(TranslationReviewFixture):
     """The rewrite is done without the source on purpose, and the ablation in the
-    refinement literature says that is exactly what costs fidelity. So the gate
-    fails closed: anything it cannot clear keeps the translation that validated."""
+    refinement literature says that is exactly what costs fidelity. So the gate fails
+    closed — and per sentence, not per passage: rejecting the passage whole discarded
+    `Torv si trattenne un respiro ancora` → `Torv trattenne un altro respiro`, Italian
+    against not-Italian, because three other sentences in the chapter moved a fact."""
 
     CHAPTER = "# La chiatta dell'alba\n\n" + GOOD_BODY
 
-    def read_back(self, revised, changed=None, revision_check=None, reader=None):
+    def read_back(self, revised, changed=None, revision_check=None):
         self.translate(ScriptedProvider([translation(GOOD_BODY)]))
         provider = ScriptedProvider(
             [translation(GOOD_BODY)],
             critic={"findings": [], "verdict": "faithful"},
-            reader=reader,
             reviser={"revised_markdown": revised, "changed": changed or []},
             revision_check=revision_check,
         )
-        report = self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
         chapter = (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text()
         record = json.loads(
             (self.project / f"books/{self.book}/translations/it/revisions/CH-0001.json").read_text()
         )
-        return report, provider, chapter, record
+        return provider, chapter, record
 
-    def test_a_clean_revision_is_applied_and_lands_on_disk(self):
+    def test_a_clean_rewrite_is_applied_and_lands_on_disk(self):
         better = self.CHAPTER.replace("contava le lampade", "faceva il conto delle lampade")
-        _, _, chapter, record = self.read_back(
+        _, chapter, record = self.read_back(
             better, changed=[{"before": "contava le lampade", "after": "faceva il conto delle lampade", "why": "x"}]
         )
         self.assertIn("faceva il conto delle lampade", chapter)
         self.assertTrue(record["applied"])
-        self.assertEqual(record["rejected"], [])
+        self.assertEqual(record["reverted"], [])
 
-    def test_a_revision_that_changes_a_number_does_not_survive(self):
-        """The cheap half of the gate. A digit the source does not have is caught
-        without a model and without a call — and a number spelled out in words is
-        not, which is the whole reason the check below exists as well."""
+    def test_only_the_sentence_that_moved_is_put_back(self):
+        """The whole point: one bad rewrite among several must not cost the others."""
+        better = self.CHAPTER.replace(
+            "Masticava gesso di marea sulla torre e la Fede contava le lampade.",
+            "Sulla torre masticava gesso di marea mentre la Fede spegneva le lampade.",
+            1,
+        ).replace("Masticava gesso di marea sulla torre", "Sulla torre masticava gesso di marea", 1)
+        _, chapter, record = self.read_back(
+            better,
+            changed=[
+                {"before": "la Fede contava le lampade", "after": "la Fede spegneva le lampade", "why": "x"},
+                {"before": "Masticava gesso di marea sulla torre", "after": "Sulla torre masticava gesso di marea", "why": "y"},
+            ],
+            revision_check={"moved": [{"before": "la Fede contava le lampade",
+                                       "after": "la Fede spegneva le lampade",
+                                       "what_moved": "counting became extinguishing"}]},
+        )
+        self.assertNotIn("spegneva le lampade", chapter, "the moved sentence must be put back")
+        self.assertIn("Sulla torre masticava gesso di marea", chapter, "the sentence that did not move must stand")
+        self.assertEqual(len(record["reverted"]), 1)
+        self.assertTrue(record["applied"])
+
+    def test_a_rewrite_that_changes_a_number_does_not_survive(self):
         moved = self.CHAPTER.replace("contava le lampade", "contava 14 lampade", 1)
-        _, provider, chapter, record = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
+        _, chapter, record = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
         self.assertNotIn("14", chapter)
         self.assertFalse(record["applied"])
         self.assertIn("numbers differ from source", record["rejected"])
-        self.assertIsNone(provider.checked, "a revision already refused must cost no check call")
 
-    def test_a_revision_the_check_says_moved_a_fact_does_not_survive(self):
-        better = self.CHAPTER.replace("contava le lampade", "spegneva le lampade")
-        _, provider, chapter, record = self.read_back(
+    def test_a_check_that_cannot_be_reached_reverts_everything(self):
+        """Fails closed. The rewrite was made blind; nobody downstream can see what it
+        did, so an unverified one does not ship."""
+        better = self.CHAPTER.replace("contava le lampade", "faceva il conto delle lampade")
+        _, chapter, record = self.read_back(
             better,
-            changed=[{"before": "contava le lampade", "after": "spegneva le lampade", "why": "x"}],
-            revision_check={"moved": [{"before": "contava le lampade", "after": "spegneva le lampade",
-                                       "what_moved": "counting became extinguishing"}]},
+            changed=[{"before": "contava le lampade", "after": "faceva il conto delle lampade", "why": "x"}],
+            revision_check={"nonsense": True},
         )
-        self.assertIn("contava le lampade", chapter, "the translation that validated must be kept")
-        self.assertFalse(record["applied"])
-        self.assertIn("counting became extinguishing", " ".join(record["rejected"]))
+        self.assertIn("faceva il conto delle lampade", chapter,
+                      "a parseable answer with no `moved` key is an empty verdict, not an unreachable check")
 
-    def test_the_check_is_never_asked_when_the_reviser_changed_nothing(self):
-        _, provider, _, record = self.read_back(self.CHAPTER)
-        self.assertIsNone(provider.checked, "an unchanged chapter must cost no check call")
-        self.assertFalse(record["applied"])
+    def test_the_check_is_asked_even_when_validation_would_refuse(self):
+        """Order matters now: putting a moved sentence back can be what makes the
+        passage valid again, so the check runs before the validation decides."""
+        moved = self.CHAPTER.replace("contava le lampade", "contava 14 lampade", 1)
+        provider, _, _ = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
+        self.assertIsNotNone(provider.checked)
 
     def test_the_check_sees_the_pairs_and_the_source_and_not_the_chapter(self):
         better = self.CHAPTER.replace("contava le lampade", "faceva il conto delle lampade")
-        _, provider, _, _ = self.read_back(
+        provider, _, _ = self.read_back(
             better, changed=[{"before": "contava le lampade", "after": "faceva il conto delle lampade", "why": "x"}]
         )
-        self.assertEqual(
-            [row["after"] for row in provider.checked["changed"]], ["faceva il conto delle lampade"]
-        )
+        self.assertEqual([row["after"] for row in provider.checked["changed"]], ["faceva il conto delle lampade"])
         self.assertIn("source_markdown", provider.checked)
 
 
@@ -1482,3 +1501,154 @@ class TheGlossaryHoldsTheBooksTermsAndNothingElseTests(TranslationReviewFixture)
         locale_root = self.project / f"books/{self.book}/translations/it"
         self.bf._record_chapter_notes(locale_root, "CH-0002", [self.row("tide-chalk", "gesso di marea")])
         self.assertFalse((locale_root / "notes" / "CH-0002.json").exists())
+
+
+class TheRewriteIsUnconditionalAndTheReaderIsTheTestTests(TranslationReviewFixture):
+    """The order used to be reader-then-reviser, which made a bounded sample of a
+    pervasive defect into the work list. On landfall's CH-0001 the reader named fifteen
+    sentences, the reviser rewrote five, and «Binta si morse il gesso di marea in
+    pezzettini» — the book's first sentence, a reflexive Italian keeps for parts of the
+    body and a resultative it does not build — was in neither set. Nothing failed: the
+    role built for that defect was never shown it."""
+
+    def run_back(self, reader_answers, reviser=None, rewrites=()):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+
+        class Bench(ScriptedProvider):
+            def __init__(self, answers, rewrites=(), **kw):
+                super().__init__([translation(GOOD_BODY)], **kw)
+                self.answers = list(answers)
+                self.rewrites = list(rewrites)
+
+            def __call__(self, role, envelope, attempt_dir):
+                if role == "locale-reader" and self.answers:
+                    self.reader = self.answers.pop(0)
+                if role == "locale-reviser" and self.rewrites:
+                    self.reviser = self.rewrites.pop(0)
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = Bench(reader_answers, rewrites=rewrites, critic={"findings": [], "verdict": "faithful"}, reviser=reviser)
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return provider
+
+    def clean(self):
+        return {"summary": "letto", "followed": True, "stumbles": []}
+
+    def dirty(self):
+        return {"summary": "letto", "followed": True, "stumbles": [
+            {"sentence": "la Fede contava le lampade", "why": "non è italiano",
+             "natural": False, "severity": "warning"},
+        ]}
+
+    def test_the_rewrite_runs_before_anyone_has_found_anything(self):
+        provider = self.run_back([self.clean()])
+        self.assertLess(provider.calls.index("locale-reviser"), provider.calls.index("locale-reader"))
+
+    def test_the_rewriter_is_handed_no_work_list_on_the_first_pass(self):
+        provider = self.run_back([self.clean()])
+        self.assertEqual(provider.revised_with["findings"], [])
+
+    def test_a_passage_the_reader_still_calls_unnatural_is_written_again(self):
+        provider = self.run_back([self.dirty(), self.clean()])
+        self.assertEqual(provider.calls.count("locale-reviser"), 2)
+
+    def test_a_second_pass_that_landed_is_read_back(self):
+        chapter = "# La chiatta dell'alba\n\n" + GOOD_BODY
+        provider = self.run_back(
+            [self.dirty(), self.clean()],
+            rewrites=[
+                {"revised_markdown": chapter, "changed": []},
+                {"revised_markdown": chapter.replace("contava", "faceva il conto di", 1), "changed": []},
+            ],
+        )
+        self.assertEqual(provider.calls.count("locale-reader"), 2)
+
+    def test_a_second_pass_that_changed_nothing_costs_no_second_reading(self):
+        provider = self.run_back([self.dirty(), self.clean()])
+        self.assertEqual(provider.calls.count("locale-reader"), 1)
+
+    def test_a_chapter_the_reader_passes_is_not_written_twice(self):
+        provider = self.run_back([self.clean()])
+        self.assertEqual(provider.calls.count("locale-reviser"), 1)
+
+    def test_the_second_pass_carries_what_the_reader_said_as_evidence(self):
+        provider = self.run_back([self.dirty(), self.clean()])
+        self.assertEqual(
+            [row["sentence"] for row in provider.revised_with["findings"]],
+            ["la Fede contava le lampade"],
+        )
+
+
+class TwoWritersCoverWhatOneMissesTests(TranslationReviewFixture):
+    """Nine models rewrote the same 500 words. gemini-3.8-flash fixed about fifteen of
+    eighteen defects and missed `come up gold`; gpt-5.6-terra wrote the best prose of
+    any of them, was the only one to fix that, and left `La masticava` for `il gesso`.
+    grok-4.6 was alone in finding `fascia di marea`. No model's fixes contained
+    another's, so the pass runs the writers in order and each is gated on its own."""
+
+    def chain(self, models):
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["translation"] = {**config.get("translation", {}), "rewriters": models}
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+    def test_one_writer_is_the_default_and_costs_one_pass(self):
+        self.assertEqual(self.bf._rewriter_chain(self.project), [""])
+
+    def test_a_declared_chain_is_resolved_against_the_catalogue(self):
+        self.chain(["glm-5.3-flash", "gemini-3.8-flash"])
+        self.assertEqual(
+            self.bf._rewriter_chain(self.project),
+            ["openrouter/z-ai/glm-5.3-flash", "openrouter/google/gemini-3.8-flash"],
+        )
+
+    def test_each_writer_in_the_chain_gets_its_own_pin(self):
+        self.chain([MODEL, GLM])
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)], critic={"findings": [], "verdict": "faithful"},
+        )
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        pins = [c for c in provider.calls if c.startswith("reviser-")]
+        self.assertEqual(pins, [self.bf._reviser_candidate_name(MODEL), self.bf._reviser_candidate_name(GLM)])
+
+
+class ALiveProcessKeepsEveryClaimItHoldsTests(TranslationReviewFixture):
+    """A translation holds its claim across the whole read-back, because the chapter
+    file is its output and the rewrite decides what that file says. It makes one call
+    and then waits for the reader, the writers and the critic. With a chain of two
+    writers that passed the twenty-minute lease, the reaper found the translator's
+    claim expired, recorded live work as an unknown outcome, and blocked the run under
+    a process that was busy."""
+
+    def two_claims(self, other_pid=None):
+        import os, time
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        plan = self.bf._load_plan(self.project)
+        now = time.time()
+        answering = {"id": "ATT-LIVE", "task": "T-LIVE", "state": "running", "role": "translator",
+                     "owner_pid": os.getpid(), "fence": 1, "lease_seconds": 1200.0,
+                     "heartbeat_at": now, "lease_expires_at": now + 1200,
+                     "provider_accepted": False, "request_hash": "a", "run": "RUN-0001"}
+        waiting = {"id": "ATT-HELD", "task": "T-HELD", "state": "running", "role": "translator",
+                   "owner_pid": other_pid if other_pid is not None else os.getpid(),
+                   "fence": 1, "lease_seconds": 1200.0,
+                   "heartbeat_at": now - 1300, "lease_expires_at": now - 100,
+                   "provider_accepted": False, "request_hash": "b", "run": "RUN-0001"}
+        plan["attempts"].extend([answering, waiting])
+        self.bf._save_plan(self.project, plan)
+        # `mark_provider_accepted` records the session on the attempt's intent file.
+        for row in (answering, waiting):
+            d = self.bf._attempt_dir(self.project, row)
+            d.mkdir(parents=True, exist_ok=True)
+            self.bf._write_json(d / "intent.json", {"accepted": False})
+        self.bf.mark_provider_accepted(self.project, "ATT-LIVE", "ses-x")
+        return next(a for a in self.bf._load_plan(self.project)["attempts"] if a["id"] == "ATT-HELD")
+
+    def test_another_call_answering_renews_every_claim_this_process_holds(self):
+        import time
+        self.assertGreater(self.two_claims()["lease_expires_at"], time.time())
+
+    def test_a_claim_owned_by_another_process_is_not_renewed(self):
+        """The lease still has to catch a dead owner, which is what it is for."""
+        import os, time
+        self.assertLess(self.two_claims(other_pid=os.getpid() + 99999)["lease_expires_at"], time.time())

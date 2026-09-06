@@ -218,7 +218,7 @@ class StyleLensTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             project = _Path(temp) / "world"
             self.bf.init_project(project, "World")
-            role = "advisor-google-gemini-3-7-flash"
+            role = "advisor-google-gemini-3-8-flash"
             envelope = self.bf.build_envelope(project, role=role, task_capsule={"mode": "style"}, imports=[], state={}, tools=[], max_output_tokens=100, prompt_role="style-review")
             prompt = envelope["payload"]["role_prompt"]
         self.assertIn("You are the style reviewer", prompt)
@@ -286,7 +286,7 @@ class StyleFindingIdentityTests(unittest.TestCase):
         config = json.loads(config_path.read_text())
         config["chorus"] = {"enabled": True, "models": [], "synthesizer": self.bf.CHORUS_SYNTHESIZER,
                             "style_review": {"enabled": True, "default_models": [
-                                "openrouter/z-ai/glm-5.3-flash", "openrouter/google/gemini-3.7-flash",
+                                "openrouter/z-ai/glm-5.3-flash", "openrouter/google/gemini-3.8-flash",
                                 "openrouter/openai/gpt-5.6-luna", "openrouter/qwen/qwen3.8-flash"]}}
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         self.contract = {"id": "CH-0001", "book": self.book, "pov": "CHR-0001", "target_words": 900,

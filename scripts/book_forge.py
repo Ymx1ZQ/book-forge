@@ -103,7 +103,7 @@ CHORUS_SYNTHESIZER = "openrouter/deepseek/deepseek-v4-pro-0813"
 STYLE_REVIEW_MODELS: list[str] = [
     "openrouter/openai/gpt-5.6-luna",
     "openrouter/z-ai/glm-5.3-flash",
-    "openrouter/google/gemini-3.7-flash",
+    "openrouter/google/gemini-3.8-flash",
     "openrouter/qwen/qwen3.8-flash",
 ]
 CHORUS_DEFAULT_MODELS: list[str] = [
@@ -113,7 +113,7 @@ CHORUS_DEFAULT_MODELS: list[str] = [
     "openrouter/qwen/qwen3.8-flash",
     "openrouter/moonshotai/kimi-k3",
     "openrouter/x-ai/grok-4.6",
-    "openrouter/google/gemini-3.7-flash",
+    "openrouter/google/gemini-3.8-flash",
     "openrouter/openai/gpt-5.6-luna",
 ]
 # Prose style presets. A project picks one in book-forge.yaml under `style.preset`;
@@ -187,6 +187,24 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
     },
+    # Ten times luna's output price, and in the catalogue for one reason: the
+    # monolingual rewrite is the call that decides whether a translated book reads,
+    # and it is the only one whose envelope carries no source, so it is the place
+    # where a model this expensive is still affordable. Nothing else should pin it.
+    # Whitelisted on 2026-09-06 after two sessions had it down as unreachable: the
+    # switch was `provider.openrouter.whitelist` in the user's global opencode.json,
+    # not anything about the model. See the project memory.
+    "openrouter/google/gemini-3.8-flash": {
+        "provider": {"order": ["google-vertex", "google-ai-studio"],
+                     "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high"},
+    },
+    "openrouter/openai/gpt-5.6-terra": {
+        "provider": {"order": ["openai"], "only": ["openai"], "allow_fallbacks": False},
+        "default_effort": "high",
+        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
+    },
 }
 
 
@@ -228,6 +246,10 @@ def _translator_candidate_name(model: str) -> str:
     return f"translator-{_chorus_slug(model)}"
 
 
+def _reviser_candidate_name(model: str) -> str:
+    return f"reviser-{_chorus_slug(model)}"
+
+
 # Every model in the catalogue offers `high`, and it is the only step `qwen3.8-flash`
 # offers at all. Pinning the candidates to it compares three models rather than
 # three efforts, and the winner is kept at the effort its draft was read at.
@@ -239,9 +261,11 @@ TRANSLATOR_CANDIDATE_MODELS: dict[str, str] = {_translator_candidate_name(m): m 
 # and the permissions, and the instruction comes from the base role's prompt. They
 # are kept apart by base role because an agent whose body says *you are the writer*
 # answering a translation capsule is a contamination nobody would find in the output.
+REVISER_CANDIDATE_MODELS: dict[str, str] = {_reviser_candidate_name(m): m for m in CHORUS_MODEL_CONFIGS}
 CANDIDATE_MODELS: dict[str, tuple[str, str]] = {
     **{role: (model, "writer") for role, model in WRITER_CANDIDATE_MODELS.items()},
     **{role: (model, "translator") for role, model in TRANSLATOR_CANDIDATE_MODELS.items()},
+    **{role: (model, "locale-reviser") for role, model in REVISER_CANDIDATE_MODELS.items()},
 }
 
 
@@ -586,6 +610,31 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
     }
 
 
+def _runtime_models(config: dict[str, object]) -> list[str]:
+    """Every model the project's runtime has to be able to call.
+
+    The chorus, plus anything a role pin or the rewriter chain names. Without the last
+    of these, a chain naming a model outside the chorus has no generated agent for it:
+    landfall's second writer died on `Agent reviser-openai-gpt-5-6-terra not found`, the
+    recovery regenerated the runtime from the chorus — which is where the model was
+    not — and the repeated failure blocked the run.
+    """
+    models = list(_chorus_models_from_config(config))
+    declared = config.get("translation")
+    chain = (declared or {}).get("rewriters") if isinstance(declared, dict) else None
+    named = list(chain) if isinstance(chain, list) else []
+    for role_name in ROLE_SPECS:
+        try:
+            named.append(_role_pin(config, role_name)[0])
+        except BookForgeError:
+            continue
+    for model in named:
+        resolved = str(model).strip()
+        if resolved and resolved not in models:
+            models.append(resolved)
+    return models
+
+
 def _chorus_models_from_config(config: dict[str, object]) -> list[str]:
     """Read chorus.models from book-forge.yaml, fallback to defaults."""
     chorus = config.get("chorus")
@@ -866,7 +915,8 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
     # needs live at once — and the translator family exists for the same reason the
     # writer's does: the role whose output a reader could not follow is the one no
     # comparison had ever covered.
-    for base, namer in (("writer", _writer_candidate_name), ("translator", _translator_candidate_name)):
+    for base, namer in (("writer", _writer_candidate_name), ("translator", _translator_candidate_name),
+                        ("locale-reviser", _reviser_candidate_name)):
         base_mode, _base_variant, base_steps = ROLE_SPECS[base]
         for mid in models:
             _write_bytes_atomic(
@@ -886,6 +936,7 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
         | {_chorus_advisor_name(m) for m in models}
         | {_writer_candidate_name(m) for m in models}
         | {_translator_candidate_name(m) for m in models}
+        | {_reviser_candidate_name(m) for m in models}
         | {CHORUS_SYNTHESIZER_AGENT}
     )
     for stale in agents.glob("*.md"):
@@ -1107,7 +1158,7 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
     """
     root = _project_root(project)
     config = _read_json(root / "book-forge.yaml")
-    chorus_models = _chorus_models_from_config(config)
+    chorus_models = _runtime_models(config)
     _write_json(root / "opencode.json", _opencode_config(chorus_models, config))
     _write_agents(root, chorus_models, config)
     return {
@@ -2627,6 +2678,23 @@ def mark_provider_accepted(
     attempt["heartbeat_at"] = current
     window = float(attempt.get("lease_seconds", LEASE_SECONDS))
     attempt["lease_expires_at"] = max(float(attempt.get("lease_expires_at", 0.0)), current + window)
+    # And every other attempt this process still owns, because that is what a lease is
+    # for: it detects a *dead owner*, and an owner is demonstrably alive whenever any of
+    # its calls answers. A translation holds its claim across the whole read-back — the
+    # chapter file is its output and the rewrite decides the text — so it makes one call
+    # and then sits for as long as the reader, two rewriters and the critic take. With a
+    # chain of writers that passed twenty minutes, the reaper found the translator's
+    # lease expired, called the work an unknown outcome and blocked the run underneath a
+    # process that was busy translating.
+    for row in plan["attempts"]:
+        if (
+            row is not attempt
+            and row.get("state") == "running"
+            and row.get("owner_pid") == attempt.get("owner_pid")
+        ):
+            row["heartbeat_at"] = current
+            row_window = float(row.get("lease_seconds", LEASE_SECONDS))
+            row["lease_expires_at"] = max(float(row.get("lease_expires_at", 0.0)), current + row_window)
     _save_plan(root, plan)
     intent = _attempt_dir(root, attempt) / "intent.json"
     value = _read_json(intent)
@@ -7687,6 +7755,118 @@ def prune_glossary(project: Path | str, book_id: str, locale: str, *, apply: boo
     return report
 
 
+def rewrite_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, locale and field
+    project: Path | str, book_id: str, chapter_id: str, locale: str, models: list[str], *,
+    provider=None, passages: int = 0,
+) -> dict[str, object]:
+    """The monolingual rewrite compared across models, on one chapter already translated.
+
+    `passages` bounds how much of the chapter each candidate rewrites; 0 is all of it.
+    A dozen paragraphs is enough to tell a writer of the language from one that is not,
+    and it holds the opening, which is the part every reader reads. Bounding it also
+    keeps the comparison runnable on a machine that is doing something else: this one
+    killed two full-chapter bake-offs for memory while six unrelated agents held two
+    gigabytes.
+
+    This is the call that decides whether the book reads, and the only one in the
+    pipeline whose envelope carries no source — a passage, the style and the glossary,
+    against the translator's thirty thousand tokens — so it is the cheapest place in
+    the pipeline to buy quality and the last one that was still on the writer's model.
+
+    Every candidate rewrites the identical Italian, so what varies is the writer and
+    nothing else. Nothing is promoted and the chapter on disk is not touched.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    locale_root = root / "books" / book_id / "translations" / locale
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    translated = (locale_root / "chapters" / f"{chapter_id}.md").read_text(encoding="utf-8")
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
+    resolved: list[str] = []
+    for name in models:
+        model = _resolve_catalogue_model(str(name).strip())
+        if model not in resolved:
+            resolved.append(model)
+    if not resolved:
+        raise BookForgeError("A bake-off needs at least one model")
+    config = _project_config(root)
+    catalogue = list(_chorus_models_from_config(config))
+    union = catalogue + [model for model in resolved if model not in catalogue]
+    _write_json(root / "opencode.json", _opencode_config(union, config))
+    _write_agents(root, union, config)
+
+    prefix = f"books/{book_id}/work/{chapter_id}/rewrite-bakeoff-{locale}"
+    slices = _paragraph_slices(translated)
+    if passages > 0:
+        slices = slices[:passages]
+    rows: list[dict[str, object]] = []
+    for model in resolved:
+        slug = _chorus_slug(model)
+        role = _reviser_candidate_name(model)
+        started = time.monotonic()
+        row: dict[str, object] = {"model": model, "state": "unusable"}
+        try:
+            pieces, changed, cost = [], [], 0.0
+            for first, last, passage in slices:
+                task_id = f"BAKEREW-{slug}-{book_id}-{chapter_id}-{locale}"
+                if not any(t["id"] == task_id for t in _load_plan(root)["tasks"]):
+                    add_task(root, task_id, role, priority=40, outputs=[])
+                else:
+                    _reopen_task(root, task_id)
+                envelope = build_envelope(
+                    root, role=role, prompt_role="locale-reviser",
+                    task_capsule=_locale_reviser_capsule(
+                        chapter_id, passage, style, glossary, [], first=first, last=last, of=len(slices),
+                    ),
+                    imports=[], state={}, tools=[],
+                    max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
+                )
+                claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+                result = runner(role, envelope, Path(claim["capsule"]).parent)
+                mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+                answer = _parse_contract_json(str(result["text"]))
+                piece = str(answer.get("revised_markdown") or "")
+                if not piece.strip() or len(piece.split("\n\n")) != len(passage.split("\n\n")):
+                    piece = passage
+                pieces.append(piece)
+                changed.extend(answer.get("changed") or [])
+                cost += float(result.get("cost") or 0.0)
+                _set_attempt_failure(root, claim["attempt"], block=False, reason="bake-off passage")
+            rewritten = "\n\n".join(pieces)
+            _write_bytes_atomic(root / prefix / slug / "rewrite.md", rewritten.encode("utf-8"))
+            words = len(re.findall(WORD_RE, rewritten, re.UNICODE))
+            findings = _ask_locale_reader(
+                root, book_id, locale, chapter_id, rewritten, style, runner,
+                task_id=f"BAKEREWREAD-{slug}-{book_id}-{chapter_id}-{locale}",
+            )
+            counted = [f for f in findings if str(f.get("severity")) in {"blocking", "warning"}]
+            row.update({
+                "state": "written", "words": words, "rewritten_sentences": len(changed),
+                "defects": len(counted),
+                "defects_per_1000_words": round(len(counted) * 1000 / max(1, words), 2),
+                "cost": round(cost, 4), "seconds": round(time.monotonic() - started, 1),
+                "path": f"{prefix}/{slug}/rewrite.md",
+                "opening": rewritten.split("\n\n")[1][:220] if len(rewritten.split("\n\n")) > 1 else "",
+            })
+            print(
+                f"[rewrite-bakeoff] {model}: {len(changed)} sentence(s) rewritten, {len(counted)} defect(s) "
+                f"left = {row['defects_per_1000_words']}/1000, ${cost:.4f}, {row['seconds']}s",
+                file=sys.stderr,
+            )
+        except Exception as unusable:  # noqa: BLE001 - one candidate failing is data
+            row.update({"state": "unusable", "detail": str(unusable)[:200],
+                        "seconds": round(time.monotonic() - started, 1)})
+            print(f"[rewrite-bakeoff] {model} produced no usable rewrite: {row['detail']}", file=sys.stderr)
+        rows.append(row)
+    ranked = sorted([r for r in rows if r["state"] == "written"],
+                    key=lambda r: (r["defects_per_1000_words"], r["cost"]))
+    index = {"schema": 1, "book": book_id, "chapter": chapter_id, "locale": locale,
+             "candidates": rows, "ranking": [r["model"] for r in ranked]}
+    _write_json(root / prefix / "bakeoff.json", index)
+    return index
+
+
 def _bakeoff_translation(  # noqa: PLR0913 - one candidate, everything one translation needs
     root: Path, book_id: str, chapter_id: str, locale: str, model: str, prefix: str,
     *, contract: dict[str, object], source: str, style: str, locale_root: Path,
@@ -10398,26 +10578,45 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
     *,
     runner,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """The read-back, in the order the work has to happen in.
+    """Write it in its own language, then read it, then check it against the source.
 
-    Monolingual first: the reader sees the chapter as a text in its language and
-    says where it is not one, and the reviser rewrites those places without ever
-    being shown what they came from. Bilingual last, over whatever text survived
-    that, because the critic's competence is meaning and it reads a calque as
+    The order is the correction. The reader used to run first and feed the rewriter,
+    which made a bounded sample of a pervasive defect into the work list: on landfall's
+    CH-0001 it named fifteen sentences, the rewriter did five, and the book's opening
+    sentence was in neither set. Now the rewrite is unconditional and the reader is the
+    acceptance test — a much easier question than finding everything, and one it
+    answers well. A passage it still calls unnatural is written again, once, with what
+    it said as evidence that the pass failed rather than as a list to work.
+
+    Bilingual last, because the critic's competence is meaning and it reads a calque as
     legible whenever the source explains it.
-
-    Returns the value to carry forward and the review record.
     """
     locale_root = root / "books" / book_id / "translations" / locale
     style = (locale_root / "style.md").read_text(encoding="utf-8")
+    carried = value
+    rewritten = _rewrite_in_locale(root, book_id, locale, chapter_id, contract, source, carried, runner=runner)
+    if rewritten is not None:
+        carried = rewritten
     unread: list[str] = []
     language = _ask_locale_reader(
-        root, book_id, locale, chapter_id, str(value["translated_markdown"]), style, runner, unread
+        root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
     )
-    revised = _revise_in_locale(
-        root, book_id, locale, chapter_id, contract, source, value, language, runner=runner
-    )
-    carried = revised if revised is not None else value
+    failing = [row for row in language if str(row.get("severity")) in {"blocking", "warning"}]
+    if failing:
+        print(
+            f"[locale-reader] {chapter_id}: {len(failing)} passage-level defect(s) survived the rewrite; "
+            "writing those passages again",
+            file=sys.stderr,
+        )
+        again = _rewrite_in_locale(
+            root, book_id, locale, chapter_id, contract, source, carried, runner=runner, evidence=failing
+        )
+        if again is not None:
+            carried = again
+            unread = []
+            language = _ask_locale_reader(
+                root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
+            )
     review = _review_translation(
         root, book_id, locale, chapter_id, contract, source, str(carried["translated_markdown"]),
         runner=runner, language_findings=language, reader_unread=unread[0] if unread else "",
@@ -10427,7 +10626,7 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
 
 def _revision_moved_meaning(
     root: Path, book_id: str, locale: str, chapter_id: str, source: str, changed: list[dict[str, object]], *, runner
-) -> list[str]:
+) -> list[dict[str, object]]:
     """The bilingual half of the gate: what the monolingual rewrite is not allowed to do.
 
     Runs on the critic's pin and its own prompt, so it costs the role's model and
@@ -10472,10 +10671,18 @@ def _revision_moved_meaning(
         _refuse_empty_answer("translation-critic", chapter_id, result)
         answer = _parse_contract_json(str(result["text"]))
         rows = answer.get("moved") if isinstance(answer.get("moved"), list) else []
+        # The pairs, not a verdict on the passage. Reverting the whole rewrite for one
+        # moved fact is what discarded `Torv si trattenne un respiro ancora` → `Torv
+        # trattenne un altro respiro` on landfall's CH-0001: Italian against
+        # not-Italian, thrown out because three other sentences in the chapter moved.
         moved = [
-            f"the revision moved a fact: {str(row.get('what_moved') or '').strip()[:120]}"
+            {
+                "before": str(row.get("before") or ""),
+                "after": str(row.get("after") or ""),
+                "what_moved": str(row.get("what_moved") or "").strip()[:160],
+            }
             for row in rows
-            if isinstance(row, dict)
+            if isinstance(row, dict) and str(row.get("after") or "").strip()
         ]
         _set_attempt_failure(root, claim["attempt"], block=False, reason="revision checked")
         return moved
@@ -10485,132 +10692,31 @@ def _revision_moved_meaning(
                 _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unread)[:200])
             except BookForgeError:
                 pass
-        return [f"the revision could not be checked for meaning: {str(unread)[:120]}"]
-
-
-def _revise_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules and its findings
-    root: Path,
-    book_id: str,
-    locale: str,
-    chapter_id: str,
-    contract: dict[str, object],
-    source: str,
-    value: dict[str, object],
-    findings: list[dict[str, object]],
-    *,
-    runner,
-) -> dict[str, object] | None:
-    """One monolingual pass over the chapter, gated on having moved no facts.
-
-    A stage, not a repair: it runs on every chapter whether or not a reader raised
-    anything, because the reader answers under a hard bound of six over a chapter of
-    forty-odd paragraphs and cannot be the trigger for a defect that occurs several
-    times a paragraph.
-
-    **The gate fails closed.** The refinement literature that supports the rewrite
-    (arXiv 2306.03856) also finds, in its ablation, that anchoring to the source is
-    what holds fidelity — so a rewrite done without the source has to be checked for
-    fidelity afterwards or it buys naturalness with meaning. The revision faces the
-    same validation the translation passed, which compares numbers, structure and
-    length against the source, plus the glossary check as a regression: a rendering
-    the accepted translation had and the revision lost is the revision's fault. Fail
-    any of it and the translation that validated is kept and the reason recorded.
-
-    Returns the value to carry forward, or None when nothing changed.
-    """
-    locale_root = root / "books" / book_id / "translations" / locale
-    style = (locale_root / "style.md").read_text(encoding="utf-8")
-    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
-    translated = str(value["translated_markdown"])
-    record_path = f"books/{book_id}/translations/{locale}/revisions/{chapter_id}.json"
-    claim = None
-    try:
-        # Sliced for the same reason the reader is, and measured on the same run:
-        # told to read the whole chapter and not stop at the findings, the reviser
-        # rewrote exactly the three sentences the reader had named and nothing else.
-        # An instruction not to do the minimum does not beat a short passage.
-        slices = _paragraph_slices(translated)
-        pieces: list[str] = []
-        changed: list[dict[str, object]] = []
-        for first, last, passage in slices:
-            # Filtered here, not asked for in the prompt. The reader now finds a
-            # chapter's worth — fifteen on landfall's CH-0001 against three when it
-            # read the whole thing in one call — and handing all fifteen to each
-            # twelve-paragraph passage makes most of them noise the model has to
-            # sort. It rewrote five of fifteen and two of those five moved a clause
-            # without touching the verb that was the defect.
-            mine = [row for row in findings if str(row.get("translated") or "").strip() and
-                    str(row["translated"]).strip()[:80] in passage]
-            piece, rewrites = _revise_one_slice(
-                root, book_id, locale, chapter_id, contract, passage, style, glossary, mine,
-                first=first, last=last, of=len(slices), runner=runner,
-            )
-            pieces.append(piece)
-            changed.extend(rewrites)
-        revised = "\n\n".join(pieces)
-        candidate = {**value, "translated_markdown": revised}
-        rejected = _translation_validation(source, {**candidate, "_locale": locale}, _locale_checks(locale_root))
-        before = set(_glossary_compliance(source, translated, glossary))
-        rejected.extend(sorted(set(_glossary_compliance(source, revised, glossary)) - before))
-        if not rejected and revised.strip() != translated.strip():
-            # Only when there is something to check and the cheap half has passed:
-            # a revision already refused on numbers does not need a model to say so.
-            rejected.extend(
-                _revision_moved_meaning(root, book_id, locale, chapter_id, source, list(changed), runner=runner)
-            )
-        applied = bool(revised.strip() != translated.strip()) and not rejected
-        record_id = f"LOCREVREC-{book_id}-{chapter_id}-{locale}"
-        if not any(row["id"] == record_id for row in _load_plan(root)["tasks"]):
-            add_task(root, record_id, "locale-reviser", priority=83,
-                     chapter_order=int(contract.get("order", 0)))
-        else:
-            _reopen_task(root, record_id)
-        _execute_materialized_task(root, record_id, {record_path: _json_bytes({
-            "schema": 1,
-            "chapter": chapter_id,
-            "slices": len(slices),
-            "applied": applied,
-            "changed": changed,
-            # Empty when the revision was taken. A reason here is the gate speaking.
-            "rejected": rejected,
-        })})
-        if rejected:
-            print(
-                f"[locale-reviser] {chapter_id}: the revision was refused and the translation kept — "
-                f"{'; '.join(rejected)[:200]}",
-                file=sys.stderr,
-            )
-            return None
-        if not applied:
-            return None
-        print(
-            f"[locale-reviser] {chapter_id}: {len(changed)} sentence(s) rewritten as the target language",
-            file=sys.stderr,
-        )
-        return candidate
-    except Exception as unrevised:
-        # Advisory in its failure the way the reader is: a chapter that could not be
-        # revised is a chapter that reads worse, not one that stops the run.
-        print(f"[locale-reviser] {chapter_id} was not revised: {str(unrevised)[:160]}", file=sys.stderr)
-        return None
+        # Fails closed, and says so as a pair nothing can match, so every rewrite in
+        # the passage is reverted when the check itself could not be reached.
+        return [{"before": "", "after": "", "what_moved": f"unchecked: {str(unread)[:120]}"}]
 
 
 def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
     root: Path, book_id: str, locale: str, chapter_id: str, contract: dict[str, object],
     passage: str, style: str, glossary: str, findings: list[dict[str, object]],
-    *, first: int, last: int, of: int, runner,
+    *, first: int, last: int, of: int, runner, model: str = "",
 ) -> tuple[str, list[dict[str, object]]]:
     """One passage rewritten, or handed back exactly as it came.
+
+    `model` names a catalogue pin to write with instead of the project's
+    `locale-reviser` role; the chain uses it to put a second writer over the first.
 
     A slice that comes back with a different number of paragraphs is dropped and the
     original kept: the chapter is rebuilt by joining these pieces, so a slice that
     quietly merges two paragraphs or loses one moves the whole book's structure, and
     the whole-chapter gate downstream would report it as a defect of the writing.
     """
+    role = _reviser_candidate_name(model) if model else "locale-reviser"
     task_id = f"LOCREV-{book_id}-{chapter_id}-{locale}"
     plan = _load_plan(root)
     if not any(task["id"] == task_id for task in plan["tasks"]):
-        add_task(root, task_id, "locale-reviser", priority=83,
+        add_task(root, task_id, role, priority=83,
                  chapter_order=int(contract.get("order", 0)))
     else:
         _reopen_task(root, task_id)
@@ -10618,7 +10724,8 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
     try:
         envelope = build_envelope(
             root,
-            role="locale-reviser",
+            role=role,
+            prompt_role="locale-reviser",
             task_capsule=_locale_reviser_capsule(
                 chapter_id, passage, style, glossary, findings, first=first, last=last, of=of,
             ),
@@ -10628,7 +10735,7 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
             max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
         )
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        result = runner("locale-reviser", envelope, Path(claim["capsule"]).parent)
+        result = runner(role, envelope, Path(claim["capsule"]).parent)
         mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
         _refuse_empty_answer("locale-reviser", chapter_id, result)
         answer = _parse_contract_json(str(result["text"]))
@@ -10655,6 +10762,175 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
             file=sys.stderr,
         )
         return passage, []
+
+
+def _rewrite_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules and what failed before
+    root: Path,
+    book_id: str,
+    locale: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    source: str,
+    value: dict[str, object],
+    *,
+    runner,
+    evidence: list[dict[str, object]] | None = None,
+) -> dict[str, object] | None:
+    """Every passage of the chapter written again in its own language, gated on the facts.
+
+    **Unconditional, and that is the whole design.** It used to rewrite the sentences a
+    reader had named, which made it an editor: on landfall's CH-0001 the reader named
+    fifteen and it rewrote five, and the book's first sentence — «Binta si morse il
+    gesso di marea in pezzettini», a reflexive Italian uses for parts of the body and a
+    resultative Italian does not build — was never named, so the role built for exactly
+    that defect never saw it. Translationese is pervasive and smooth; a bounded reader
+    returns a sample of it and a sample is not a work list. Handed a passage and no
+    list, this role is a writer rather than an editor.
+
+    `evidence` is a second pass: passages the reader still called unnatural, with what
+    it said. It travels as proof the pass failed, not as the work — every sentence in
+    those passages is in scope again.
+
+    **The gate is surgical.** Each rewritten sentence is judged on its own and only the
+    pairs that moved a fact are put back; the rest of the rewrite stands. Rejecting the
+    passage whole is what discarded `Torv si trattenne un respiro ancora` → `Torv
+    trattenne un altro respiro` because three other sentences in the chapter moved.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    style = (locale_root / "style.md").read_text(encoding="utf-8")
+    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
+    translated = str(value["translated_markdown"])
+    record_path = f"books/{book_id}/translations/{locale}/revisions/{chapter_id}.json"
+    # A chain, because no single model covers the defect. Measured over nine models on
+    # the same 500 words: gemini-3.8-flash fixed about fifteen of eighteen and missed
+    # `come up gold`; gpt-5.6-terra wrote the best prose of any of them, was the only
+    # one to fix that, and left an agreement error a schoolchild would not make. Their
+    # blind spots do not overlap, so the second writer works on what the first left and
+    # each pass is gated on meaning separately.
+    chain = _rewriter_chain(root)
+    carried = value
+    for step, model in enumerate(chain, start=1):
+        carried = _rewrite_once(
+            root, book_id, locale, chapter_id, contract, source, carried,
+            runner=runner, evidence=evidence, model=model, style=style, glossary=glossary,
+            record_path=record_path, step=step, of_chain=len(chain),
+        ) or carried
+    return carried if str(carried["translated_markdown"]).strip() != translated.strip() else None
+
+
+def _rewriter_chain(root: Path) -> list[str]:
+    """The writers the monolingual pass runs, in order.
+
+    `translation.rewriters` in book-forge.yaml, or the project's `locale-reviser` pin
+    when it says nothing — one writer stays the default, because a chain is a cost and
+    a project should opt into it.
+    """
+    config = _project_config(root)
+    declared = ((config.get("translation") or {}) if isinstance(config.get("translation"), dict) else {}).get("rewriters")
+    if isinstance(declared, list) and declared:
+        return [_resolve_catalogue_model(str(name).strip()) for name in declared if str(name).strip()]
+    return [""]
+
+
+def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
+    root: Path, book_id: str, locale: str, chapter_id: str, contract: dict[str, object],
+    source: str, value: dict[str, object], *, runner, evidence, model: str,
+    style: str, glossary: str, record_path: str, step: int, of_chain: int,
+) -> dict[str, object] | None:
+    locale_root = root / "books" / book_id / "translations" / locale
+    translated = str(value["translated_markdown"])
+    try:
+        slices = _paragraph_slices(translated)
+        wanted = None
+        if evidence is not None:
+            # Second pass: only the passages the reader is still unhappy with.
+            wanted = {
+                index for index, (_first, _last, passage) in enumerate(slices)
+                for row in evidence
+                if str(row.get("translated") or "").strip()[:80] in passage
+            }
+        pieces: list[str] = []
+        changed: list[dict[str, object]] = []
+        for index, (first, last, passage) in enumerate(slices):
+            if wanted is not None and index not in wanted:
+                pieces.append(passage)
+                continue
+            mine = [
+                row for row in (evidence or [])
+                if str(row.get("translated") or "").strip() and str(row["translated"]).strip()[:80] in passage
+            ]
+            piece, rewrites = _revise_one_slice(
+                root, book_id, locale, chapter_id, contract, passage, style, glossary, mine,
+                first=first, last=last, of=len(slices), runner=runner, model=model,
+            )
+            pieces.append(piece)
+            changed.extend(rewrites)
+        revised = "\n\n".join(pieces)
+        reverted: list[dict[str, object]] = []
+        if revised.strip() != translated.strip():
+            for pair in _revision_moved_meaning(
+                root, book_id, locale, chapter_id, source, list(changed), runner=runner
+            ):
+                after, before = str(pair.get("after") or ""), str(pair.get("before") or "")
+                if after and after in revised:
+                    revised = revised.replace(after, before, 1)
+                    reverted.append(pair)
+                elif not after:
+                    # The check could not be reached: nothing in this passage stands.
+                    revised = translated
+                    reverted.append(pair)
+                    break
+        candidate = {**value, "translated_markdown": revised}
+        rejected = _translation_validation(source, {**candidate, "_locale": locale}, _locale_checks(locale_root))
+        before_rows = set(_glossary_compliance(source, translated, glossary))
+        rejected.extend(sorted(set(_glossary_compliance(source, revised, glossary)) - before_rows))
+        applied = bool(revised.strip() != translated.strip()) and not rejected
+        record_id = f"LOCREVREC{step}-{book_id}-{chapter_id}-{locale}"
+        if not any(row["id"] == record_id for row in _load_plan(root)["tasks"]):
+            add_task(root, record_id, "locale-reviser", priority=83,
+                     chapter_order=int(contract.get("order", 0)))
+        else:
+            _reopen_task(root, record_id)
+        _execute_materialized_task(root, record_id, {record_path.replace(".json", f".{step}.json") if of_chain > 1 else record_path: _json_bytes({
+            "schema": 1,
+            "chapter": chapter_id,
+            "slices": len(slices),
+            "pass": "targeted" if evidence is not None else "whole-chapter",
+            "writer": model or "the project's locale-reviser pin",
+            "step": f"{step} of {of_chain}",
+            "applied": applied,
+            "rewritten": len(changed),
+            "reverted": reverted,
+            "changed": changed,
+            # Empty when the rewrite was taken. A reason here is the validation speaking.
+            "rejected": rejected,
+        })})
+        if reverted:
+            print(
+                f"[locale-reviser] {chapter_id}: {len(reverted)} of {len(changed)} rewrite(s) put back for "
+                f"moving a fact — {str(reverted[0].get('what_moved'))[:120]}",
+                file=sys.stderr,
+            )
+        if rejected:
+            print(
+                f"[locale-reviser] {chapter_id}: the rewrite was refused and the translation kept — "
+                f"{'; '.join(rejected)[:200]}",
+                file=sys.stderr,
+            )
+            return None
+        if not applied:
+            return None
+        print(
+            f"[locale-reviser] {chapter_id}: {len(changed) - len(reverted)} sentence(s) written as the "
+            "target language",
+            file=sys.stderr,
+        )
+        return candidate
+    except Exception as unrevised:
+        # Advisory in its failure the way the reader is: a chapter that could not be
+        # rewritten is a chapter that reads worse, not one that stops the run.
+        print(f"[locale-reviser] {chapter_id} was not rewritten: {str(unrevised)[:160]}", file=sys.stderr)
+        return None
 
 
 def _score_machine_findings(
@@ -12787,6 +13063,8 @@ def build_parser() -> argparse.ArgumentParser:
     bakeoff.add_argument("chapter")
     bakeoff.add_argument("--models", required=True, help="Comma-separated models to draft this chapter with; nothing is promoted")
     bakeoff.add_argument("--locale", help="Compare translators instead of writers: each model translates this chapter into the locale and the monolingual reader scores it")
+    bakeoff.add_argument("--rewriters", action="store_true", help="With --locale: compare the monolingual rewrite instead of the translation, over the chapter already on disk")
+    bakeoff.add_argument("--passages", type=int, default=0, help="With --rewriters: how many passages of the chapter each candidate rewrites (0 = all)")
     export = commands.add_parser("export")
     export.add_argument("book")
     export.add_argument("--lang", required=True)
@@ -12923,7 +13201,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(advance_book(args.project, args.book, locales=args.locale, until=args.until), sort_keys=True))
         elif args.command == "bakeoff":
             chosen = [m.strip() for m in args.models.split(",") if m.strip()]
-            if args.locale:
+            if args.locale and args.rewriters:
+                print(json.dumps(rewrite_bakeoff(args.project, args.book, args.chapter, args.locale, chosen, passages=args.passages), sort_keys=True))
+            elif args.locale:
                 print(json.dumps(translate_bakeoff(args.project, args.book, args.chapter, args.locale, chosen), sort_keys=True))
             else:
                 print(json.dumps(draft_bakeoff(args.project, args.book, args.chapter, chosen), sort_keys=True))
