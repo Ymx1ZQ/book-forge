@@ -9065,6 +9065,31 @@ def _locale_reader_findings(value: object) -> list[dict[str, object]]:
             "issue": str(row.get("why") or ""),
             "fix": "",
         })
+    # Names the reader could not place. A different defect from a stumble and a
+    # different repair: no monolingual writer can supply what the Italian never said,
+    # so these travel to the call that holds the source. `the Fen Sow` reached Italian
+    # as `la Scrofa`, an ordinary word for a female pig, and the first person to read
+    # the chapter asked what it was — the English had carried `she`, `her pilot` and
+    # `a barge`, and none of that survives into a language that drops the possessive.
+    names = value.get("unidentified") if isinstance(value, dict) else None
+    for index, row in enumerate(names if isinstance(names, list) else [], start=1):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        quoted = str(row.get("sentence") or "").strip()
+        if not name:
+            continue
+        findings.append({
+            "id": f"N-{index:02d}",
+            "severity": "warning",
+            "kind": "unidentified",
+            "origin": "reader",
+            "source": "",
+            "translated": quoted or name,
+            "rule": "the text says what a thing is",
+            "issue": f"a reader could not tell what {name!r} is: {str(row.get('took_it_for') or '')[:160]}",
+            "fix": "",
+        })
     return findings
 
 
@@ -10563,7 +10588,14 @@ def _bilingual_repair_findings(findings: list[dict[str, object]]) -> list[dict[s
         row
         for row in findings
         if str(row.get("severity")) in {"blocking", "warning"}
-        and (row.get("origin") != "reader" or str(row.get("severity")) == "blocking")
+        and (
+            row.get("origin") != "reader"
+            or str(row.get("severity")) == "blocking"
+            # A name whose nature the translation never gives. The rewriter cannot
+            # fix it — the answer is not in the Italian — and the source is where it
+            # is, which makes this the one reader finding that belongs on this path.
+            or str(row.get("kind")) == "unidentified"
+        )
     ]
 
 
@@ -10601,7 +10633,10 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
     language = _ask_locale_reader(
         root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
     )
-    failing = [row for row in language if str(row.get("severity")) in {"blocking", "warning"}]
+    failing = [
+        row for row in language
+        if str(row.get("severity")) in {"blocking", "warning"} and str(row.get("kind")) != "unidentified"
+    ]
     if failing:
         print(
             f"[locale-reader] {chapter_id}: {len(failing)} passage-level defect(s) survived the rewrite; "
@@ -11267,7 +11302,11 @@ def _repair_translation(
                 "findings": findings,
                 "instruction": (
                     "Apply every finding whose fix you accept and leave the rest of the chapter untouched. "
-                    "Return the whole chapter, not a diff."
+                    "Return the whole chapter, not a diff. A finding of kind `unidentified` names something "
+                    "a reader of the translation alone could not place: the source says what it is and the "
+                    "translation does not, so name the thing where it first appears — the vessel, the trade, "
+                    "the office — and leave the rest of the sentence as it stands. Do not gloss it twice and "
+                    "do not explain it; one word in the right place is the whole repair."
                 ),
             },
         }

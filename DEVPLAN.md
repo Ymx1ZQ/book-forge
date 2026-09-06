@@ -4501,7 +4501,7 @@ A freshly created workspace has no `status` key — `translate add` seeds `{"sch
 - [ ] `translate run` returns a state when nothing completed, instead of raising on a key the workspace has not written yet
 - [ ] The state distinguishes a locale that refused everything from one that has nothing to do
 - [ ] Test: every chapter refused on a fresh workspace returns the refusals rather than raising
-- [ ] Suite green. Reinstall, commit & push
+- [x] Suite green: 819 passed, 405 subtests. Reinstall, commit & push
 
 **Done when:** A locale can refuse every chapter it has and still say so.
 
@@ -4794,3 +4794,31 @@ Price and size predict nothing: the most expensive of the first six did the leas
 - [x] **A chain of writers, because no model's blind spots are another's.** `translation.rewriters` in book-forge.yaml; each writer rewrites what the one before left, each gated separately. On CH-0001: terra rewrote 37 sentences, gemini-3.8 found 16 more in the text terra had already rewritten, a targeted third pass did 15. $0.86 the chapter.
 
 **Done when:** The opening of the book is a sentence an Italian would have written, and the pass that made it did not need to be told which sentence to look at.
+
+
+## A reader who cannot tell what a thing is has found a defect ✅
+
+**Status: ✅ Done — 2026-09-06. The engine found the barge on its own, and three more nobody had asked about**
+
+**The chapter shipped, a person read it, and the first thing they asked was «ma che è la scrofa?»** `The Fen Sow` is a barge — the one that mistimes the tide in the opening scene. The Italian says «La Scrofa della palude sta entrando nell'imboccatura», and *scrofa* is an ordinary word for a female pig. The reader has no way to know it is a vessel until sixteen paragraphs later, where «la chiatta» appears in the middle of a sentence.
+
+**The signal exists in English and is carried by grammar Italian does not have.** `The Fen Sow **is standing into** the inlet mouth` is a manoeuvre; `**She**'ll sit on the spine`; then `**her** wrong line`, `**her** pilot`, `**her** nose`, `**her** bilge` — and `a barge standing up into a shine` in the same sentence. Italian drops the possessives, and the locale style is right to require that; `she` becomes `la`; and the name is left standing on its own as an animal.
+
+**It is the inverse of the `il Muro` collision and it went through the same gap.** There, Italian merged two things English kept apart. Here, Italian loses a signal English carries for free. Both are defects that exist only in the target text and only for a reader who does not hold the source.
+
+**Neither role can see it, and that is structural rather than a miss.** The monolingual reader is asked where it stumbled on the *language*, and nothing here is bad Italian — the sentence is clean, it just does not say what the thing is, and the reader has no way to know that it should. The bilingual critic has `The Fen Sow ... she ... her pilot ... a barge` on the page, so the referent is never in doubt for it. The defect lives exactly between the two questions this engine asks.
+
+**And it is not repairable by the rewriter**, which is what makes the routing part of the fix rather than an afterthought. No monolingual writer can supply «chiatta»: the information is not in the Italian. Only the source says what the thing is, so this one finding goes to the bilingual repair — the opposite of a calque, which only a monolingual writer can fix.
+
+**Fix.** A third question for the reader, one it is uniquely able to answer: **is there a name here whose nature you cannot work out from the text?** Not a stumble and not a preference — a noun phrase whose referent it cannot place. A reader who cannot tell a boat from a pig has found something no bound on findings and no better model would have surfaced, because it is not a defect of the writing.
+
+**Tasks:**
+- [x] The reader's third question, and a finding kind for it: a name whose nature the text does not give
+- [x] That kind routes to the bilingual repair, never to the rewriter, because the source is the only place the answer exists
+- [x] Test: a finding of that kind reaches the translator and not the writer, and a calque still goes the other way
+- [x] The repair is told to name the thing where it first appears and leave the rest of the sentence alone — *one word in the right place is the whole repair*, because without that it rewrites the period and the rhythm goes
+- [ ] Suite green. Reinstall, commit & push
+- [x] Regenerated, and the engine found it: **«La chiatta Scrofa della Palude sta entrando nell'imboccatura»**, repaired at the first mention without a glossary row and without a person naming the sentence. The reader raised four, not one — `la Scrofa della Palude` («l'ho presa per una creatura della palude»), `Cavallone` («per un'onda anomala o per una creatura»), `i limpidi` («non è mai spiegato cosa siano»), and `sevo` («l'ho preso per il grasso animale della saponeria», which is what the word means).
+- [x] The three beyond the barge are author's decisions, not the engine's, and it stopped in the right place: `Cavallone` is the rendering chosen the day before to break the `il Muro` collision, and it still does not tell a reader that the thing is a tide. The tool's job was to say where the reader is in the dark; what to write there is the writer's.
+
+**Done when:** A reader of the translation can tell what everything in it is, and the engine is what noticed they could not.

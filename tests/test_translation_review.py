@@ -1652,3 +1652,56 @@ class ALiveProcessKeepsEveryClaimItHoldsTests(TranslationReviewFixture):
         """The lease still has to catch a dead owner, which is what it is for."""
         import os, time
         self.assertLess(self.two_claims(other_pid=os.getpid() + 99999)["lease_expires_at"], time.time())
+
+
+class ANameTheTranslationNeverExplainsTests(TranslationReviewFixture):
+    """`The Fen Sow` is a barge. Italian got `la Scrofa`, an ordinary word for a female
+    pig, and the first person to read the chapter asked what it was. English carried it
+    on grammar Italian does not have — `she`, `her pilot`, `her nose`, and `a barge` in
+    the same sentence — and none of it survives a language that drops the possessive.
+
+    Neither existing role can see it. The monolingual reader is asked where the *language*
+    failed and nothing here is bad Italian; the bilingual critic has the source, so the
+    referent is never in doubt for it. And no rewriter can fix it: the answer is not in
+    the Italian to be rewritten."""
+
+    def read_back(self, unidentified):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ScriptedProvider(
+            [translation(GOOD_BODY)],
+            critic={"findings": [], "verdict": "faithful"},
+            reader={"summary": "letto", "followed": True, "stumbles": [], "unidentified": unidentified},
+        )
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        review = json.loads(
+            (self.project / f"books/{self.book}/translations/it/reviews/CH-0001.json").read_text()
+        )
+        return review, provider
+
+    def sow(self):
+        return [{"name": "la Scrofa", "sentence": "La Scrofa restava sulla rotta sbagliata",
+                 "took_it_for": "un animale; ho capito che era una barca sedici paragrafi dopo"}]
+
+    def test_a_name_the_reader_could_not_place_is_a_finding(self):
+        review, _ = self.read_back(self.sow())
+        rows = [f for f in review["findings"] if f.get("kind") == "unidentified"]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("la Scrofa", rows[0]["issue"])
+
+    def test_it_goes_to_the_call_that_holds_the_source(self):
+        """The opposite of a calque: only the source says what the thing is."""
+        _, provider = self.read_back(self.sow())
+        self.assertIn("translator", provider.calls)
+
+    def test_it_never_goes_to_the_rewriter_as_work(self):
+        _, provider = self.read_back(self.sow())
+        handed = [row["sentence"] for row in (provider.revised_with or {}).get("findings", [])]
+        self.assertEqual(handed, [], "a rewriter cannot supply what the translation never said")
+
+    def test_a_reader_that_names_nothing_costs_no_repair(self):
+        _, provider = self.read_back([])
+        self.assertNotIn("translator", provider.calls)
+
+    def test_an_entry_without_a_name_is_dropped(self):
+        review, _ = self.read_back([{"sentence": "x", "took_it_for": "y"}])
+        self.assertEqual([f for f in review["findings"] if f.get("kind") == "unidentified"], [])
