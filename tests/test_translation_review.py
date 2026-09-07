@@ -36,7 +36,10 @@ class ScriptedProvider:
     def __call__(self, role, envelope, attempt_dir):
         payload = envelope["payload"]
         self.calls.append(role)
-        if role == "locale-reviser":
+        # A declared chain runs each writer under its own `reviser-<slug>` pin, not
+        # under `locale-reviser`. Answered here too, or a chain test measures the
+        # pins through a failure path instead of through the rewrite.
+        if role == "locale-reviser" or role.startswith("reviser-"):
             task = envelope["payload"]["task"]
             self.revised_with = task
             # Unchanged unless a test scripts otherwise: the reviser saying the
@@ -1705,3 +1708,107 @@ class ANameTheTranslationNeverExplainsTests(TranslationReviewFixture):
     def test_an_entry_without_a_name_is_dropped(self):
         review, _ = self.read_back([{"sentence": "x", "took_it_for": "y"}])
         self.assertEqual([f for f in review["findings"] if f.get("kind") == "unidentified"], [])
+
+
+REVISED_BODY = "Masticava il gesso di marea sulla torre mentre la Fede contava le lampade. " * 12
+
+
+class ASliceThatCameBackUnusableTests(TranslationReviewFixture):
+    """landfall's CH-0003 lost paragraphs 25-36 to one truncated JSON answer. The
+    slice was kept as it came, the line saying so went to stderr, and the chapter's
+    own summary reported the sentences the other slices had gained. The record in
+    `revisions/` carried `slices`, `rewritten`, `reverted` and `changed`, and no
+    field from which a reader could tell a twelfth of the chapter was never read."""
+
+    TRUNCATED = '{"revised_markdown": "# La chiatta dell\'alba\\n\\nMasticava il gesso'
+
+    class Reviser(ScriptedProvider):
+        """Hands the reviser a scripted raw answer per ask, valid JSON or not."""
+
+        def __init__(self, answers, **kw):
+            super().__init__([translation(GOOD_BODY)], **kw)
+            self.answers = list(answers)
+            self.asks = 0
+
+        def __call__(self, role, envelope, attempt_dir):
+            if role != "locale-reviser":
+                return super().__call__(role, envelope, attempt_dir)
+            self.asks += 1
+            self.calls.append(role)
+            payload = envelope["payload"]
+            return {
+                "text": self.answers.pop(0) if self.answers else "{}",
+                "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                "session_id": f"ses-rev-{self.asks}",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.0, "latency_ms": 10, "finish": "stop",
+            }
+
+    def run_back(self, answers):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = self.Reviser(answers, critic={"findings": [], "verdict": "faithful"})
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return provider
+
+    def good(self):
+        return json.dumps({"revised_markdown": f"# La chiatta dell'alba\n\n{REVISED_BODY}", "changed": []})
+
+    def chapter(self):
+        return (self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md").read_text(encoding="utf-8")
+
+    def record(self):
+        return json.loads(
+            (self.project / f"books/{self.book}/translations/it/revisions/CH-0001.json").read_text(encoding="utf-8")
+        )
+
+    def test_a_truncated_answer_is_asked_again(self):
+        provider = self.run_back([self.TRUNCATED, self.good()])
+        self.assertEqual(provider.asks, 2, "one malformed answer must not be final for the passage")
+
+    def test_the_second_ask_lands_the_rewrite(self):
+        self.run_back([self.TRUNCATED, self.good()])
+        self.assertIn("mentre la Fede contava", self.chapter())
+
+    def test_a_slice_that_answers_first_time_is_asked_once(self):
+        provider = self.run_back([self.good()])
+        self.assertEqual(provider.asks, 1, "a working answer must not cost a second call")
+
+    def test_two_unusable_answers_keep_the_passage(self):
+        self.run_back([self.TRUNCATED, self.TRUNCATED])
+        self.assertNotIn("mentre la Fede contava", self.chapter())
+
+    def test_two_unusable_answers_stop_at_two(self):
+        provider = self.run_back([self.TRUNCATED, self.TRUNCATED])
+        self.assertEqual(provider.asks, self.bf.LOCALE_SLICE_ASKS)
+
+    def test_the_record_names_the_paragraphs_that_were_never_revised(self):
+        self.run_back([self.TRUNCATED, self.good()])
+        record = self.record()
+        self.assertIn("unrevised", record)
+        self.assertIn("asked", record)
+
+    def test_a_passage_kept_unrevised_is_counted_in_the_record(self):
+        """The chapter here has one slice, so the pass reaches nothing at all — and
+        the record has to say so rather than report an empty change list."""
+        self.run_back([self.TRUNCATED, self.TRUNCATED])
+        record = self.record()
+        self.assertEqual(record["unrevised"], ["1-2"])
+        self.assertEqual(record["asked"], 1)
+        self.assertFalse(record["applied"], "nothing was rewritten, so nothing was applied")
+
+
+class WhatALimitDoesToTheRestOfTheChapterTests(TranslationReviewFixture):
+    """A spending limit is not this slice's failure. Swallowed by the slice's own
+    handler it would keep every remaining passage unrevised and count each one, which
+    reads as a chapter the writer had little to change."""
+
+    def test_a_provider_limit_is_not_swallowed_as_an_unusable_slice(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        body = source[source.index("def _revise_one_slice("):]
+        body = body[:body.index("\ndef ", 10)]
+        self.assertIn("except ProviderLimitReached:", body)
+        self.assertLess(
+            body.index("except ProviderLimitReached:"),
+            body.index("except Exception as unrevised:"),
+            "the bare handler below would take it first",
+        )

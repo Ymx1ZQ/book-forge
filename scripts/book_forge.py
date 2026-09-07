@@ -441,6 +441,61 @@ class ProviderProducedNothing(BookForgeError):
     """
 
 
+class ProviderLimitReached(BookForgeError):
+    """The provider refused the call for a limit that asking again cannot clear.
+
+    A spending cap, a quota or exhausted credit is settled before the call is made,
+    so every retry spends its latency for an outcome fixed in advance. Landfall spent
+    three stage attempts per task on `Key limit exceeded (daily limit)` and reported
+    it as `the critic was not read in 3 ask(s)`, which sent the operator to the model
+    and the memory file. Raised instead of `ProviderOutcomeUnknown` so the run stops
+    on the first one and quotes what the provider said.
+    """
+
+
+# Substrings that mark a provider refusal a retry cannot clear. Matched against the
+# provider's own message, lowercased; deliberately narrow, because a refusal wrongly
+# called permanent stops a run that would have recovered by asking again.
+PROVIDER_LIMIT_MARKS = (
+    "key limit exceeded",
+    "quota exceeded",
+    "insufficient credit",
+    "insufficient_quota",
+    "exceeded your current quota",
+    "billing hard limit",
+    "credit balance is too low",
+    "payment required",
+)
+
+
+def _provider_errors_in(events: list[dict[str, object]]) -> list[str]:
+    """What the provider itself said, out of the event stream OpenCode relayed.
+
+    The engine writes this stream to `provider-events.jsonl` and then builds its
+    failure from OpenCode's `stderr`, which describes a call that did not complete
+    and never the reason. Everything here is already parsed by the caller.
+    """
+    said: list[str] = []
+    for event in events:
+        if event.get("type") != "error":
+            continue
+        error = event.get("error")
+        if not isinstance(error, dict):
+            continue
+        data = error.get("data") if isinstance(error.get("data"), dict) else {}
+        message = str((data or {}).get("message") or error.get("message") or "").strip()
+        name = str(error.get("name") or "").strip()
+        if message:
+            said.append(f"{name}: {message}" if name else message)
+        elif name:
+            said.append(name)
+    return said
+
+
+def _is_provider_limit(said: list[str]) -> bool:
+    return any(mark in one.lower() for one in said for mark in PROVIDER_LIMIT_MARKS)
+
+
 def _write_json(path: Path, value: object) -> None:
     _write_bytes_atomic(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
 
@@ -7511,9 +7566,19 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
     session_ids = [str(event["sessionID"]) for event in events if event.get("sessionID")]
     session_id = session_ids[0] if session_ids else None
     if result.returncode != 0 or not session_id:
+        # The provider's own words, when it gave any. `stderr` is OpenCode describing
+        # a call it could not complete, which reads the same for every cause; the
+        # reason is in the event stream already parsed above.
+        said = _provider_errors_in(events)
+        told = "; ".join(said)
+        if _is_provider_limit(said):
+            raise ProviderLimitReached(f"The provider refused the call and asking again will not clear it: {told}")
         if session_id:
-            raise ProviderOutcomeUnknown(session_id, f"OpenCode ended without a complete result: {result.stderr.strip()}")
-        raise BookForgeError(f"OpenCode failed before provider acceptance: {result.stderr.strip()}")
+            raise ProviderOutcomeUnknown(
+                session_id,
+                f"OpenCode ended without a complete result: {told or result.stderr.strip()}",
+            )
+        raise BookForgeError(f"OpenCode failed before provider acceptance: {told or result.stderr.strip()}")
     finishes = [event["part"] for event in events if event.get("type") == "step_finish" and isinstance(event.get("part"), dict)]
     # M1: handle length truncation explicitly — do not map to outcome_unknown; surface finish for retry
     completed = [part for part in finishes if part.get("reason") in ("stop", "length")]
@@ -8345,6 +8410,10 @@ def advance_book(
                 return action()
             except AdvanceHalted:
                 raise
+            except ProviderLimitReached:
+                # Settled before the call was made: three attempts spend three
+                # windows of latency for the same refusal.
+                raise
             except BookForgeError as exc:
                 last = str(exc)
                 state = recover_before_dispatch(root)
@@ -8966,6 +9035,10 @@ LOCALE_READER_MAX_FINDINGS = 6
 # unbounded question having returned nothing at all in four attempts out of four.
 # Slicing turns the same allowance onto a quarter of the text instead.
 LOCALE_SLICE_PARAGRAPHS = 12
+# How many times one slice is asked before the passage is kept unrevised. Two, not
+# three: the failure this covers is a malformed answer, which a second ask clears or
+# does not, and a third would spend a call per slice on a chapter-wide problem.
+LOCALE_SLICE_ASKS = 2
 # The revision check answers one clause per moved pair and usually an empty list,
 # so it is the smallest ask in the engine. It is deliberately not the critic's 9000:
 # a bound that invites an essay gets one, and this question has no essay in it.
@@ -10736,7 +10809,7 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
     root: Path, book_id: str, locale: str, chapter_id: str, contract: dict[str, object],
     passage: str, style: str, glossary: str, findings: list[dict[str, object]],
     *, first: int, last: int, of: int, runner, model: str = "",
-) -> tuple[str, list[dict[str, object]]]:
+) -> tuple[str, list[dict[str, object]], bool]:
     """One passage rewritten, or handed back exactly as it came.
 
     `model` names a catalogue pin to write with instead of the project's
@@ -10746,6 +10819,15 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
     original kept: the chapter is rebuilt by joining these pieces, so a slice that
     quietly merges two paragraphs or loses one moves the whole book's structure, and
     the whole-chapter gate downstream would report it as a defect of the writing.
+
+    The third element says whether the passage was actually rewritten. A slice kept
+    because the answer was unusable is indistinguishable in the text from one the
+    writer had nothing to change, and the caller has to report the difference.
+
+    Asked twice before giving up. Landfall CH-0003 lost paragraphs 25-36 to a single
+    truncated JSON answer — the failure a second ask exists for, and the one the
+    engine already gives a length truncation in `_run_with_length_retry` and a
+    bake-off candidate in `_bakeoff_translation`.
     """
     role = _reviser_candidate_name(model) if model else "locale-reviser"
     task_id = f"LOCREV-{book_id}-{chapter_id}-{locale}"
@@ -10755,48 +10837,61 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
                  chapter_order=int(contract.get("order", 0)))
     else:
         _reopen_task(root, task_id)
-    claim = None
-    try:
-        envelope = build_envelope(
-            root,
-            role=role,
-            prompt_role="locale-reviser",
-            task_capsule=_locale_reviser_capsule(
-                chapter_id, passage, style, glossary, findings, first=first, last=last, of=of,
-            ),
-            imports=[],
-            state={},
-            tools=[],
-            max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
-        )
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        result = runner(role, envelope, Path(claim["capsule"]).parent)
-        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-        _refuse_empty_answer("locale-reviser", chapter_id, result)
-        answer = _parse_contract_json(str(result["text"]))
-        revised = answer.get("revised_markdown")
-        if not isinstance(revised, str) or not revised.strip():
-            raise BookForgeError("the reviser returned no passage")
-        if len(revised.split("\n\n")) != len(passage.split("\n\n")):
-            raise BookForgeError(
-                f"paragraphs {first}-{last} came back as {len(revised.split(chr(10) + chr(10)))} "
-                f"of {len(passage.split(chr(10) + chr(10)))}"
+    for ask in range(1, LOCALE_SLICE_ASKS + 1):
+        claim = None
+        try:
+            envelope = build_envelope(
+                root,
+                role=role,
+                prompt_role="locale-reviser",
+                task_capsule=_locale_reviser_capsule(
+                    chapter_id, passage, style, glossary, findings, first=first, last=last, of=of,
+                ),
+                imports=[],
+                state={},
+                tools=[],
+                max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
             )
-        rewrites = answer.get("changed") if isinstance(answer.get("changed"), list) else []
-        _set_attempt_failure(root, claim["attempt"], block=False, reason="passage revised")
-        return revised, [row for row in rewrites if isinstance(row, dict)]
-    except Exception as unrevised:
-        if claim is not None:
-            try:
-                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unrevised)[:200])
-            except BookForgeError:
-                pass
-        print(
-            f"[locale-reviser] {chapter_id} paragraphs {first}-{last} kept as they were: "
-            f"{str(unrevised)[:120]}",
-            file=sys.stderr,
-        )
-        return passage, []
+            claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+            result = runner(role, envelope, Path(claim["capsule"]).parent)
+            mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+            _refuse_empty_answer("locale-reviser", chapter_id, result)
+            answer = _parse_contract_json(str(result["text"]))
+            revised = answer.get("revised_markdown")
+            if not isinstance(revised, str) or not revised.strip():
+                raise BookForgeError("the reviser returned no passage")
+            if len(revised.split("\n\n")) != len(passage.split("\n\n")):
+                raise BookForgeError(
+                    f"paragraphs {first}-{last} came back as {len(revised.split(chr(10) + chr(10)))} "
+                    f"of {len(passage.split(chr(10) + chr(10)))}"
+                )
+            rewrites = answer.get("changed") if isinstance(answer.get("changed"), list) else []
+            _set_attempt_failure(root, claim["attempt"], block=False, reason="passage revised")
+            return revised, [row for row in rewrites if isinstance(row, dict)], True
+        except ProviderLimitReached:
+            # Not this slice's failure and not survivable by asking again: every
+            # remaining slice would be kept unrevised and counted as such, which
+            # reads as a chapter the writer had little to change.
+            raise
+        except Exception as unrevised:
+            if claim is not None:
+                try:
+                    _set_attempt_failure(root, claim["attempt"], block=False, reason=str(unrevised)[:200])
+                except BookForgeError:
+                    pass
+            if ask < LOCALE_SLICE_ASKS:
+                print(
+                    f"[locale-reviser] {chapter_id} paragraphs {first}-{last} unusable on ask "
+                    f"{ask}/{LOCALE_SLICE_ASKS}, asking again: {str(unrevised)[:120]}",
+                    file=sys.stderr,
+                )
+                continue
+            print(
+                f"[locale-reviser] {chapter_id} paragraphs {first}-{last} kept as they were after "
+                f"{LOCALE_SLICE_ASKS} ask(s): {str(unrevised)[:120]}",
+                file=sys.stderr,
+            )
+    return passage, [], False
 
 
 def _rewrite_in_locale(  # noqa: PLR0913 - a stage takes the chapter, its rules and what failed before
@@ -10886,6 +10981,8 @@ def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
             }
         pieces: list[str] = []
         changed: list[dict[str, object]] = []
+        asked = 0
+        unrevised: list[str] = []
         for index, (first, last, passage) in enumerate(slices):
             if wanted is not None and index not in wanted:
                 pieces.append(passage)
@@ -10894,10 +10991,13 @@ def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
                 row for row in (evidence or [])
                 if str(row.get("translated") or "").strip() and str(row["translated"]).strip()[:80] in passage
             ]
-            piece, rewrites = _revise_one_slice(
+            asked += 1
+            piece, rewrites, revised_here = _revise_one_slice(
                 root, book_id, locale, chapter_id, contract, passage, style, glossary, mine,
                 first=first, last=last, of=len(slices), runner=runner, model=model,
             )
+            if not revised_here:
+                unrevised.append(f"{first}-{last}")
             pieces.append(piece)
             changed.extend(rewrites)
         revised = "\n\n".join(pieces)
@@ -10935,6 +11035,11 @@ def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
             "step": f"{step} of {of_chain}",
             "applied": applied,
             "rewritten": len(changed),
+            # What the pass did not reach. Without it the record's counts describe
+            # only the slices that answered, and a chapter revised in five sixths
+            # reads exactly like one revised whole.
+            "asked": asked,
+            "unrevised": unrevised,
             "reverted": reverted,
             "changed": changed,
             # Empty when the rewrite was taken. A reason here is the validation speaking.
@@ -10955,9 +11060,12 @@ def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
             return None
         if not applied:
             return None
+        held = (
+            f", and paragraphs {', '.join(unrevised)} were kept unrevised" if unrevised else ""
+        )
         print(
             f"[locale-reviser] {chapter_id}: {len(changed) - len(reverted)} sentence(s) written as the "
-            "target language",
+            f"target language over {asked - len(unrevised)} of {asked} passage(s){held}",
             file=sys.stderr,
         )
         return candidate

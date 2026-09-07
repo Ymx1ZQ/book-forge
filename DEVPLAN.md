@@ -4657,9 +4657,9 @@ the required rendering comes back as `'occhio limpido; **dagli occhi limpidi sol
 **Done when:** The critic stops spending its answer on findings that were never there.
 
 
-## A calque is repaired by a role that cannot see the source 🔄
+## A calque is repaired by a role that cannot see the source ✅
 
-**Status: 🔄 In progress — 2026-09-06, measured on the chapter this engine had already rebuilt**
+**Status: ✅ Done — 2026-09-07, measured on the chapter this engine had already rebuilt**
 
 **The user read two paragraphs of landfall's Italian CH-0001 and asked whether they could be understood.** Two of ten defects are undecodable without the English beside them — `leghe di fango` for `leagues of mud`, where the Italian word reads as a metal alloy before it reads as a distance, and `grigio alle fughe` for `grey at the seams`, where *fuga* is a tiler's word for the grout line between two tiles. Eight more parse only by reconstructing the source underneath: `se lo compresse contro i molari` for `packed it against her back teeth`, `l'aria le sedeva sul petto` for `the air sat on her chest`, `il cielo teneva un colore` for `held a color`, `non rendeva niente` for `gave back nothing` where the Italian verb yields a profit before it returns an image, `che la luce salisse d'oro` for `come up gold`, `la pasta dell'intertidale` where an English adjective became an Italian noun that does not exist, `l'ufficio che fissava le ronde` where *fissare* is to stare before it is to set, and `a metà guardia` where the chapter's other word for a watch is *ronda*.
 
@@ -4711,12 +4711,27 @@ A `note` is written to the review file and reaches no repair. The role built to 
 - [x] Language findings from the reader route to the reviser and stop there. Its `blocking` findings still travel to the bilingual repair: a sentence whose sense a reader could not recover is a meaning failure and only the source settles it
 - [x] The translator's prompt gains the covered-source procedure — the six interference classes go in as its worked examples, not as a third statement of a rule it already has twice
 - [x] `bakeoff <book> <chapter> --locale <tag> --models a,b,c`: one chapter, N models, identical capsule, nothing promoted; translations land in `work/<chapter>/bakeoff-<locale>/`. The writer's candidate machinery was generalised rather than copied — `CANDIDATE_MODELS` maps a candidate role to its model *and its base role*, so `translator-<slug>` agents are generated beside `writer-<slug>` ones and answer on the translator's prompt. Kept apart because the agent body names its role, and a writer pin answering a translation capsule carries *you are the writer* into the call
-- [ ] The bake-off runs on the four flash candidates, scored by the monolingual reader — language defects per thousand words, per candidate — and never by similarity to a reference translation, which refinement is measured to lower while raising judged quality. The table is recorded here
-- [ ] The winner is pinned in landfall and the default `translator` effort in `ROLE_SPECS` is set from what the bake-off showed; if it is gemini, `translation-critic` moves off it in the same edit
+- [x] The bake-off ran, on nine models rather than the planned four, and as **rewriters** rather than translators — the pass that was added above turned out to be the one deciding the prose, so it is the one worth choosing a model for. Same ~500 words of landfall CH-0001, same capsule, 18 known defects. **Scored by reading, not by the reader's count**, which is the deviation from the plan and the reason it was made: the reader's own defect count did not separate the candidates at all — 5.99 per thousand words for the worst against 4.23 for the best, an ordering it does not support. The count measures how much a reader stumbled; it cannot say whether the sentence that caused the stumble was repaired
+
+  | model | of 18 fixed | agreement held | $/passage |
+  |---|---|---|---|
+  | `google/gemini-3.8-flash` | ~15 | yes | 0.131 |
+  | `openai/gpt-5.6-terra` | ~14 | no | 0.131 |
+  | `google/gemini-3.7-flash` | ~12 | yes | 0.085 |
+  | `qwen/qwen3.8-max` | ~7 | no | — |
+  | `z-ai/glm-5.3` | ~7 | no | 0.132 |
+  | `x-ai/grok-4.6` | ~5 | yes | 0.190 |
+  | `z-ai/glm-5.3-flash` | ~3 | no | 0.005 |
+  | `deepseek/deepseek-v4-pro-0813` | ~1 | no | 0.069 |
+  | `moonshotai/kimi-k3` | — | — | no answer in 15 minutes |
+
+  Price predicts nothing: the most expensive model fixed five, the cheapest three, and the two that fixed the most cost the same as each other and less than half of grok. **No model's fixes contained another's** — gemini missed `come up gold`, terra was alone in fixing it and alone in breaking an agreement across two sentences, grok was alone in finding `fascia di marea`. That is what the chain is for, and it is why the winner is two models and not one
+- [x] Landfall pins the chain `translation.rewriters: [gpt-5.6-terra, gemini-3.8-flash]`, and `translation-critic`, the chorus and the style review all moved to `gemini-3.8-flash`. `_runtime_models` was needed to make the pin work at all: `sync_runtime` generated agents from the chorus alone, so a chain model had no agent and the first run blocked on it
+- [x] The two models had to be added to the operator's own `~/.config/opencode/opencode.json` whitelist before either could be called. Not a book-forge defect and worth recording here: an unwhitelisted model fails as `UnknownError: Unexpected server error` in about four seconds, whatever the catalogue says, and the failure names neither the whitelist nor the model — two sessions were spent calling it a provider outage
 - [x] The glossary is checked against itself, on a `✗` marker rather than on prose — landfall's prohibition was written **Never «il Muro»** in bold and every check walked past it. The same marker gave a second check nobody asked for: a *forbidden* rendering present in a chapter, which finds all five «il Muro» chapters mechanically. Extending the row to `bore` was needed first, because CH-0011 and CH-0016 say «a bore» in English and the row only covered `the Wall`
 - [x] `glossary_updates` stops promoting a chapter's repair note to a permanent row — see the entry below
-- [ ] Suite green. Reinstall, commit & push
-- [ ] Regenerate landfall CH-0001 to CH-0003 in Italian through the rebuilt path, and re-measure the two paragraphs above against their ten defects
+- [x] Suite green. Reinstall, commit & push
+- [x] Landfall CH-0001 to CH-0003 regenerated in Italian through the rebuilt path. **All eighteen defects are gone from CH-0001**, including the two this entry opened on: `leghe di fango` and `l'aria le sedeva sul petto`. The first sentence is now «Binta spezzava tra i denti il gesso di marea» against the «Binta si morse il gesso di marea in pezzettini» that a reader could not parse. The chapter cost $0.86. The engine then found «la Scrofa» unidentifiable on its own and repaired it to «La chiatta Scrofa della Palude», which is the pass doing what the entry was written for
 
 **Done when:** The two paragraphs the user could not read come back with their ten defects gone, the reader's `note` findings are the ones that stayed notes, and the translator's model and effort are the ones a bake-off picked.
 
@@ -4822,3 +4837,86 @@ Price and size predict nothing: the most expensive of the first six did the leas
 - [x] The three beyond the barge are author's decisions, not the engine's, and it stopped in the right place: `Cavallone` is the rendering chosen the day before to break the `il Muro` collision, and it still does not tell a reader that the thing is a tide. The tool's job was to say where the reader is in the dark; what to write there is the writer's.
 
 **Done when:** A reader of the translation can tell what everything in it is, and the engine is what noticed they could not.
+
+
+## A word kept in the source language has to earn it ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-07, from a question the engine cannot ask and a person had to**
+
+**Landfall's glossary kept two English words untranslated, and only one of them deserved it.** `revert` is said by a machine — the buried mind under Ark-Cradle hums it, the crypt screen wakes and speaks it — and it is a word in a language nobody in the book speaks. An English reader trips on it too; that is the effect. `misread` is the Faith's filing verdict, stamped on Binta's sighting and used as a chapter title: an ordinary English word doing official work, which an English reader takes as plain vocabulary in a bureaucratic register.
+
+**Kept in English, they become the same thing.** An Italian reader meets both as foreign words and cannot tell the administrative stamp from the machine's voice — so a distinction the book builds is flattened by a glossary row. The reader raised it exactly that way: *«l'ho preso per una parola inglese lasciata in originale, non ho capito se sia un marchio»*.
+
+**Nothing in the engine can ask whether a do-not-translate row is right.** The row says `misread → misread` and the machine checks that the translation renders `misread` as `misread`, which it always will. The rendering is self-satisfying: a row that keeps a word is a rule that can never be violated and therefore never checked. Deciding it needs the source — is this word ordinary in its own language, or strange there too? — and the only role holding the source is asked about meaning, not about this.
+
+**The conjunction is detectable with no model call, and that is the fix.** The reader already reports a name whose nature it cannot place. When such a name is also the target side of a glossary row whose source equals it, the engine has both halves of the question: *a word we chose to keep is costing a reader the ability to place it.* That is not a defect to repair — the rendering may still be right, as `revert` is — it is a question for the person who owns the book, raised where they can answer it instead of found by reading four pages.
+
+**And the reason belongs in the row.** A row that keeps a word says nothing today about why. `✗` and `→?` are already markers the engine reads; a do-not-translate row should carry its reason in the same way, so that the next person can tell a deliberate alien word from an untranslated one.
+
+**Tasks:**
+- [ ] A glossary row whose source and target are the same term is recognised as a do-not-translate row rather than a rendering
+- [ ] When the reader cannot place a term that such a row keeps, the pass says so — as a question for the author, never as a repair
+- [ ] Test: `revert` kept and unremarked stays silent; `revert` kept and reported by the reader raises the question once
+- [ ] A do-not-translate row without a stated reason is reported when the glossary is read, the way an unmatchable row already is
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** Keeping a word in the source language is a decision the engine can show the writer, instead of one nobody can see.
+
+
+## The provider's own error does not reach the operator ✅
+
+**Status: ✅ Done — 2026-09-07, measured on a run that failed three times for a reason printed nowhere**
+
+**Two chapters failed to be repaired and the engine gave a reason that was not the reason.** `translate review` on landfall CH-0002 and CH-0003 ended with `the critic was not read in 3 ask(s)` and `CH-0003 repair: the provider answered nothing`. Both readings are wrong. `.book-forge/runs/RUN-0037/attempts/ATT-1050/provider-events.jsonl` carries what actually happened, on the wire, in the file the engine wrote itself:
+
+```json
+{"type": "error", "error": {"name": "APIError", "data": {"message": "Key limit exceeded (daily limit). Manage it using https://openrouter.ai/workspaces/default/keys/…"}}}
+```
+
+**The message is complete, actionable, and carries the URL that fixes it.** It names the cause, the scope and the remedy. The operator saw none of it, spent three retries on a call that could not succeed, changed the model to test a hypothesis about the model, and read the memory file for a similar past failure — all against an error already sitting on disk.
+
+**The lift is one field away.** `_call_opencode` parses stdout into `events` before it decides anything, then builds the failure from `result.stderr` instead:
+
+```python
+if result.returncode != 0 or not session_id:
+    if session_id:
+        raise ProviderOutcomeUnknown(session_id, f"OpenCode ended without a complete result: {result.stderr.strip()}")
+    raise BookForgeError(f"OpenCode failed before provider acceptance: {result.stderr.strip()}")
+```
+
+`events` holds the provider's `error` rows and is not consulted. `stderr` holds OpenCode's own summary of a call it could not complete, which is why the message reads as a wrapper failure for every provider cause alike.
+
+**And a spending limit is not a transient failure.** The retry machinery treats every `ProviderOutcomeUnknown` the same, so a key that is out of budget consumes `MAX_STAGE_ATTEMPTS` per task and every task after it, at full latency, for an outcome fixed in advance. A refusal that names a limit, a quota or exhausted credit cannot be cleared by asking again; the run should stop on it and say so once. This is the second provider-side condition this project has misread as an engine fault — `[[openrouter-credit-wall]]` recorded the first, an HTTP 402, and the diagnosis stayed just as buried.
+
+**Tasks:**
+- [x] The provider's `error` events are read out of the parsed `events` and their `name` and `message` carried into the raised failure, for both the accepted and the pre-acceptance path
+- [x] A provider refusal naming a spending or rate limit is raised as its own condition rather than as an unknown outcome, so the task blocks instead of spending its retries
+- [x] Test: an events stream carrying `Key limit exceeded` produces a failure quoting that text, and one that names a limit is not retried
+- [x] Suite green. Reinstall, commit & push
+
+**Done when:** The reason a call failed is the reason the operator is given.
+
+
+## A passage that was not revised is not counted ✅
+
+**Status: ✅ Done — 2026-09-07, measured on the chapter that shipped with it**
+
+**Twelve paragraphs of landfall CH-0003 went through the monolingual revision untouched, and the chapter reported success.** The line that says so is on stderr and nowhere else:
+
+```
+[locale-reviser] CH-0003 paragraphs 25-36 kept as they were: Model output is not contract JSON: Unterminated string starting at: line 1 column 5583
+```
+
+The chapter's own summary, two lines later, reads `CH-0003: 42 sentence(s) written as the target language`, and the record written to `work/` carries `slices`, `rewritten`, `reverted`, `changed` and `rejected` — no field says a slice came back unusable. So the count of what was improved is reported and the count of what was skipped is not, and the two are not reconcilable from the record.
+
+**Truncated JSON is the failure a retry exists for.** `_revise_one_slice` catches every exception, prints one line and returns the passage unchanged. The same engine already retries a length truncation twice in `_run_with_length_retry`, and the bake-off gives each candidate `the one retry the normal path gives`. The revision path gives none, so a single malformed response is final for a twelfth of a chapter.
+
+**The gate downstream cannot see it either.** `revised.strip() != translated.strip()` is true — the other five slices changed — so the meaning check runs, the validation passes, and `applied` is `True`. A chapter revised in five sixths is indistinguishable from one revised whole.
+
+**Tasks:**
+- [x] `_revise_one_slice` retries once when the answer is unusable, before keeping the passage as it was — the second call is a fresh claim, and a slice that fails twice is kept as now
+- [x] The slices that came back unrevised are counted, carried in the record as `unrevised`, and named in the chapter's own summary line rather than only on stderr
+- [x] Test: a slice whose first answer is truncated and whose second is valid lands the rewrite; one that fails twice is kept and counted
+- [x] Suite green. Reinstall, commit & push
+
+**Done when:** A chapter says how much of itself was revised.
