@@ -4920,3 +4920,35 @@ The chapter's own summary, two lines later, reads `CH-0003: 42 sentence(s) writt
 - [x] Suite green. Reinstall, commit & push
 
 **Done when:** A chapter says how much of itself was revised.
+
+
+## A stage that finished is recorded as a validation failure ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-08, read off the plan while watching a run that was going well**
+
+**Every slice of landfall's CH-0003 that was successfully rewritten is recorded in `plan.json` as `validation_failed`.**
+
+```
+ATT-1124  LOCREV-BOOK-0001-CH-0003-it  validation_failed  passage revised
+ATT-1125  LOCREV-BOOK-0001-CH-0003-it  validation_failed  passage revised
+ATT-1145  LOCREAD-BOOK-0001-CH-0003-it validation_failed  advisory pass complete
+```
+
+**The reason is that releasing a claim and recording a failure are the same function.** `_set_attempt_failure` writes `attempt["state"] = "validation_failed"` unconditionally and then sets the task to `blocked` or `pending` by its `block` argument. A stage that runs several calls under one task id — the reviser over five slices, the reader over the same five — has to hand the claim back between calls and put the task back to `pending`, and this is the only function that does it. So the success path calls it, and the state it writes is the one thing the caller did not want.
+
+**Five call sites record completed work this way**, with the reason field saying so in plain words: `bake-off passage`, `advisory pass complete`, `revision checked`, `passage revised`, `repair merged into the translation`. A sixth, `pivotal-review-requested`, records a routing decision the same way.
+
+**What this does not do, checked before writing it down.** `_last_validation_failure` is what turns a recorded failure into repair context for the next call, and it is consulted only for tasks whose state is `blocked`. Every one of these sites passes `block=False`, so the task goes to `pending` and the text `passage revised` is never handed to a model as what went wrong last time. The task-level counts in `status` are also right — the run that produced the rows above reports no failed tasks.
+
+**What it does do.** The attempt log is the audit surface, and on it a run that worked is indistinguishable from one that failed six times: the operator watching a long run cannot use it, and neither can anything built over it. `AUTO_RECOVERABLE_ATTEMPT_STATES` contains `validation_failed`, so the recovery pass walks completed work looking for something to recover. And the reason field, which is the one place the truth survives, is free text that only a person reading it can tell apart.
+
+**Fix.** Releasing a claim is its own outcome and needs its own name. A `_release_claim(root, attempt_id, *, note)` writing a distinct attempt state — the work was done, the claim is handed back, the task continues — and the five sites move to it. The enumerations that name `validation_failed` have to learn it: `AUTO_RECOVERABLE_ATTEMPT_STATES`, the two scans at the top of the recovery pass, and the dependency check that asks which attempts a task has had.
+
+**Tasks:**
+- [ ] `_release_claim` records a completed stage under its own attempt state and returns the task to `pending`, and the five success sites plus the routing one use it
+- [ ] The state enumerations learn the new one: recovery does not treat a released claim as recoverable, and the dependency check still sees the attempt
+- [ ] Test: a chapter revised over five slices leaves no `validation_failed` in the plan, and a slice that genuinely failed still does
+- [ ] Test: `_last_validation_failure` does not return a released claim, so a later capsule cannot be handed `passage revised` as repair context if one of these sites ever blocks
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** Reading the attempt log tells you whether the run is going well.
