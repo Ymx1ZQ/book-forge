@@ -4839,9 +4839,9 @@ Price and size predict nothing: the most expensive of the first six did the leas
 **Done when:** A reader of the translation can tell what everything in it is, and the engine is what noticed they could not.
 
 
-## A word kept in the source language has to earn it ⏸️
+## A word kept in the source language has to earn it ✅
 
-**Status: ⏸️ Proposed — 2026-09-07, from a question the engine cannot ask and a person had to**
+**Status: ✅ Done — 2026-09-08, approved after CH-0003 showed the same three questions cannot be closed by any pass**
 
 **Landfall's glossary kept two English words untranslated, and only one of them deserved it.** `revert` is said by a machine — the buried mind under Ark-Cradle hums it, the crypt screen wakes and speaks it — and it is a word in a language nobody in the book speaks. An English reader trips on it too; that is the effect. `misread` is the Faith's filing verdict, stamped on Binta's sighting and used as a chapter title: an ordinary English word doing official work, which an English reader takes as plain vocabulary in a bureaucratic register.
 
@@ -4853,12 +4853,14 @@ Price and size predict nothing: the most expensive of the first six did the leas
 
 **And the reason belongs in the row.** A row that keeps a word says nothing today about why. `✗` and `→?` are already markers the engine reads; a do-not-translate row should carry its reason in the same way, so that the next person can tell a deliberate alien word from an untranslated one.
 
+**Widened when it was built, and the reason.** This entry was written about rows that *keep* a word. CH-0003 then raised three unplaceable names and only two were kept rows — the third, `zecche-lanterna`, is a rendering the glossary chose for `lantern-ticks`. It is exactly as unanswerable: the English does not explain a lantern-tick either, so neither the rewriter nor the repair that holds the source can say what it is. So the question is raised for **any term the glossary fixed, on either side of the arrow**, and the kept-row half stays as its own check on the glossary.
+
 **Tasks:**
-- [ ] A glossary row whose source and target are the same term is recognised as a do-not-translate row rather than a rendering
-- [ ] When the reader cannot place a term that such a row keeps, the pass says so — as a question for the author, never as a repair
-- [ ] Test: `revert` kept and unremarked stays silent; `revert` kept and reported by the reader raises the question once
-- [ ] A do-not-translate row without a stated reason is reported when the glossary is read, the way an unmatchable row already is
-- [ ] Suite green. Reinstall, commit & push
+- [x] `_glossary_kept_rows` recognises a row whose source and target are the same term as a decision to keep a word rather than a rendering, and carries its note
+- [x] `_glossary_fixed_terms` and `_mark_author_questions`: a name the reader could not place that the glossary settled is flagged `author_question`, excluded from `_bilingual_repair_findings`, and named on stderr once per pass
+- [x] Test: a kept term and a rendered term both raise the question; a name the glossary never settled stays an ordinary defect and still reaches the repair; an author question reaches no repair at all
+- [x] `prune_glossary` reports rows that keep a word and say nothing about why. The mechanical half only — an empty note states nothing, and whether a note that exists actually gives a reason is not checkable
+- [x] Suite green. Reinstall, commit & push
 
 **Done when:** Keeping a word in the source language is a decision the engine can show the writer, instead of one nobody can see.
 
@@ -4952,3 +4954,46 @@ ATT-1145  LOCREAD-BOOK-0001-CH-0003-it validation_failed  advisory pass complete
 - [ ] Suite green. Reinstall, commit & push
 
 **Done when:** Reading the attempt log tells you whether the run is going well.
+
+
+## Convergence is decided by counting findings, not by which ones came back ✅
+
+**Status: ✅ Done — 2026-09-08, measured on a pass that fixed everything it had been told about**
+
+**landfall CH-0003 was reviewed twice. The second pass fixed all seven findings of the first, repeated none of them, and was recorded as making no progress.**
+
+```json
+{"repeated": 0, "gone": 7, "new": 11, "state": "no-progress",
+ "reason": "11 finding(s), and the pass before found 7"}
+```
+
+**The rule compares two counts.** `_review_convergence` computes `repeated = fingerprints & before` three lines above the decision and then does not consult it:
+
+```python
+elif before_count >= 0 and count >= before_count:
+    state = "no-progress"
+```
+
+`repeated` is used only to fill `not_landed`. So the one measurement that says whether the repair worked — did anything come back? — is taken and discarded, and the verdict rests on a number that says something else.
+
+**The two counts are not comparable across passes, and the better the pass, the less comparable they are.** The second review of CH-0003 rewrote 34 of its 51 paragraphs, against a first that reached four fifths of the chapter. The reader was handed substantially new prose and found new things in it. A pass that rewrites more produces more new text, more new text yields more findings, and more findings is what this rule reads as failure. It penalises the pass for doing more of its job.
+
+**Three of the eleven can never be closed, and they are counted every time.** `R-04`, `R-05` and `R-08` are `unidentified` on `zecche-lanterna` and `keelback` — both **fixed terms in the glossary**, one translated and one deliberately kept:
+
+```
+- **lantern-ticks** → zecche-lanterna — … fixed term.
+- **keelback (the animal)** → keelback — … restano 'keelback', mai «chiglie». Fisso in tutto il libro.
+```
+
+The reader is denied the glossary by design, so that an unreadable term is reported rather than excused as agreed, and it is doing exactly that. But the answer is *yes, deliberately*, and no role in the loop can give it: `_bilingual_repair_findings` routes `unidentified` to the call that holds the source, and the source cannot say what the Italian never said either. So they are asked, unfixed and recounted on every pass, and a chapter carrying three of them cannot reach a clean state whatever the models do. That half is the entry below on words kept in the source language; this entry is the counting.
+
+**Fix.** `repeated` decides. A pass where nothing came back made progress, whatever the totals; a pass where the same fingerprints return did not, and that is the case the `no-progress` state was written for. Findings that cannot be closed by the loop are held apart from the count that decides, and reported as what they are.
+
+**Tasks:**
+- [x] `no-progress` is raised when findings repeat, not when the total fails to fall; a pass with `repeated: 0` is progress, and the reason names how many came back instead of quoting two totals
+- [x] A pass that keeps producing new findings still stops on the existing pass cap, which needed no change — the loop is a bounded `for` and already reported `ended: "cap"` apart from `ended: "no-progress"`
+- [x] Author questions are held out of `fingerprints` before anything is counted, and returned as `questions`; a chapter whose only remaining findings are those reads as clean and lists them
+- [x] Test: seven findings replaced by eleven new ones is progress; four of which three repeat is not; a pass whose only findings are questions reads clean with the terms named
+- [x] Suite green. Reinstall, commit & push
+
+**Done when:** A pass that fixed everything it was told about is not recorded as a failure.

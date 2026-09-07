@@ -658,12 +658,15 @@ class WhenAReviewIsFinishedTests(TranslationReviewFixture):
         self.assertEqual(row["passes"], 1)
         self.assertEqual(provider.calls.count("translator"), 0, "nothing to repair")
 
-    def test_two_passes_at_the_same_count_stop_as_no_progress(self):
+    def test_two_passes_returning_the_same_findings_stop_as_no_progress(self):
+        """Two identical passes, so both the old count rule and the rule that
+        replaced it refuse them. The reason now names which findings came back
+        rather than how many there were, because the totals stopped deciding."""
         same = {"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}
         row, provider = self.run_until_clean([same, same, same, same])
         self.assertEqual(row["ended"], "no-progress")
         self.assertEqual(row["passes"], 2)
-        self.assertIn("the pass before found 2", row["why"])
+        self.assertIn("2 of 2 finding(s) came back", row["why"])
 
     def test_a_finding_that_comes_back_after_a_claimed_repair_is_named(self):
         same = {"findings": [self.finding(1), self.finding(2)], "verdict": "repairable"}
@@ -1812,3 +1815,128 @@ class WhatALimitDoesToTheRestOfTheChapterTests(TranslationReviewFixture):
             body.index("except Exception as unrevised:"),
             "the bare handler below would take it first",
         )
+
+
+class ConvergenceIsAboutWhatCameBackTests(unittest.TestCase):
+    """landfall CH-0003 was reviewed twice. The second pass fixed all seven findings
+    of the first, repeated none of them, produced eleven new ones on the 34 paragraphs
+    it had rewritten, and was recorded `no-progress` because 11 >= 7. `repeated` was
+    computed three lines above the decision and not consulted."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def finding(self, ident, kind="readability", **extra):
+        return {
+            "id": ident, "severity": "warning", "kind": kind, "origin": "reader",
+            "source": "", "translated": f"frase {ident}", "rule": "r",
+            "issue": f"problema {ident}", "fix": "", **extra,
+        }
+
+    def pass_of(self, findings, previous=None, repaired_before=True):
+        return self.bf._convergence(previous or {}, findings, "repairable", repaired_before)
+
+    def test_a_pass_that_repeats_nothing_is_progress(self):
+        first = self.pass_of([self.finding(f"A{n}") for n in range(7)])
+        second = self.pass_of([self.finding(f"B{n}") for n in range(11)], previous=first)
+        self.assertEqual(second["repeated"], 0)
+        self.assertNotEqual(second["state"], "no-progress")
+
+    def test_the_totals_alone_no_longer_decide(self):
+        first = self.pass_of([self.finding(f"A{n}") for n in range(7)])
+        second = self.pass_of([self.finding(f"B{n}") for n in range(11)], previous=first)
+        self.assertEqual(second["actionable"], 11)
+        self.assertGreater(second["actionable"], first["actionable"])
+        self.assertEqual(second["state"], "more-to-do")
+
+    def test_a_finding_that_came_back_is_no_progress(self):
+        first = self.pass_of([self.finding(f"A{n}") for n in range(4)])
+        second = self.pass_of(
+            [self.finding("A1"), self.finding("A2"), self.finding("A3"), self.finding("Z")],
+            previous=first,
+        )
+        self.assertEqual(second["repeated"], 3)
+        self.assertEqual(second["state"], "no-progress")
+
+    def test_the_reason_says_the_repair_claimed_to_apply_them(self):
+        first = self.pass_of([self.finding("A1")])
+        second = self.pass_of([self.finding("A1")], previous=first, repaired_before=True)
+        self.assertIn("came back after the repair said it applied them", second["reason"])
+
+    def test_nothing_left_is_still_clean(self):
+        self.assertEqual(self.pass_of([])["state"], "clean")
+
+
+class QuestionsTheLoopCannotCloseTests(unittest.TestCase):
+    """`keelback` and `zecche-lanterna` are fixed terms in landfall's glossary, one
+    kept and one rendered. The monolingual reader is denied the glossary so an
+    unreadable term is reported rather than excused, and it reported both — every
+    pass, forever, because no role can answer `yes, deliberately`. Three of CH-0003's
+    eleven findings were these, so the chapter could not converge whatever the models
+    did."""
+
+    GLOSSARY = (
+        "---\nid: G\n---\n\n<!-- bf:block terms -->\n"
+        "- **keelback (the animal)** → keelback — Gli animali da cortile restano 'keelback'.\n"
+        "- **lantern-ticks** → zecche-lanterna — Phosphorescent organisms; fixed term.\n"
+        "- **tide-chalk** → gesso di marea — fixed term.\n"
+        "- **revert** → revert\n"
+    )
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def name(self, term):
+        return {
+            "id": "N-01", "severity": "warning", "kind": "unidentified", "origin": "reader",
+            "source": "", "translated": f"una frase con {term}", "term": term,
+            "rule": "the text says what a thing is",
+            "issue": f"a reader could not tell what {term!r} is", "fix": "",
+        }
+
+    def test_a_name_the_glossary_fixed_is_marked_for_the_author(self):
+        rows = self.bf._mark_author_questions([self.name("keelback")], self.GLOSSARY)
+        self.assertTrue(rows[0]["author_question"])
+
+    def test_a_rendered_term_counts_too_not_only_a_kept_one(self):
+        """`zecche-lanterna` is translated, not kept, and is just as unanswerable:
+        the English does not explain a lantern-tick either."""
+        rows = self.bf._mark_author_questions([self.name("zecche-lanterna")], self.GLOSSARY)
+        self.assertTrue(rows[0]["author_question"])
+
+    def test_a_name_the_glossary_never_settled_stays_a_defect(self):
+        rows = self.bf._mark_author_questions([self.name("la Scrofa")], self.GLOSSARY)
+        self.assertNotIn("author_question", rows[0])
+
+    def test_an_author_question_is_not_sent_to_the_repair(self):
+        rows = self.bf._mark_author_questions([self.name("keelback")], self.GLOSSARY)
+        self.assertEqual(self.bf._bilingual_repair_findings(rows), [])
+
+    def test_a_name_the_glossary_never_settled_still_reaches_the_repair(self):
+        rows = self.bf._mark_author_questions([self.name("la Scrofa")], self.GLOSSARY)
+        self.assertEqual(len(self.bf._bilingual_repair_findings(rows)), 1)
+
+    def test_a_chapter_whose_only_findings_are_questions_reads_as_clean(self):
+        rows = self.bf._mark_author_questions([self.name("keelback"), self.name("zecche-lanterna")], self.GLOSSARY)
+        out = self.bf._convergence({}, rows, "repairable", False)
+        self.assertEqual(out["state"], "clean")
+        self.assertEqual(out["actionable"], 0)
+        self.assertEqual(len(out["questions"]), 2)
+        self.assertIn("await the author", out["reason"])
+
+    def test_the_questions_are_named_where_a_person_will_read_them(self):
+        rows = self.bf._mark_author_questions([self.name("keelback")], self.GLOSSARY)
+        out = self.bf._convergence({}, rows, "repairable", False)
+        self.assertEqual(out["questions"][0]["term"], "keelback")
+
+    def test_a_kept_row_is_recognised_by_its_two_sides_being_the_same(self):
+        kept = dict(self.bf._glossary_kept_rows(self.GLOSSARY))
+        self.assertIn("keelback", kept)
+        self.assertIn("revert", kept)
+        self.assertNotIn("lantern-ticks", kept)
+        self.assertNotIn("tide-chalk", kept)
+
+    def test_a_kept_row_that_says_nothing_about_why_is_told_apart(self):
+        kept = dict(self.bf._glossary_kept_rows(self.GLOSSARY))
+        self.assertEqual(kept["revert"], "", "no note at all")
+        self.assertTrue(kept["keelback"].strip(), "this one states something")

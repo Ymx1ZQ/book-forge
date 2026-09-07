@@ -7801,13 +7801,31 @@ def prune_glossary(project: Path | str, book_id: str, locale: str, *, apply: boo
             kept.append(line)
         else:
             dropped.append({"source": source.strip(), "translation": target.strip(), "row": line})
+    # Rows that keep a word instead of rendering it. The compliance check cannot test
+    # them — `misread → misread` is satisfied by doing nothing — so reading the
+    # glossary is the only place the decision is ever put back in front of a person.
+    # `has_reason` is the mechanical half of the question: a row with no note at all
+    # states nothing. A row with a note may still not say why, and no check can tell.
+    kept_words = [
+        {"term": term, "has_reason": bool(note.strip())}
+        for term, note in _glossary_kept_rows(path.read_text(encoding="utf-8"))
+    ]
     report = {
         "book": book_id, "locale": locale,
         "rows_before": sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("- **")),
         "rows_after": sum(1 for line in kept if line.startswith("- **")),
         "moved": len(dropped), "applied": apply,
         "examples": [row["source"][:70] for row in dropped[:8]],
+        "kept_in_source_language": kept_words,
     }
+    unexplained = [row["term"] for row in kept_words if not row["has_reason"]]
+    if unexplained:
+        print(
+            f"[glossary] {len(unexplained)} row(s) keep a word in the source language and say nothing about "
+            "why, so the next reader cannot tell a deliberate alien word from an untranslated one: "
+            + ", ".join(unexplained),
+            file=sys.stderr,
+        )
     if apply and dropped:
         _write_json(locale_root / "notes" / "from-the-glossary.json",
                     {"schema": 1, "moved": dropped, "why": "not a term: kept beside the locale, not read into every call"})
@@ -9159,6 +9177,10 @@ def _locale_reader_findings(value: object) -> list[dict[str, object]]:
             "origin": "reader",
             "source": "",
             "translated": quoted or name,
+            # Carried apart from the prose so the glossary can be asked about it.
+            # A term the glossary fixes is a question for the author, and only the
+            # name tells the two cases apart.
+            "term": name,
             "rule": "the text says what a thing is",
             "issue": f"a reader could not tell what {name!r} is: {str(row.get('took_it_for') or '')[:160]}",
             "fix": "",
@@ -9941,6 +9963,65 @@ def _glossary_terms(glossary: str, *, with_notes: bool = False) -> list[tuple]:
     return rows
 
 
+def _glossary_kept_rows(glossary: str) -> list[tuple[str, str]]:
+    """Rows that keep a word rather than render it, as (term, note).
+
+    A row whose source and target are the same word is a decision to leave that word
+    in the source language, and it is the one kind of row the compliance check cannot
+    test: `misread → misread` is satisfied by any translation that does nothing, so
+    the rendering is self-satisfying and the decision is never revisited. landfall
+    carried two — `revert`, said by a machine in a language nobody in the book speaks,
+    and `misread`, an ordinary English word doing official work — and only the first
+    deserved it. A reader met both as foreign words and could not tell them apart.
+    """
+    kept: list[tuple[str, str]] = []
+    for sources, targets, note in _glossary_terms(glossary, with_notes=True):
+        lowered = {value.casefold() for value in targets}
+        for term in sources:
+            if term.casefold() in lowered:
+                kept.append((term, note))
+                break
+    return kept
+
+
+def _glossary_fixed_terms(glossary: str) -> dict[str, str]:
+    """Every term the glossary fixes, either side of the arrow, to its row's note.
+
+    Both sides, because a name a reader cannot place is a settled question whether
+    the glossary kept the word (`keelback`) or chose a rendering for it
+    (`lantern-ticks → zecche-lanterna`). In both cases the answer is recorded and
+    neither the rewriter nor the source-holding repair can supply it.
+    """
+    fixed: dict[str, str] = {}
+    for sources, targets, note in _glossary_terms(glossary, with_notes=True):
+        for term in list(sources) + list(targets):
+            fixed.setdefault(term.casefold(), note)
+    return fixed
+
+
+def _mark_author_questions(
+    findings: list[dict[str, object]], glossary: str
+) -> list[dict[str, object]]:
+    """Flag the names a reader could not place that the glossary has already settled.
+
+    These are not defects the loop can close. The rewriter cannot say what the
+    translation never said, and the repair that holds the source cannot either —
+    the English does not explain a `keelback` any more than the Italian does. What
+    the pass can do is put the question where the person who owns the book will see
+    it, once, instead of asking a model to fix it on every pass and counting the
+    failure against the chapter.
+    """
+    fixed = _glossary_fixed_terms(glossary)
+    for row in findings:
+        if str(row.get("kind")) != "unidentified":
+            continue
+        term = str(row.get("term") or "").strip().casefold()
+        if term and term in fixed:
+            row["author_question"] = True
+            row["glossary_note"] = fixed[term]
+    return findings
+
+
 # Italian and its neighbours inflect, so a rendering is looked for by its content
 # words with the ending left open: `gesso di marea` must also match `gessi di marea`.
 # What separates an inflected form from a different word: one letter of ending.
@@ -10466,7 +10547,14 @@ def _convergence(
     then 6, then 12, and nobody could say whether that was three improvements or
     three inventions.
     """
-    fingerprints = {_finding_fingerprint(row) for row in _actionable(findings)}
+    # Questions for the author are held out of the set that decides. No pass can
+    # close them — the glossary settled the rendering and the text still does not say
+    # what the thing is — so counting them means a chapter carrying three of them can
+    # never read as finished however well the models work. landfall CH-0003 carried
+    # `keelback` twice and `zecche-lanterna` once, both fixed terms.
+    deciding = [row for row in _actionable(findings) if not row.get("author_question")]
+    questions = [row for row in _actionable(findings) if row.get("author_question")]
+    fingerprints = {_finding_fingerprint(row) for row in deciding}
     before = {str(value) for value in previous.get("fingerprints", [])}
     before_count = int(previous.get("actionable", -1))
     count = len(fingerprints)
@@ -10486,9 +10574,24 @@ def _convergence(
         )
     elif not count:
         state, reason = "clean", "nothing left to act on"
-    elif before_count >= 0 and count >= before_count:
+        if questions:
+            reason = (
+                f"nothing left to act on; {len(questions)} name(s) await the author: "
+                + ", ".join(sorted({str(row.get("term") or row.get("translated")) for row in questions}))
+            )
+    elif repeated:
+        # Which findings came back, not how many there are. The totals are not
+        # comparable across passes: a pass that rewrites more of the chapter hands
+        # the reader more new prose and it finds more in it, so counting made a
+        # better pass look like a worse one. landfall CH-0003 fixed all seven
+        # findings of the pass before, repeated none, produced eleven new ones on
+        # the 34 paragraphs it had rewritten, and was recorded as no-progress.
         state = "no-progress"
-        reason = f"{count} finding(s), and the pass before found {before_count}"
+        reason = (
+            f"{len(repeated)} of {count} finding(s) came back after the repair said it applied them"
+            if repaired_before
+            else f"{len(repeated)} of {count} finding(s) are the same as the pass before"
+        )
     # A repair that said it applied a finding, and the same finding coming back,
     # is worse than a repair that refused: the refusal was at least recorded.
     not_landed = sorted(repeated) if repaired_before else []
@@ -10508,6 +10611,12 @@ def _convergence(
         "not_landed": not_landed if read else [],
         "verdict_inconsistent": inconsistent,
         "fingerprints": sorted(fingerprints),
+        # Held out of every count above. Recorded so the pass reports them once,
+        # to the person who can answer them.
+        "questions": [
+            {"term": str(row.get("term") or ""), "issue": str(row.get("issue") or "")}
+            for row in questions
+        ],
     }
 
 
@@ -10661,6 +10770,10 @@ def _bilingual_repair_findings(findings: list[dict[str, object]]) -> list[dict[s
         row
         for row in findings
         if str(row.get("severity")) in {"blocking", "warning"}
+        # A name the glossary already settled. The English does not explain a
+        # `keelback` either, so this path cannot answer it and asking spends a call
+        # to be told again on the next pass. It goes to the author instead.
+        and not row.get("author_question")
         and (
             row.get("origin") != "reader"
             or str(row.get("severity")) == "blocking"
@@ -10698,14 +10811,15 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
     """
     locale_root = root / "books" / book_id / "translations" / locale
     style = (locale_root / "style.md").read_text(encoding="utf-8")
+    glossary = (locale_root / "glossary.md").read_text(encoding="utf-8")
     carried = value
     rewritten = _rewrite_in_locale(root, book_id, locale, chapter_id, contract, source, carried, runner=runner)
     if rewritten is not None:
         carried = rewritten
     unread: list[str] = []
-    language = _ask_locale_reader(
+    language = _mark_author_questions(_ask_locale_reader(
         root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
-    )
+    ), glossary)
     failing = [
         row for row in language
         if str(row.get("severity")) in {"blocking", "warning"} and str(row.get("kind")) != "unidentified"
@@ -10722,9 +10836,17 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
         if again is not None:
             carried = again
             unread = []
-            language = _ask_locale_reader(
+            language = _mark_author_questions(_ask_locale_reader(
                 root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
-            )
+            ), glossary)
+    asked = [row for row in language if row.get("author_question")]
+    if asked:
+        print(
+            f"[locale-reader] {chapter_id}: {len(asked)} name(s) the glossary settled that a reader still "
+            "could not place, left for the author: "
+            + ", ".join(sorted({str(row.get('term')) for row in asked})),
+            file=sys.stderr,
+        )
     review = _review_translation(
         root, book_id, locale, chapter_id, contract, source, str(carried["translated_markdown"]),
         runner=runner, language_findings=language, reader_unread=unread[0] if unread else "",
