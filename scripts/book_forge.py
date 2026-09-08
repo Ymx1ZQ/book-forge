@@ -9995,8 +9995,28 @@ def _glossary_fixed_terms(glossary: str) -> dict[str, str]:
     fixed: dict[str, str] = {}
     for sources, targets, note in _glossary_terms(glossary, with_notes=True):
         for term in list(sources) + list(targets):
-            fixed.setdefault(term.casefold(), note)
+            fixed.setdefault(term, note)
     return fixed
+
+
+def _settled_term(name: str, glossary: str) -> tuple[str, str] | None:
+    """The glossary row that already answers this name, if one does.
+
+    Matched with `_term_pattern`, the same matcher the compliance check uses, and
+    not by equality. The reader names a thing as the text names it — `i keelback`,
+    `un Silenzioso` — while the glossary holds `keelback` and `i Silenziosi`, so
+    equality found neither. The pattern drops the leading article and leaves the
+    ending open, which is what carries `i Silenziosi` onto `un Silenzioso`.
+
+    The bound this accepts: a short term matching inside a longer name. Names come
+    back as a word or three and `_glossary_terms` already drops anything under four
+    characters, so the room for a wrong match is small; a name that is a whole
+    clause is not what this role returns.
+    """
+    for term, note in _glossary_fixed_terms(glossary).items():
+        if re.search(_term_pattern(term, drop_leading_article=True), name, _flags(term)):
+            return term, note
+    return None
 
 
 def _mark_author_questions(
@@ -10011,14 +10031,14 @@ def _mark_author_questions(
     it, once, instead of asking a model to fix it on every pass and counting the
     failure against the chapter.
     """
-    fixed = _glossary_fixed_terms(glossary)
     for row in findings:
         if str(row.get("kind")) != "unidentified":
             continue
-        term = str(row.get("term") or "").strip().casefold()
-        if term and term in fixed:
+        name = str(row.get("term") or "").strip()
+        settled = _settled_term(name, glossary) if name else None
+        if settled:
             row["author_question"] = True
-            row["glossary_note"] = fixed[term]
+            row["glossary_term"], row["glossary_note"] = settled
     return findings
 
 

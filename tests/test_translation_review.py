@@ -1879,6 +1879,7 @@ class QuestionsTheLoopCannotCloseTests(unittest.TestCase):
         "---\nid: G\n---\n\n<!-- bf:block terms -->\n"
         "- **keelback (the animal)** → keelback — Gli animali da cortile restano 'keelback'.\n"
         "- **lantern-ticks** → zecche-lanterna — Phosphorescent organisms; fixed term.\n"
+        "- **Silent Ones** → i Silenziosi — Order rank; singular Silenzioso.\n"
         "- **tide-chalk** → gesso di marea — fixed term.\n"
         "- **revert** → revert\n"
     )
@@ -1897,6 +1898,28 @@ class QuestionsTheLoopCannotCloseTests(unittest.TestCase):
     def test_a_name_the_glossary_fixed_is_marked_for_the_author(self):
         rows = self.bf._mark_author_questions([self.name("keelback")], self.GLOSSARY)
         self.assertTrue(rows[0]["author_question"])
+
+    def test_the_name_arrives_with_the_article_the_text_gave_it(self):
+        """What the role actually returns. The first build matched on equality and
+        was tested with bare terms it had invented, so it passed and then flagged
+        none of CH-0003's three: the reader had said `i keelback`, `un Silenzioso`,
+        `la gabbia`."""
+        rows = self.bf._mark_author_questions([self.name("i keelback")], self.GLOSSARY)
+        self.assertTrue(rows[0]["author_question"])
+        self.assertEqual(rows[0]["glossary_term"], "keelback")
+
+    def test_a_singular_is_carried_onto_the_plural_row(self):
+        """The glossary holds `i Silenziosi` and the chapter says `un Silenzioso`:
+        a different article and a different ending."""
+        rows = self.bf._mark_author_questions([self.name("un Silenzioso")], self.GLOSSARY)
+        self.assertTrue(rows[0]["author_question"])
+
+    def test_an_ordinary_word_is_still_a_defect(self):
+        """`la gabbia` is not a glossary term — a reader who cannot tell what the
+        cage is has found something, and it must not be filed as settled."""
+        rows = self.bf._mark_author_questions([self.name("la gabbia")], self.GLOSSARY)
+        self.assertNotIn("author_question", rows[0])
+        self.assertEqual(len(self.bf._bilingual_repair_findings(rows)), 1)
 
     def test_a_rendered_term_counts_too_not_only_a_kept_one(self):
         """`zecche-lanterna` is translated, not kept, and is just as unanswerable:
@@ -1931,6 +1954,7 @@ class QuestionsTheLoopCannotCloseTests(unittest.TestCase):
 
     def test_a_kept_row_is_recognised_by_its_two_sides_being_the_same(self):
         kept = dict(self.bf._glossary_kept_rows(self.GLOSSARY))
+        self.assertNotIn("Silent Ones", kept)
         self.assertIn("keelback", kept)
         self.assertIn("revert", kept)
         self.assertNotIn("lantern-ticks", kept)
