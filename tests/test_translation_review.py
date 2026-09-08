@@ -2100,3 +2100,158 @@ class AProviderThatDidNotAnswerIsAskedAgainTests(TranslationReviewFixture):
         provider = self.provider(role="translator", refusals=2)
         self.translate(provider)
         self.assertEqual(provider.calls.count("translator"), 1, "one answer, after two refusals")
+
+
+ORDINARY_EN = "She chewed tide-chalk on the tower and the Faith counted lamps."
+ORDINARY_IT = "Masticava gesso di marea sulla torre e la Fede contava."
+# The same sentence rendered at length because the target language needs the words,
+# not because anything was explained.
+LONGER_IT = "Masticava il gesso di marea sopra la torre mentre la Fede contava le lampade."
+# landfall CH-0003's closing line, and the rendering that carries the addition: the
+# English never says what is in the cage, the chapter said it thirty paragraphs
+# earlier, and the Italian says it again here.
+ADDITION_EN = "Behind her, down the dark, the cage ticked on, drinking."
+ADDITION_IT = "Alle spalle, giù nel buio, la gabbia ticchettava ancora e dentro le zecche bevevano."
+ADDITION_IT_PLAIN = "Giù nel buio, alle sue spalle, la gabbia continuava a ticchettare."
+
+
+def chapter(sentences, title="# T"):
+    return f"{title}\n\n" + " ".join(sentences)
+
+
+class ASentenceTheTranslationExplainedTests(unittest.TestCase):
+    """landfall CH-0003 ends `the cage ticked on, drinking` and the Italian ends
+    «la gabbia ticchettava ancora e dentro le zecche bevevano». Nothing in the chain
+    can refuse it: both monolingual roles have no source, and the revision check asks
+    whether a fact moved — nothing moved, because the ticks really are in the cage.
+
+    The critic's prompt states the rule twice and the critic was at its ceiling: four
+    findings, all blocking, all real meaning errors. An addition that is true ranks
+    below four assertions that are wrong. So it is counted instead of read."""
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def measure(self, source_sentences, target_sentences):
+        return self.bf._expansion_candidates(chapter(source_sentences), chapter(target_sentences))
+
+    def book_of(self, target_last, source_last=ADDITION_EN, ordinary=23, target_ordinary=ORDINARY_IT):
+        return self.measure(
+            [ORDINARY_EN] * ordinary + [source_last],
+            [target_ordinary] * ordinary + [target_last],
+        )
+
+    def test_a_sentence_carrying_a_clause_the_source_never_wrote_is_proposed(self):
+        found = self.book_of(ADDITION_IT)
+        self.assertEqual([row["id"] for row in found], ["X-01"])
+        self.assertEqual(found[0]["kind"], "addition")
+
+    def test_the_pair_is_quoted_because_the_id_alone_rules_nothing(self):
+        found = self.book_of(ADDITION_IT)
+        self.assertEqual(found[0]["source"], ADDITION_EN)
+        self.assertEqual(found[0]["translated"], ADDITION_IT)
+
+    def test_the_same_sentence_without_the_addition_is_not_proposed(self):
+        self.assertEqual(self.book_of(ADDITION_IT_PLAIN), [])
+
+    def test_a_sentence_merely_longer_because_the_language_is_longer_is_not(self):
+        """The measurement that decided this: on raw word counts the defect and its
+        repair both run 1.40 times landfall CH-0003's median, so a word is not the
+        unit. Words of four letters or more separated them, 1.50 against 1.17."""
+        self.assertEqual(self.book_of(LONGER_IT, source_last=ORDINARY_EN), [])
+
+    def test_the_baseline_is_the_chapter_and_not_a_constant(self):
+        """A translation that runs half again as long everywhere proposes nothing:
+        how much longer the target runs is a property of the pair, not a defect."""
+        self.assertEqual(self.book_of(LONGER_IT, source_last=ORDINARY_EN, target_ordinary=LONGER_IT), [])
+
+    def test_a_chapter_too_short_to_have_a_median_proposes_nothing(self):
+        self.assertEqual(self.book_of(ADDITION_IT, ordinary=8), [])
+
+    def test_it_stops_at_its_own_bound(self):
+        found = self.measure(
+            [ORDINARY_EN] * 20 + [ADDITION_EN] * 6,
+            [ORDINARY_IT] * 20 + [ADDITION_IT] * 6,
+        )
+        self.assertEqual(len(found), self.bf.EXPANSION_MAX_CANDIDATES)
+
+    def test_a_paragraph_the_two_languages_cut_differently_is_left_out(self):
+        """A translator that joins two sentences into one is making a rendering
+        choice, and an alignment invented across it would measure the choice."""
+        source = chapter([ORDINARY_EN] * 23) + "\n\n" + ADDITION_EN + " " + ORDINARY_EN
+        target = chapter([ORDINARY_IT] * 23) + "\n\n" + ADDITION_IT
+        self.assertEqual(self.bf._expansion_candidates(source, target), [])
+
+    def test_a_chapter_whose_paragraphs_do_not_match_proposes_nothing(self):
+        source = chapter([ORDINARY_EN] * 23 + [ADDITION_EN])
+        self.assertEqual(self.bf._expansion_candidates(source, source + "\n\nUn paragrafo in più."), [])
+
+
+class AnAdditionDoesNotCompeteWithAMeaningErrorTests(TranslationReviewFixture):
+    """The critic returned exactly four findings on landfall CH-0003, every one of
+    them blocking and every one a real meaning error, and the closing line came back
+    explained. The bound was doing its job; the addition had nowhere to go."""
+
+    FOUR_BLOCKING = {
+        "verdict": "repairable",
+        "findings": [
+            {"id": f"{n:02d}", "severity": "blocking", "kind": "meaning",
+             "source": f"line {n}", "translated": f"riga {n}",
+             "rule": "the source", "issue": "il senso cambia", "fix": f"riga {n} corretta"}
+            for n in range(1, 5)
+        ],
+    }
+
+    class RemembersTheCapsule(ScriptedProvider):
+        def __call__(self, role, envelope, attempt_dir):
+            task = envelope["payload"]["task"]
+            if role == "translation-critic" and "machine_findings" in task:
+                self.critic_task = task
+            if role == "translator" and "repair" in task:
+                self.repaired_with = task["repair"]["findings"]
+            return super().__call__(role, envelope, attempt_dir)
+
+    def read_back(self, critic):
+        source = chapter([ORDINARY_EN] * 23 + [ADDITION_EN], title="# The Dawn Barge")
+        body = " ".join([ORDINARY_IT] * 23 + [ADDITION_IT])
+        (self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").write_text(source, encoding="utf-8")
+        # The translate path runs the review too, and a held candidate reaches the
+        # repair there: scripted to answer with the same chapter, so the addition
+        # is still standing when this test reads it back.
+        self.translate(ScriptedProvider([translation(body)] * 4))
+        provider = self.RemembersTheCapsule([translation(body)] * 4, critic=critic)
+        provider.critic_task = None
+        provider.repaired_with = []
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        review = json.loads(
+            (self.project / f"books/{self.book}/translations/it/reviews/CH-0001.json").read_text()
+        )
+        return review, provider
+
+    def test_the_critic_is_given_the_pair_and_not_only_an_id(self):
+        _, provider = self.read_back(self.FOUR_BLOCKING)
+        raised = [row for row in provider.critic_task["machine_findings"] if row["id"].startswith("X-")]
+        self.assertEqual(len(raised), 1)
+        self.assertEqual(raised[0]["translated"], ADDITION_IT)
+
+    def test_a_chapter_at_the_finding_bound_still_reports_the_addition(self):
+        review, _ = self.read_back(self.FOUR_BLOCKING)
+        self.assertEqual(len([row for row in review["findings"] if row["kind"] == "meaning"]), 4)
+        self.assertEqual(len([row for row in review["findings"] if row["kind"] == "addition"]), 1)
+
+    def test_the_capsule_says_they_are_answered_as_well_as_the_findings(self):
+        _, provider = self.read_back(self.FOUR_BLOCKING)
+        self.assertIn("in addition", provider.critic_task["machine_findings_bound"])
+
+    def test_a_candidate_the_critic_calls_mistaken_is_dropped(self):
+        review, _ = self.read_back({
+            **self.FOUR_BLOCKING,
+            "machine_findings": [{"id": "X-01", "verdict": "mistaken", "why": "l'italiano richiede le parole"}],
+        })
+        self.assertEqual([row for row in review["findings"] if row["kind"] == "addition"], [])
+
+    def test_an_addition_goes_to_the_call_that_holds_the_source(self):
+        """Only the source says what the translation added. The rewriter has no
+        source and reads an explained image as the better sentence."""
+        _, provider = self.read_back(self.FOUR_BLOCKING)
+        self.assertIn("addition", [row.get("kind") for row in provider.repaired_with])

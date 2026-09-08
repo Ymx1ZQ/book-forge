@@ -29,6 +29,16 @@ Judge each one. You have both texts open and the rule in front of you, which the
 
 A finding you call `mistaken` is dropped and never reaches the repair, so do not use it to excuse a rendering you simply prefer: `mistaken` means the check was wrong, not that the translation is defensible anyway. If you are unsure, it holds.
 
+The capsule carries `machine_findings_bound`: ruling them is answered **in addition** to your findings, and it does not count against `answer_bound`. A chapter whose four findings are all meaning errors still returns a verdict on every machine finding.
+
+### The expansion candidates
+
+An id beginning `X-` is a sentence measured as far longer than this chapter's own sentences usually run, and it carries both `source` and `translated`. The check is arithmetic and knows nothing about either language: it cannot tell an explanation from a language that needs more words, which is the whole reason it is handed to you.
+
+It `holds` when the translation names, explains or completes something the source leaves unsaid — a referent the source keeps implicit, an image the source leaves short, a fact stated thirty paragraphs earlier and repeated here where the source does not repeat it. Everything in the sentence may be true and it is still an addition: the question is whether the source says it, not whether the book does.
+
+It is `mistaken` in two cases that will come up often. The first is structure: the target language spends words the source does not need, as when English writes a possessive ellipsis or a compound and the target must build a phrase. The second is a name supplied where the source carried the reference with grammar the target language does not have — English says `she` of a vessel and `her pilot` two lines later, the target has no such pronoun, and naming the thing once is a rendering, not an addition.
+
 The capsule carries `answer_bound`, and it is a hard limit: report **at most that many findings**, most severe first. A chapter usually has more defects than the bound allows, and that is expected — the review runs again and the next pass takes the next ones. Reporting past the bound is measured to cost the whole answer: on the chapter this role failed most, the unbounded question returned nothing at all in four attempts out of four, having spent its entire reasoning ceiling before writing a character. Report fewer findings and be read, rather than more and be lost. When the translation is unusable, say so in `verdict` and still report only the worst ones.
 
 `blocking` is for meaning changed or lost, and for nothing else. Everything a reader would survive is `warning` or `note`.

@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -10423,6 +10424,41 @@ CRITIC_ATTEMPTS = 3
 # this measurement does not locate, buys none at all.
 CRITIC_MAX_FINDINGS = 4
 
+# A sentence the translation explained, proposed by measurement rather than found
+# by reading. The critic knows the rule — its prompt states it twice — and lost to
+# its own ceiling: on landfall CH-0003 the pass returned exactly four findings,
+# every one a real meaning error, and the closing line came back with the cage's
+# occupants named where the English leaves them unnamed. An addition that is true
+# ranks below four assertions that are wrong, and correctly so, which is why this
+# arrives as a machine finding instead of competing for a slot.
+#
+# What to count was measured on that line, `Behind her, down the dark, the cage
+# ticked on, drinking.`, against the rendering that carries the addition and the
+# one that does not:
+#
+#   statistic                     with it   without it   candidates/chapter
+#   every word                     1.40x       1.40x     indistinguishable
+#   words of four letters or more  1.50x       1.17x     2 to 4
+#   an Italian function-word list  1.50x       1.33x     0 to 3
+#   the chapter's 25 commonest     2.03x       1.87x     no separation
+#
+# Raw word counts cannot see it: the addition costs three words and the clean
+# rendering spends three on function words. Length is the proxy for a content
+# word that no locale has to configure — a function word is short in the
+# languages this engine has been run on — and it separated the pair widest.
+EXPANSION_MIN_WORD_LETTERS = 4
+# Below this a ratio is noise: a six-word sentence rendered in nine is a rhythm,
+# not an explanation.
+EXPANSION_MIN_CONTENT_WORDS = 6
+# Above the chapter's own median, because how much longer the target runs is a
+# property of this language pair and this book rather than a constant.
+EXPANSION_RATIO_MULTIPLE = 1.45
+# Their own bound, which is the point of the entry: three candidates the critic
+# rules in a clause each, and the four findings stay for defects of meaning.
+EXPANSION_MAX_CANDIDATES = 3
+# A median off ten pairs is not a baseline. A chapter this short proposes nothing.
+EXPANSION_MIN_PAIRS = 20
+
 
 def _is_silence(exc: BaseException) -> bool:
     """Whether the provider gave nothing, as opposed to something unusable."""
@@ -11268,6 +11304,100 @@ def _rewrite_once(  # noqa: PLR0913 - one writer over one chapter, gated
         return None
 
 
+_SENTENCE_BREAK = re.compile(r'(?<=[.!?\u2026])["\u00bb\u201d\'\)\]]*\s+')
+
+
+def _measurable_paragraphs(markdown: str) -> list[str]:
+    """A chapter's prose, one paragraph to an entry, headings left out."""
+    kept = []
+    for block in markdown.split("\n\n"):
+        block = block.strip()
+        if block and not block.startswith("#"):
+            kept.append(re.sub(r"\s+", " ", block))
+    return kept
+
+
+def _aligned_sentences(source: str, translated: str) -> list[tuple[str, str]]:
+    """Sentence pairs whose alignment is certain, and no others.
+
+    The pairing above the sentence is given: the translation validation refuses a
+    chapter whose paragraph count does not match its source, so paragraph N is
+    paragraph N. Below it, a paragraph the two languages cut into a different
+    number of sentences is dropped whole rather than guessed at. A translator that
+    joins two English sentences into one is making a rendering choice, and an
+    alignment invented across it would measure the choice instead of the content.
+    """
+    source_paragraphs = _measurable_paragraphs(source)
+    target_paragraphs = _measurable_paragraphs(translated)
+    if len(source_paragraphs) != len(target_paragraphs):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for one, other in zip(source_paragraphs, target_paragraphs):
+        cut_one = [piece.strip() for piece in _SENTENCE_BREAK.split(one) if piece.strip()]
+        cut_other = [piece.strip() for piece in _SENTENCE_BREAK.split(other) if piece.strip()]
+        if len(cut_one) == len(cut_other):
+            pairs.extend(zip(cut_one, cut_other))
+    return pairs
+
+
+def _content_words(sentence: str) -> int:
+    return sum(
+        1
+        for word in re.findall(r"[^\W\d_]+", sentence, re.UNICODE)
+        if len(word) >= EXPANSION_MIN_WORD_LETTERS
+    )
+
+
+def _expansion_candidates(source: str, translated: str) -> list[dict[str, object]]:
+    """Sentences the translation may have explained, proposed with the pair quoted.
+
+    Explicitation — saying what the source leaves unsaid — is the one defect class
+    the rest of this chain structurally cannot see. The monolingual rewriter has no
+    source, so an added clause is simply what the target says; the monolingual
+    reader has none either, and an explained image reads *better* to it; the
+    revision check asks whether a fact moved, and nothing moved, because what was
+    added is true. Only the two calls holding both texts can see it, and the
+    critic's four slots go to meaning errors before they go to this.
+
+    So the candidates are counted rather than read. A finding here asserts nothing
+    beyond arithmetic: this sentence is far longer than this chapter's own sentences
+    usually are. The critic rules each one, and a wrong candidate costs a clause.
+    """
+    measured: list[tuple[float, str, str]] = []
+    for one, other in _aligned_sentences(source, translated):
+        held = _content_words(one)
+        if held >= EXPANSION_MIN_CONTENT_WORDS:
+            measured.append((_content_words(other) / held, one, other))
+    if len(measured) < EXPANSION_MIN_PAIRS:
+        return []
+    median = statistics.median(ratio for ratio, _, _ in measured)
+    if median <= 0:
+        return []
+    over = sorted(
+        (row for row in measured if row[0] >= median * EXPANSION_RATIO_MULTIPLE),
+        key=lambda row: row[0],
+        reverse=True,
+    )[:EXPANSION_MAX_CANDIDATES]
+    return [
+        {
+            "id": f"X-{index:02d}",
+            "severity": "warning",
+            "kind": "addition",
+            "rule": "the translation says more than the source",
+            "issue": (
+                f"this sentence carries {ratio / median:.2f} times the words this chapter's translation "
+                "usually spends on a sentence of its source. If it names, explains or completes something "
+                "the source leaves unsaid, the addition is the finding; if the target language simply "
+                "needs the words, the check is mistaken"
+            ),
+            "source": one,
+            "translated": other,
+            "fix": "",
+        }
+        for index, (ratio, one, other) in enumerate(over, start=1)
+    ]
+
+
 def _score_machine_findings(
     machine: list[dict[str, object]], verdicts: object
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
@@ -11367,6 +11497,10 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
         }
         for index, problem in enumerate(_forbidden_form_problems(translated, _locale_checks(locale_root)), start=1)
     )
+    # Counted rather than read, because reading it is what fails: the two
+    # monolingual roles cannot see an addition at all and the critic's four slots
+    # are spent on meaning before they reach one.
+    findings.extend(_expansion_candidates(source, translated))
     set_aside: list[dict[str, object]] = []
     verdict = "unread"
     machine_score = {"raised": len(findings), "held": len(findings), "mistaken": 0}
@@ -11411,11 +11545,31 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
                 # Labelled as the machine's, not mixed into the critic's own, so it
                 # judges them instead of inheriting them.
                 "machine_findings": [
-                    {"id": row["id"], "rule": row["rule"], "issue": row["issue"]} for row in findings
+                    {
+                        "id": row["id"],
+                        "rule": row["rule"],
+                        "issue": row["issue"],
+                        # Quoted for the checks that have a pair to show. A
+                        # glossary row names a term and the critic can find it;
+                        # an expansion candidate is two sentences, and without
+                        # them the id says nothing rulable.
+                        **({"source": row["source"]} if row.get("source") else {}),
+                        **({"translated": row["translated"]} if row.get("translated") else {}),
+                    }
+                    for row in findings
                 ],
                 # In the question rather than only in the prompt, so the bound the
                 # engine enforces and the bound the model is told are one value.
                 "answer_bound": f"Report at most {CRITIC_MAX_FINDINGS} findings, most severe first.",
+                # The other half of the bound, and the reason the expansion check
+                # exists at all: an addition that is true loses every time it has
+                # to compete with an assertion that is wrong, so it is not asked
+                # to. Ruling the machine findings is answered as well as the
+                # findings, never instead of them.
+                "machine_findings_bound": (
+                    "Rule every machine finding. They are answered in addition to your findings and do not "
+                    f"count against the {CRITIC_MAX_FINDINGS}."
+                ),
             }
             if unreadable:
                 capsule["retry"] = {
@@ -11606,7 +11760,10 @@ def _repair_translation(
                     "a reader of the translation alone could not place: the source says what it is and the "
                     "translation does not, so name the thing where it first appears — the vessel, the trade, "
                     "the office — and leave the rest of the sentence as it stands. Do not gloss it twice and "
-                    "do not explain it; one word in the right place is the whole repair."
+                    "do not explain it; one word in the right place is the whole repair. A finding of kind "
+                    "`addition` is the opposite: the translation says something the source does not, so take "
+                    "that out and leave the sentence otherwise as it stands. Losing the addition is the whole "
+                    "repair, and a sentence rebuilt around the gap costs more than the addition did."
                 ),
             },
         }

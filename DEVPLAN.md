@@ -5034,9 +5034,9 @@ English  «…the cage ticked on, drinking.»
 **Done when:** A reader is only asked what it was given enough to answer.
 
 
-## The translation may add what is true and unwritten ⏸️
+## The translation may add what is true and unwritten ✅
 
-**Status: ⏸️ Proposed — 2026-09-08, measured on a closing line that came back explained**
+**Status: ✅ Done — 2026-09-08. The statistic this entry proposed could not see the defect, and the one that can was measured against it**
 
 **landfall CH-0003 ends `the cage ticked on, drinking`. The Italian says «la gabbia ticchettava ancora e dentro le zecche bevevano».** The chapter names what is in the cage thirty paragraphs earlier, in both languages; the English closes without repeating it. The Italian repeats it. Nothing in the chain refuses this, and the addition has now survived two full review passes.
 
@@ -5051,15 +5051,33 @@ English  «…the cage ticked on, drinking.»
 **Fix — the two halves, neither of which is more prompt.** Explicitation does not compete for a slot, and it is proposed mechanically rather than found by reading.
 
 - **Its own budget.** The critic's four findings are for defects of meaning and craft. Additions are answered separately and bounded separately, so a chapter with four blocking errors can still report the clause that was added. This is the same correction the reader's two questions just received: two questions of different kinds asked at the same scope, and the rarer one loses.
-- **A mechanical candidate channel, through the machinery that already exists.** `machine_findings` already carries checks the critic rules `holds|mistaken`, which is how the glossary check reaches it. Sentence expansion is measurable: the chapter's own median target-to-source word ratio is the baseline — Italian runs longer than English and by how much is a property of this pair and this book, not a constant — and a sentence far above its own chapter's median is a candidate. Paragraph counts already match, because the translation validation enforces it, so the alignment the check needs is available.
+- **A mechanical candidate channel, through the machinery that already exists.** `machine_findings` already carries checks the critic rules `holds|mistaken`, which is how the glossary check reaches it. Paragraph counts already match, because the translation validation enforces it, so the alignment the check needs is available.
+
+**What to count was measured before it was built, and the entry proposed the wrong statistic.** The four candidate statistics, on the closing line, against the rendering carrying the addition and the rendering without it:
+
+| statistic | with the addition | without it | candidates per chapter |
+|---|---|---|---|
+| every word, as this entry proposed | 1.40x | 1.40x | indistinguishable |
+| words of four letters or more | 1.50x | 1.17x | 2 to 4 |
+| an Italian function-word list | 1.50x | 1.33x | 0 to 3 |
+| the chapter's 25 commonest word types | 2.03x | 1.87x | no separation |
+
+**A word count cannot see this defect at all.** The addition costs three words — `e dentro le zecche` — and the rendering that does not carry it spends three on function words: `continuava a … e a`. Both run 1.40 times the chapter's median and the check would have proposed the correct sentence as often as the defective one.
+
+**Length is the proxy for a content word that no locale has to configure.** An Italian stoplist separates the pair as well and puts a language into an engine that is meant to take any; deriving the function words from the chapter's own frequency table is language-free and does not separate them at all. Four letters is a property of function words in the languages this has been run on, and it is stated as that rather than as a rule.
+
+**A second mechanical channel was tried and refuted: a glossary term the translation names where the source sentence does not.** It is the shape of the defect — the cage line names the ticks — and it fails twice over. It proposes 21 to 34 candidates a chapter, nearly all of them a common word doing ordinary work (`a step → un passo`, `the rolls → i registri`), and it misses the case it was built for: the glossary fixes `lantern-ticks → zecche-lanterna` and the sentence says «le zecche», which the term matcher does not recognise.
+
+**The measured precision, stated because the next person should re-measure it.** Over CH-0001, CH-0002 and both versions of CH-0003 the check proposes twelve candidates, of which two are real additions by hand: the cage, and `The Fen Sow` → «La chiatta Scrofa della Palude», which is the deliberate repair of the `unidentified` defect two entries above. The rest are structural — English writes a possessive ellipsis (`the lieutenant Torv's`) where Italian must build the phrase. Both exclusions are named in the critic's prompt, and a wrong candidate costs a clause of its answer, never a repair. The glossary check shipped at five right out of twelve and this is the same order of cost.
 
 **Tasks:**
-- [ ] A per-sentence expansion check: the chapter's own median target/source word ratio as the baseline, sentences above a stated multiple of it proposed as candidates, with the pair quoted
-- [ ] Candidates travel as `machine_findings`, so the critic rules each `holds` or `mistaken` and a wrong candidate costs a clause rather than a repair
-- [ ] Additions are answered under their own bound, separate from `CRITIC_MAX_FINDINGS`, so they do not compete with meaning errors for four slots
-- [ ] Test: a translated sentence carrying a clause with no counterpart in the source is proposed; a sentence merely longer because the target language is longer is not; a chapter whose critic already returned four blocking findings still reports the addition
-- [ ] Re-measure landfall CH-0003: the closing line is the case this is built for
-- [ ] Suite green. Reinstall, commit & push
+- [x] A per-sentence expansion check: the chapter's own median target/source ratio as the baseline, sentences above a stated multiple of it proposed as candidates, with the pair quoted — **counting words of four letters or more, not words**, for the reason measured above
+- [x] Candidates travel as `machine_findings`, so the critic rules each `holds` or `mistaken` and a wrong candidate costs a clause rather than a repair
+- [x] Additions are answered under their own bound, separate from `CRITIC_MAX_FINDINGS`: three candidates a chapter, and the capsule carries `machine_findings_bound` saying they are answered in addition to the four and not instead of them
+- [x] An addition is repaired by the call that holds the source, and the instruction is to take the addition out and leave the sentence otherwise standing — the opposite of the `unidentified` repair, which puts a word in
+- [x] Test: a translated sentence carrying a clause with no counterpart in the source is proposed; a sentence merely longer because the target language is longer is not; a chapter whose critic already returned four blocking findings still reports the addition. Fourteen tests, including the two that keep the check honest — a paragraph the two languages cut into a different number of sentences is dropped rather than aligned by guess, and a translation that runs half again as long *everywhere* proposes nothing
+- [x] Re-measure landfall CH-0003, with the shipped check: on the text as it stands it proposes three candidates and none of them is an addition; on the version that carried the defect it proposes the closing line
+- [x] Suite green: 879 passed, 405 subtests (era 865). Reinstall, commit & push
 
 **Done when:** A sentence the source leaves short cannot be explained without something saying so.
 
