@@ -4998,3 +4998,36 @@ The reader is denied the glossary by design, so that an unreadable term is repor
 - [x] Suite green. Reinstall, commit & push
 
 **Done when:** A pass that fixed everything it was told about is not recorded as a failure.
+
+
+## A question about the whole chapter is asked from one slice of it ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-08, measured on a sentence the repair explained away**
+
+**The last sentence of landfall's CH-0003 gained an explanation the English does not have, because a reader was asked a chapter-level question with a twelfth of the chapter in front of it.**
+
+```
+before   «…la gabbia ticchettava ancora, bevendo.»
+after    «…la gabbia ticchettava ancora, e le zecche dentro bevevano.»
+English  «…the cage ticked on, drinking.»
+```
+
+**The chapter says what the cage holds, in both languages, thirty paragraphs earlier.** Italian paragraph 21: «Decine di zecche-lanterna si ammassavano sui fili della gabbia». English: `Lantern-ticks, dozens, crowded on the cage wires`. The closing image withholds it deliberately, because it has already been given.
+
+**The reader that raised it was shown paragraphs 49 to 51 and nothing else.** `_locale_reader_capsule` carries `whole_chapter_for_the_summary` on the first slice only, and its own comment says why: *a reader shown eleven paragraphs cannot say what the chapter is about*. Every slice after the first sees its twelve paragraphs. So the reader answered truthfully about what it was given — it even said so, calling the cage *«una cosa che tutti conoscono e che io non riesco a identificare»*, which is a reader telling you it walked in halfway.
+
+**The two questions the reader is asked have different scopes and are asked at the same scope.** *Would a writer of this language have produced this sentence* is local: the sentence is the evidence, and a slice is the right window. *Is there a name whose nature the text never gives* is a claim about the whole chapter, and no slice can support it. The second question was added to the same prompt as the first and inherited its bound.
+
+**The cost is not a wasted call.** The finding is `unidentified`, so `_bilingual_repair_findings` routes it to the call that holds the source — the one path where a model is asked to supply what the translation lacks. It did, and what it supplied was exposition the author had withheld. The meaning gate could not refuse it: nothing moved. The ticks are in the cage and they are drinking. Adding information that is true and unwritten is not a fact moving, and the chain has no check for it. The same paragraph also gained «un Silenzioso **della Voce**» where the English has `a Silent One`.
+
+**Fix.** Ask each question at its own scope. The stumble question stays per slice, where it works. The unidentified question is asked once per chapter, by the call that already holds the whole text — the first slice — and the other slices are not asked it at all. A name reported by a reader that could not have seen the chapter is not evidence, and until this is done, that finding class costs a repair call and can cost a sentence.
+
+**Tasks:**
+- [ ] `locale-reader.md` asks the unidentified question only of the call that carries the whole chapter, and the per-slice calls answer stumbles alone
+- [ ] The capsule says which question this call is being asked, so a slice cannot answer one it was not given
+- [ ] Test: a chapter read in five slices produces `unidentified` findings from the first call and none from the others; a chapter short enough for one slice is unchanged
+- [ ] Test: a name introduced in paragraph 21 and used again in paragraph 51 raises no question
+- [ ] Re-run landfall CH-0003 and check the closing sentence comes back without the gloss
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A reader is only asked what it was given enough to answer.
