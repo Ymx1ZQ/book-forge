@@ -5032,3 +5032,33 @@ English  «…the cage ticked on, drinking.»
 - [x] Suite green. Reinstall, commit & push
 
 **Done when:** A reader is only asked what it was given enough to answer.
+
+
+## The translation may add what is true and unwritten ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-08, measured on a closing line that came back explained**
+
+**landfall CH-0003 ends `the cage ticked on, drinking`. The Italian says «la gabbia ticchettava ancora e dentro le zecche bevevano».** The chapter names what is in the cage thirty paragraphs earlier, in both languages; the English closes without repeating it. The Italian repeats it. Nothing in the chain refuses this, and the addition has now survived two full review passes.
+
+**The rule is already written, twice, in the critic's own prompt.** Category 1: *Include anything the source withholds that the translation reveals.* Category 5: *a sentence the source leaves short and the translation explains.* This is the second time in this project that a defect has been produced against a rule stated twice — the calque entry above found ten of them against two statements — and the conclusion there holds here: **a third statement is not the lever.**
+
+**What is different this time is that the reason is measurable.** `CRITIC_MAX_FINDINGS = 4`, and the pass returned exactly four findings, every one of them `blocking` and every one a real meaning error: an erased motif, `given up` rendered as `perso`, a three-clause parallel collapsed, and `un Silenzioso della Voce` asserting the wrong allegiance. The critic was at its ceiling. An addition that is *true* ranks below four assertions that are *wrong*, and correctly so. The rule did not fail to be stated or to be understood; it failed to compete.
+
+**And it is the one defect class the rest of the chain structurally cannot see.** The monolingual reviser has no source, so an added clause is simply what the Italian says — on this pass it rewrote the clause, changing «e le zecche dentro bevevano» to «e dentro le zecche bevevano», and kept the content. The monolingual reader has no source either, and an explained image reads *better* to it, not worse. The revision check asks whether a fact moved: nothing moved, because the ticks are in the cage and they are drinking. Every gate this chain has is either blind to the source or asking a different question.
+
+**The published work names it.** Explicitation is one of the classic candidates for a translation universal — Blum-Kulka's explicitation hypothesis — and it sits beside simplification and normalisation in the same feature set that the post-editese measurements already cited in this file use to tell translated text from text written from scratch (Toral, arXiv 1907.00900). It is not an accident of one model: it is what translation does unless something stops it.
+
+**Fix — the two halves, neither of which is more prompt.** Explicitation does not compete for a slot, and it is proposed mechanically rather than found by reading.
+
+- **Its own budget.** The critic's four findings are for defects of meaning and craft. Additions are answered separately and bounded separately, so a chapter with four blocking errors can still report the clause that was added. This is the same correction the reader's two questions just received: two questions of different kinds asked at the same scope, and the rarer one loses.
+- **A mechanical candidate channel, through the machinery that already exists.** `machine_findings` already carries checks the critic rules `holds|mistaken`, which is how the glossary check reaches it. Sentence expansion is measurable: the chapter's own median target-to-source word ratio is the baseline — Italian runs longer than English and by how much is a property of this pair and this book, not a constant — and a sentence far above its own chapter's median is a candidate. Paragraph counts already match, because the translation validation enforces it, so the alignment the check needs is available.
+
+**Tasks:**
+- [ ] A per-sentence expansion check: the chapter's own median target/source word ratio as the baseline, sentences above a stated multiple of it proposed as candidates, with the pair quoted
+- [ ] Candidates travel as `machine_findings`, so the critic rules each `holds` or `mistaken` and a wrong candidate costs a clause rather than a repair
+- [ ] Additions are answered under their own bound, separate from `CRITIC_MAX_FINDINGS`, so they do not compete with meaning errors for four slots
+- [ ] Test: a translated sentence carrying a clause with no counterpart in the source is proposed; a sentence merely longer because the target language is longer is not; a chapter whose critic already returned four blocking findings still reports the addition
+- [ ] Re-measure landfall CH-0003: the closing line is the case this is built for
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A sentence the source leaves short cannot be explained without something saying so.
