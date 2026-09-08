@@ -5000,9 +5000,9 @@ The reader is denied the glossary by design, so that an unreadable term is repor
 **Done when:** A pass that fixed everything it was told about is not recorded as a failure.
 
 
-## A question about the whole chapter is asked from one slice of it 🔄
+## A question about the whole chapter is asked from one slice of it ✅
 
-**Status: 🔄 In progress — 2026-09-08, measured on a sentence the repair explained away**
+**Status: ✅ Done — 2026-09-08, measured on a sentence the repair explained away**
 
 **The last sentence of landfall's CH-0003 gained an explanation the English does not have, because a reader was asked a chapter-level question with a twelfth of the chapter in front of it.**
 
@@ -5028,7 +5028,7 @@ English  «…the cage ticked on, drinking.»
 - [x] **The answer is dropped as well as unasked.** `_locale_reader_findings` takes `names_asked` and ignores the `unidentified` block without it. A prompt is a request, and this finding class reaches a repair that changes the prose
 - [x] Test: the capsule of the first slice lists both questions and a later slice lists one; a chapter short enough for a single call keeps both; a slice still reports its stumbles
 - [x] Test, end to end over a sliced chapter: every call returns the same unidentified name and exactly one is heard
-- [ ] Re-run landfall CH-0003 and check the closing sentence comes back without the gloss
+- [x] Re-run landfall CH-0003 and check the closing sentence comes back without the gloss. **It needed the chapter retranslated, not re-revised.** The scope fix stops the finding being produced; it cannot withdraw a sentence the repair already wrote, and the reviser has no source to notice it with. Translated again from the English, the closing line is «la gabbia continuava a ticchettare e a bere» for `the cage ticked on, drinking`, and it then survived a further review pass unchanged. The reader raised one name on that pass — `la Voce`, a glossary term — and it went to the author instead of the repair, which is the same defect caught one stage earlier
 - [x] Suite green. Reinstall, commit & push
 
 **Done when:** A reader is only asked what it was given enough to answer.
@@ -5064,9 +5064,9 @@ English  «…the cage ticked on, drinking.»
 **Done when:** A sentence the source leaves short cannot be explained without something saying so.
 
 
-## The translator retries what the model said, not whether it answered ⏸️
+## The translator retries what the model said, not whether it answered ✅
 
-**Status: ⏸️ Proposed — 2026-09-08, measured on two runs killed by a rate limit that had lifted by the time anyone looked**
+**Status: ✅ Done — 2026-09-08, measured on two runs killed by a rate limit that had lifted by the time anyone looked**
 
 **Retranslating landfall CH-0003 failed twice on the same transient refusal, and each failure ended the route on its first occurrence.**
 
@@ -5101,11 +5101,11 @@ except BookForgeError as exc:
 **Fix.** The provider call and the claim go inside the loop the retries already govern, so a provider that refuses is the case `_wait_before_retry` was written for. `ProviderLimitReached` still passes through untouched — a spending cap is not transient, and the distinction shipped earlier today is what makes widening the retry safe.
 
 **Tasks:**
-- [ ] `claim_task` and `runner(...)` move inside the guarded block, so a provider failure spends an attempt rather than the route
-- [ ] `ProviderLimitReached` is re-raised, not retried — a cap does not lift by asking again
-- [ ] `_wait_before_retry` already backs off; check that a provider refusal waits before the next ask rather than hammering the same limit
-- [ ] Test: a runner that refuses once and answers on the second ask produces a translated chapter; one that refuses `TRANSLATION_ATTEMPTS` times sets the chapter aside as now; a spending limit ends the route on the first refusal
-- [ ] The same shape audited in the other routes that call a runner outside their own retry
-- [ ] Suite green. Reinstall, commit & push
+- [x] `claim_task` and `runner(...)` are asked inside a handler of their own, under `TRANSLATOR_PROVIDER_ASKS` — **counted apart from `TRANSLATION_ATTEMPTS`**, which was not in the original plan and is the right shape: those three are repairs, each carrying what was wrong with the last answer, and a provider that never answered produced nothing to repair. Spending a repair on it would leave the content gate with fewer chances for a reason unrelated to the content
+- [x] `ProviderLimitReached` is re-raised, not retried
+- [x] `_wait_before_retry` is called between asks, so a refusal waits rather than hammering the same limit
+- [x] Test: one refusal then an answer translates the chapter; two in a row still do; a provider that never answers gives up after `TRANSLATOR_PROVIDER_ASKS`; a spending limit ends it on the first refusal; the repair attempts are not spent
+- [x] **The audit, and what it found.** Every `runner(...)` call site read with the AST rather than by eye — 25 sites, 8 inside a `try` whose handler retries. A flat count of the other 17 would be wrong: most are advisory by design (a style advisor, the monolingual reader, whose failure leaves the other findings standing) or sit inside a caller's own loop. One is a real instance of this defect and is fixed in the same edit: **`_revision_moved_meaning` fails closed, so a single unanswered call discards every rewrite in the passage.** Failing closed is right for an answer the check cannot trust; an answer that never arrived is not one, and a momentary refusal is not worth a passage. The remaining sites are candidates, not verdicts — a per-site judgement needs the caller's behaviour and is not done here
+- [x] Suite green. Reinstall, commit & push
 
 **Done when:** A provider saying *retry shortly* is retried shortly.

@@ -2027,3 +2027,76 @@ class TheNamesQuestionBelongsToTheWholeChapterTests(TranslationReviewFixture):
         )
         self.assertGreater(len(self.bf._paragraph_slices(long_chapter)), 1, "the chapter must be sliced")
         self.assertEqual(len([row for row in found if row["kind"] == "unidentified"]), 1)
+
+
+class AProviderThatDidNotAnswerIsAskedAgainTests(TranslationReviewFixture):
+    """Retranslating landfall CH-0003 died twice on `[Z.AI] temporarily rate-limited
+    upstream`, a condition that had lifted by the time either model was probed. The
+    translator's retry loop guards what the model said — malformed JSON, a failed
+    validation — and the call deciding whether it said anything sat above it, so
+    `ProviderOutcomeUnknown`, the class this engine defines for *ask again*, ended
+    the route on its first occurrence."""
+
+    class RefusesThenAnswers(ScriptedProvider):
+        """Refuses the named role a set number of times, the way an upstream limit does."""
+
+        def __init__(self, answers, *, role, refusals, limit=False, **kw):
+            super().__init__(answers, **kw)
+            self.role, self.refusals, self.limit = role, refusals, limit
+            self.refused = 0
+
+        def __call__(self, name, envelope, attempt_dir):
+            if name == self.role and self.refused < self.refusals:
+                self.refused += 1
+                self.calls.append(f"{name}:refused")
+                if self.limit:
+                    raise self.bf.ProviderLimitReached(
+                        "The provider refused the call and asking again will not clear it: "
+                        "APIError: Key limit exceeded (daily limit)."
+                    )
+                raise self.bf.ProviderOutcomeUnknown(
+                    "ses-x",
+                    "OpenCode ended without a complete result: APIError: [Z.AI] "
+                    "z-ai/glm-5.3-flash is temporarily rate-limited upstream.",
+                )
+            return super().__call__(name, envelope, attempt_dir)
+
+    def provider(self, **kw):
+        made = self.RefusesThenAnswers([translation(GOOD_BODY)], **kw)
+        made.bf = self.bf
+        return made
+
+    def chapter(self):
+        return self.project / f"books/{self.book}/translations/it/chapters/CH-0001.md"
+
+    def test_a_momentary_refusal_costs_an_ask_and_not_the_chapter(self):
+        provider = self.provider(role="translator", refusals=1)
+        self.translate(provider)
+        self.assertEqual(provider.refused, 1)
+        self.assertTrue(self.chapter().exists(), "the chapter must be translated on the second ask")
+
+    def test_two_refusals_in_a_row_are_still_survived(self):
+        provider = self.provider(role="translator", refusals=2)
+        self.translate(provider)
+        self.assertTrue(self.chapter().exists())
+
+    def test_a_provider_that_never_answers_gives_up(self):
+        provider = self.provider(role="translator", refusals=99)
+        with self.assertRaises(self.bf.ProviderOutcomeUnknown):
+            self.translate(provider)
+        self.assertEqual(provider.refused, self.bf.TRANSLATOR_PROVIDER_ASKS)
+
+    def test_a_spending_limit_ends_it_on_the_first_refusal(self):
+        """A cap does not lift by asking again, and telling the two apart is what
+        makes widening the retry safe."""
+        provider = self.provider(role="translator", refusals=99, limit=True)
+        with self.assertRaises(self.bf.ProviderLimitReached):
+            self.translate(provider)
+        self.assertEqual(provider.refused, 1, "a cap must not be asked three times")
+
+    def test_the_repair_attempts_are_not_spent_on_the_provider(self):
+        """`TRANSLATION_ATTEMPTS` are repairs, each carrying what was wrong with the
+        last answer. A provider that never answered produced nothing to repair."""
+        provider = self.provider(role="translator", refusals=2)
+        self.translate(provider)
+        self.assertEqual(provider.calls.count("translator"), 1, "one answer, after two refusals")

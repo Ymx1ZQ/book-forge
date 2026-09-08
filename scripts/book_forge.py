@@ -9257,6 +9257,12 @@ def _reviser_budget(contract: dict[str, object], findings: list[object]) -> int:
 # How many times the translator is asked for a chapter before it is set aside. One
 # first pass and two repairs, each carrying what the gate refused.
 TRANSLATION_ATTEMPTS = 3
+# How many times the provider is asked before an attempt is given up, counted apart
+# from `TRANSLATION_ATTEMPTS`. Those three are repairs: each one carries what was
+# wrong with the last answer and asks again. A provider that never answered has
+# produced nothing to repair, so spending a repair on it would leave the content
+# gate with fewer chances for a reason that has nothing to do with the content.
+TRANSLATOR_PROVIDER_ASKS = 3
 
 
 class TranslationRefused(BookForgeError):
@@ -10937,8 +10943,30 @@ def _revision_moved_meaning(
             max_output_tokens=REVISION_CHECK_MAX_OUTPUT,
             prompt_role="revision-check",
         )
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        result = runner("translation-critic", envelope, Path(claim["capsule"]).parent)
+        # Asked again when the provider does not answer, before the closed door
+        # below. Failing closed is right for an answer this check cannot trust, and
+        # an answer that never arrived is not one: it costs every rewrite in the
+        # passage, and a momentary refusal is not worth a passage.
+        result = None
+        for provider_ask in range(1, TRANSLATOR_PROVIDER_ASKS + 1):
+            try:
+                claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+                result = runner("translation-critic", envelope, Path(claim["capsule"]).parent)
+                break
+            except ProviderLimitReached:
+                raise
+            except BookForgeError as unanswered:
+                if claim is not None:
+                    try:
+                        _set_attempt_failure(
+                            root, claim["attempt"], block=False, reason=str(unanswered)[:200]
+                        )
+                    except BookForgeError:
+                        pass
+                    claim = None
+                if provider_ask == TRANSLATOR_PROVIDER_ASKS:
+                    raise
+                _wait_before_retry("revision-check", chapter_id, provider_ask, unanswered, runner)
         mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
         _refuse_empty_answer("translation-critic", chapter_id, result)
         answer = _parse_contract_json(str(result["text"]))
@@ -11732,9 +11760,37 @@ def _translate_one(
                 raise
             capsule = {**capsule, "repair": {"reason": repair["reason"], "previous_output_omitted": True}}
             envelope = _translator_envelope(capsule)
-        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-        attempt_dir = Path(claim["capsule"]).parent
-        result = runner("translator", envelope, attempt_dir)
+        # Asking is inside a handler of its own. The block below retries what the
+        # model said — malformed JSON, a failed validation — and the call that decides
+        # whether it said anything used to sit above it, so `ProviderOutcomeUnknown`,
+        # the class this engine defines for *ask again*, ended the route on its first
+        # occurrence. Retranslating landfall CH-0003 died twice on `temporarily
+        # rate-limited upstream`, a condition that had lifted by the time either model
+        # was probed, and the engine's answer to it was a person with a shell loop.
+        claim = None
+        result = None
+        for provider_ask in range(1, TRANSLATOR_PROVIDER_ASKS + 1):
+            try:
+                claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+                attempt_dir = Path(claim["capsule"]).parent
+                result = runner("translator", envelope, attempt_dir)
+                break
+            except ProviderLimitReached:
+                # A spending cap does not lift by asking again, and telling it apart
+                # from a momentary refusal is what makes widening this retry safe.
+                raise
+            except BookForgeError as unanswered:
+                if claim is not None:
+                    try:
+                        _set_attempt_failure(
+                            root, claim["attempt"], block=False, reason=str(unanswered)[:200]
+                        )
+                    except BookForgeError:
+                        pass
+                    claim = None
+                if provider_ask == TRANSLATOR_PROVIDER_ASKS:
+                    raise
+                _wait_before_retry("translator", chapter_id, provider_ask, unanswered, runner)
         calls += 1
         mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
         _write_bytes_atomic(attempt_dir / "raw-output.txt", str(result["text"]).encode())
