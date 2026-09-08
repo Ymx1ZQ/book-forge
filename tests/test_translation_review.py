@@ -2255,3 +2255,70 @@ class AnAdditionDoesNotCompeteWithAMeaningErrorTests(TranslationReviewFixture):
         source and reads an explained image as the better sentence."""
         _, provider = self.read_back(self.FOUR_BLOCKING)
         self.assertIn("addition", [row.get("kind") for row in provider.repaired_with])
+
+
+class AClaimHandedBackIsNotAFailureTests(TranslationReviewFixture):
+    """Every slice of landfall CH-0003 that was rewritten sits in `plan.json` as
+    `validation_failed`, with `passage revised` in the field meant for what went
+    wrong, because releasing a claim and recording a failure were one function.
+
+    Nothing downstream was misled — every one of those sites passes `block=False`,
+    so the task went back to `pending` and the text never reached a model as repair
+    context — but the attempt log is the audit surface, and on it a run that worked
+    read exactly like one that failed six times."""
+
+    def attempts(self):
+        plan = json.loads((self.project / ".book-forge" / "plan.json").read_text(encoding="utf-8"))
+        return plan, plan["attempts"]
+
+    def pass_over(self, answers):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = ASliceThatCameBackUnusableTests.Reviser(answers, critic={"findings": [], "verdict": "faithful"})
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return provider
+
+    def good(self):
+        return json.dumps({"revised_markdown": f"# La chiatta dell'alba\n\n{REVISED_BODY}", "changed": []})
+
+    def test_a_pass_that_worked_records_no_failure(self):
+        self.pass_over([self.good()])
+        _, attempts = self.attempts()
+        failed = [row for row in attempts if row["state"] == "validation_failed"]
+        self.assertEqual(failed, [], "nothing failed, so nothing may be recorded as a failure")
+
+    def test_the_work_that_was_done_is_still_recorded(self):
+        self.pass_over([self.good()])
+        _, attempts = self.attempts()
+        released = [row["note"] for row in attempts if row["state"] == "released"]
+        self.assertIn("passage revised", released)
+        self.assertIn("advisory pass complete", released)
+
+    def test_a_released_claim_carries_no_failure_field(self):
+        """`failure` is what a later capsule may be handed as what went wrong last
+        time, and `passage revised` must never be handed to a model as that."""
+        self.pass_over([self.good()])
+        _, attempts = self.attempts()
+        self.assertEqual([row for row in attempts if row["state"] == "released" and row.get("failure")], [])
+
+    def test_the_task_is_pending_again_so_the_next_call_can_claim_it(self):
+        self.pass_over([self.good()])
+        plan, _ = self.attempts()
+        revising = [row for row in plan["tasks"] if row["id"].startswith("LOCREV-")]
+        self.assertTrue(revising)
+        self.assertEqual([row["state"] for row in revising], ["pending"])
+
+    def test_a_slice_that_genuinely_failed_still_records_one(self):
+        self.pass_over([ASliceThatCameBackUnusableTests.TRUNCATED] * 2)
+        _, attempts = self.attempts()
+        failed = [row for row in attempts if row["state"] == "validation_failed"]
+        self.assertTrue(failed, "a slice that came back unusable is a failure and stays one")
+        self.assertTrue(all(row.get("failure") for row in failed))
+
+    def test_a_released_claim_is_not_offered_as_repair_context(self):
+        self.pass_over([self.good()])
+        plan, attempts = self.attempts()
+        released = next(row for row in attempts if row["state"] == "released")
+        self.assertIsNone(self.bf._last_validation_failure(plan, str(released["task"])))
+
+    def test_recovery_does_not_walk_completed_work(self):
+        self.assertNotIn("released", self.bf.AUTO_RECOVERABLE_ATTEMPT_STATES)

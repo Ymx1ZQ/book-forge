@@ -1842,7 +1842,10 @@ def ready_frontier(project: Path | str) -> list[dict[str, object]]:
 # A deterministic failure is one a retry can answer: the answer was truncated, or
 # unparseable, or failed validation. `outcome_unknown` is not one of them — the
 # provider accepted the call and a retry may pay for it twice, which is a judgement
-# about money and belongs to a person.
+# about money and belongs to a person. Nor is `released`, and that absence is the
+# point of it: a claim handed back after the work under it was done is not something
+# to recover, and while releasing and failing were one function the recovery pass
+# walked every rewritten slice looking for something to retry.
 AUTO_RECOVERABLE_ATTEMPT_STATES = frozenset({"failed_length", "validation_failed", "orphaned"})
 MAX_AUTO_RETRIES = 3
 
@@ -6385,7 +6388,9 @@ def _reset_universe_design_tasks(root: Path) -> None:
                 attempt["state"] = "orphaned"
                 attempt["resolution"] = "refresh"
         for attempt in plan["attempts"]:
-            if attempt["task"] == task_id and attempt["state"] in {"running", "succeeded", "validation_failed", "outcome_unknown", "blocked"}:
+            if attempt["task"] == task_id and attempt["state"] in {
+                "running", "succeeded", "validation_failed", "released", "outcome_unknown", "blocked",
+            }:
                 attempt["state"] = "orphaned"
                 attempt["resolution"] = "refresh"
         task["state"] = "pending"
@@ -7662,6 +7667,33 @@ def _set_attempt_failure(root: Path, attempt_id: str, *, block: bool, reason: st
             _write_json(run_path, run)
 
 
+def _release_claim(root: Path, attempt_id: str, *, note: str) -> None:
+    """Hand a claim back after the work under it was done.
+
+    A stage that runs several calls under one task id — the reviser over five
+    slices, the reader over the same five, the critic over a chapter it then
+    repairs — has to release the claim between calls and return the task to
+    `pending`. Until this existed the only function that did was the one that
+    records a failure, so every rewritten slice of landfall CH-0003 sits in
+    `plan.json` as `validation_failed` with `passage revised` in the field meant
+    for what went wrong. The attempt log is the audit surface, and on it a run
+    that worked was indistinguishable from one that failed six times.
+
+    The note goes in its own field. `failure` is what a later capsule may be
+    handed as repair context, and `passage revised` is not something a model
+    should ever be told went wrong with its last answer.
+    """
+    plan = _load_plan(root)
+    attempt = _attempt(plan, attempt_id)
+    attempt["state"] = "released"
+    attempt["note"] = note
+    task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+    task["state"] = "pending"
+    task.pop("attempt", None)
+    _save_plan(root, plan)
+    render_plan(root)
+
+
 def _ensure_draft_task(root: Path, book_id: str, chapter_id: str) -> dict[str, object]:
     task_id = f"DRAFT-{book_id}-{chapter_id}"
     plan = _load_plan(root)
@@ -7916,7 +7948,7 @@ def rewrite_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, lo
                 pieces.append(piece)
                 changed.extend(answer.get("changed") or [])
                 cost += float(result.get("cost") or 0.0)
-                _set_attempt_failure(root, claim["attempt"], block=False, reason="bake-off passage")
+                _release_claim(root, claim["attempt"], note="bake-off passage")
             rewritten = "\n\n".join(pieces)
             _write_bytes_atomic(root / prefix / slug / "rewrite.md", rewritten.encode("utf-8"))
             words = len(re.findall(WORD_RE, rewritten, re.UNICODE))
@@ -10779,7 +10811,7 @@ def _read_one_slice(  # noqa: PLR0913 - one call over one run of paragraphs
                 f"[locale-reader] {chapter_id}: {len(findings)} stumble(s) a reader without the source hit",
                 file=sys.stderr,
             )
-        _set_attempt_failure(root, claim["attempt"], block=False, reason="advisory pass complete")
+        _release_claim(root, claim["attempt"], note="advisory pass complete")
         return findings
     except Exception as unread:
         # Broad on purpose. This pass advises and nothing downstream needs it, so it
@@ -11020,7 +11052,7 @@ def _revision_moved_meaning(
             for row in rows
             if isinstance(row, dict) and str(row.get("after") or "").strip()
         ]
-        _set_attempt_failure(root, claim["attempt"], block=False, reason="revision checked")
+        _release_claim(root, claim["attempt"], note="revision checked")
         return moved
     except Exception as unread:
         if claim is not None:
@@ -11094,7 +11126,7 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
                     f"of {len(passage.split(chr(10) + chr(10)))}"
                 )
             rewrites = answer.get("changed") if isinstance(answer.get("changed"), list) else []
-            _set_attempt_failure(root, claim["attempt"], block=False, reason="passage revised")
+            _release_claim(root, claim["attempt"], note="passage revised")
             return revised, [row for row in rewrites if isinstance(row, dict)], True
         except ProviderLimitReached:
             # Not this slice's failure and not survivable by asking again: every
@@ -11805,7 +11837,7 @@ def _repair_translation(
                 return None
             _wait_before_retry("translation-critic", f"{chapter_id} repair", attempt_number, exc, runner)
             continue
-        _set_attempt_failure(root, claim["attempt"], block=False, reason="repair merged into the translation")
+        _release_claim(root, claim["attempt"], note="repair merged into the translation")
         return repaired
     return None
 
@@ -11973,7 +12005,7 @@ def _translate_one(
             continue
         if must_review and attempt_number == 1:
             previous_output = value
-            _set_attempt_failure(root, claim["attempt"], block=False, reason="pivotal-review-requested")
+            _release_claim(root, claim["attempt"], note="pivotal-review-requested")
             continue
         if _translation_review_enabled(_read_json(root / "book-forge.yaml")):
             value, review = _read_revise_and_review(

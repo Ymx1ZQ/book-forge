@@ -4925,9 +4925,9 @@ The chapter's own summary, two lines later, reads `CH-0003: 42 sentence(s) writt
 **Done when:** A chapter says how much of itself was revised.
 
 
-## A stage that finished is recorded as a validation failure ⏸️
+## A stage that finished is recorded as a validation failure ✅
 
-**Status: ⏸️ Proposed — 2026-09-08, read off the plan while watching a run that was going well**
+**Status: ✅ Done — 2026-09-09. Six sites moved, and the receipt audit was read before deciding not to touch it**
 
 **Every slice of landfall's CH-0003 that was successfully rewritten is recorded in `plan.json` as `validation_failed`.**
 
@@ -4948,11 +4948,13 @@ ATT-1145  LOCREAD-BOOK-0001-CH-0003-it validation_failed  advisory pass complete
 **Fix.** Releasing a claim is its own outcome and needs its own name. A `_release_claim(root, attempt_id, *, note)` writing a distinct attempt state — the work was done, the claim is handed back, the task continues — and the five sites move to it. The enumerations that name `validation_failed` have to learn it: `AUTO_RECOVERABLE_ATTEMPT_STATES`, the two scans at the top of the recovery pass, and the dependency check that asks which attempts a task has had.
 
 **Tasks:**
-- [ ] `_release_claim` records a completed stage under its own attempt state and returns the task to `pending`, and the five success sites plus the routing one use it
-- [ ] The state enumerations learn the new one: recovery does not treat a released claim as recoverable, and the dependency check still sees the attempt
-- [ ] Test: a chapter revised over five slices leaves no `validation_failed` in the plan, and a slice that genuinely failed still does
-- [ ] Test: `_last_validation_failure` does not return a released claim, so a later capsule cannot be handed `passage revised` as repair context if one of these sites ever blocks
-- [ ] Suite green. Reinstall, commit & push
+- [x] `_release_claim` records a completed stage under its own attempt state and returns the task to `pending`, and the five success sites plus the routing one use it
+- [x] The note is written to `note` and not to `failure`, which is the field a later capsule may be handed as what went wrong last time
+- [x] The state enumerations learn the new one: recovery does not treat a released claim as recoverable — `released` is absent from `AUTO_RECOVERABLE_ATTEMPT_STATES` and the comment says the absence is deliberate — and the reset that orphans a task's attempts still sees it
+- [x] Test: a chapter revised over five slices leaves no `validation_failed` in the plan, and a slice that genuinely failed still does
+- [x] Test: `_last_validation_failure` does not return a released claim, so a later capsule cannot be handed `passage revised` as repair context if one of these sites ever blocks
+- [x] **`accepted_call_unattributed` was read and deliberately left alone.** These sites mark the provider accepted and write no receipt, so the check at `_verify` would name them — and it would have named them under `validation_failed` too, so behaviour is unchanged either way. Excusing `released` there would weaken an audit whose job is to catch a paid call nobody attributed, and the check is not reachable from the CLI, which is a separate question from this one
+- [x] Suite green: 886 passed, 405 subtests (era 879). Reinstall, commit & push
 
 **Done when:** Reading the attempt log tells you whether the run is going well.
 
