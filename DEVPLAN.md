@@ -5062,3 +5062,50 @@ English  «…the cage ticked on, drinking.»
 - [ ] Suite green. Reinstall, commit & push
 
 **Done when:** A sentence the source leaves short cannot be explained without something saying so.
+
+
+## The translator retries what the model said, not whether it answered ⏸️
+
+**Status: ⏸️ Proposed — 2026-09-08, measured on two runs killed by a rate limit that had lifted by the time anyone looked**
+
+**Retranslating landfall CH-0003 failed twice on the same transient refusal, and each failure ended the route on its first occurrence.**
+
+```
+Error: OpenCode ended without a complete result: APIError: [Z.AI] z-ai/glm-5.3-flash
+is temporarily rate-limited upstream. Please retry shortly…
+Error: CH-0003 is not translated into it
+```
+
+Both models answered a one-token probe minutes later. The condition was momentary and the message said so — *retry shortly* — and the route did not.
+
+**The retry loop is there and the provider call is outside it.** In `translate_next`:
+
+```python
+result = runner("translator", envelope, attempt_dir)   # outside
+...
+try:
+    value = _parse_contract_json(str(result["text"]))
+    problems = _translation_validation(...)
+except BookForgeError as exc:
+    ...
+    _wait_before_retry("translator", chapter_id, attempt_number, exc, runner)
+    continue
+```
+
+`TRANSLATION_ATTEMPTS`, `_wait_before_retry` and the whole repair-and-ask-again machinery guard the *content* of an answer: malformed JSON, a failed validation. Whether an answer arrived at all is decided one line above, and `ProviderOutcomeUnknown` — a `BookForgeError`, and the class this engine defines for exactly *ask again* — passes straight through. `claim_task` sits outside too, so a claim that cannot be taken ends the route the same way.
+
+**This is the third failure of this shape found today**, after a provider error that reached `provider-events.jsonl` and not the operator, and a revision slice whose only ask was final. The pattern is worth naming: a handler is written for a failure class, and the call that produces that class is not inside it.
+
+**What it costs.** The route is what a person runs to translate a chapter, so its failure mode is a person re-running it. That happened twice here and would have been three times had the second attempt not been watched — and the first was not noticed for two hours, because the shell watching for the process matched its own command line. The engine's answer to a transient provider failure should not be a human with a shell loop.
+
+**Fix.** The provider call and the claim go inside the loop the retries already govern, so a provider that refuses is the case `_wait_before_retry` was written for. `ProviderLimitReached` still passes through untouched — a spending cap is not transient, and the distinction shipped earlier today is what makes widening the retry safe.
+
+**Tasks:**
+- [ ] `claim_task` and `runner(...)` move inside the guarded block, so a provider failure spends an attempt rather than the route
+- [ ] `ProviderLimitReached` is re-raised, not retried — a cap does not lift by asking again
+- [ ] `_wait_before_retry` already backs off; check that a provider refusal waits before the next ask rather than hammering the same limit
+- [ ] Test: a runner that refuses once and answers on the second ask produces a translated chapter; one that refuses `TRANSLATION_ATTEMPTS` times sets the chapter aside as now; a spending limit ends the route on the first refusal
+- [ ] The same shape audited in the other routes that call a runner outside their own retry
+- [ ] Suite green. Reinstall, commit & push
+
+**Done when:** A provider saying *retry shortly* is retried shortly.
