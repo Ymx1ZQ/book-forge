@@ -5000,9 +5000,9 @@ The reader is denied the glossary by design, so that an unreadable term is repor
 **Done when:** A pass that fixed everything it was told about is not recorded as a failure.
 
 
-## A question about the whole chapter is asked from one slice of it ⏸️
+## A question about the whole chapter is asked from one slice of it 🔄
 
-**Status: ⏸️ Proposed — 2026-09-08, measured on a sentence the repair explained away**
+**Status: 🔄 In progress — 2026-09-08, measured on a sentence the repair explained away**
 
 **The last sentence of landfall's CH-0003 gained an explanation the English does not have, because a reader was asked a chapter-level question with a twelfth of the chapter in front of it.**
 
@@ -5023,11 +5023,12 @@ English  «…the cage ticked on, drinking.»
 **Fix.** Ask each question at its own scope. The stumble question stays per slice, where it works. The unidentified question is asked once per chapter, by the call that already holds the whole text — the first slice — and the other slices are not asked it at all. A name reported by a reader that could not have seen the chapter is not evidence, and until this is done, that finding class costs a repair call and can cost a sentence.
 
 **Tasks:**
-- [ ] `locale-reader.md` asks the unidentified question only of the call that carries the whole chapter, and the per-slice calls answer stumbles alone
-- [ ] The capsule says which question this call is being asked, so a slice cannot answer one it was not given
-- [ ] Test: a chapter read in five slices produces `unidentified` findings from the first call and none from the others; a chapter short enough for one slice is unchanged
-- [ ] Test: a name introduced in paragraph 21 and used again in paragraph 51 raises no question
+- [x] `locale-reader.md` asks the unidentified question only of the call whose capsule lists it, and the preamble says so where the question count is stated — that line read "answer two questions" over three sections before this, and the count is now genuinely conditional
+- [x] The capsule carries `asked`, and a slice that is not asked also carries the reason it is not, so the call is told rather than merely not told
+- [x] **The answer is dropped as well as unasked.** `_locale_reader_findings` takes `names_asked` and ignores the `unidentified` block without it. A prompt is a request, and this finding class reaches a repair that changes the prose
+- [x] Test: the capsule of the first slice lists both questions and a later slice lists one; a chapter short enough for a single call keeps both; a slice still reports its stumbles
+- [x] Test, end to end over a sliced chapter: every call returns the same unidentified name and exactly one is heard
 - [ ] Re-run landfall CH-0003 and check the closing sentence comes back without the gloss
-- [ ] Suite green. Reinstall, commit & push
+- [x] Suite green. Reinstall, commit & push
 
 **Done when:** A reader is only asked what it was given enough to answer.

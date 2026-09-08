@@ -1964,3 +1964,66 @@ class QuestionsTheLoopCannotCloseTests(unittest.TestCase):
         kept = dict(self.bf._glossary_kept_rows(self.GLOSSARY))
         self.assertEqual(kept["revert"], "", "no note at all")
         self.assertTrue(kept["keelback"].strip(), "this one states something")
+
+
+class TheNamesQuestionBelongsToTheWholeChapterTests(TranslationReviewFixture):
+    """landfall CH-0003 closes on «la gabbia ticchettava ancora, bevendo», for the
+    English `the cage ticked on, drinking`. The reader of paragraphs 49-51 could not
+    tell what the cage was; the chapter says so in paragraph 21, in both languages.
+    The finding routed to the repair that holds the source, which supplied the
+    explanation, and the closing line came back as «e le zecche dentro bevevano»."""
+
+    ANSWER = {
+        "summary": "letto", "followed": True, "stumbles": [],
+        "unidentified": [{"name": "la gabbia", "sentence": "la gabbia ticchettava ancora",
+                          "took_it_for": "una cosa che tutti conoscono"}],
+    }
+
+    def test_a_slice_that_names_something_is_not_asked_about_names(self):
+        self.assertEqual(self.bf._locale_reader_findings(self.ANSWER, names_asked=False), [])
+
+    def test_the_call_with_the_whole_chapter_still_is(self):
+        found = self.bf._locale_reader_findings(self.ANSWER, names_asked=True)
+        self.assertEqual([row["kind"] for row in found], ["unidentified"])
+
+    def test_a_slice_still_reports_its_stumbles(self):
+        answer = {**self.ANSWER, "stumbles": [
+            {"sentence": "la Fede contava le lampade", "why": "non è italiano",
+             "natural": False, "severity": "warning"},
+        ]}
+        found = self.bf._locale_reader_findings(answer, names_asked=False)
+        self.assertEqual([row["kind"] for row in found], ["readability"])
+
+    def test_the_capsule_says_which_questions_this_call_is_asked(self):
+        whole = self.bf._locale_reader_capsule(
+            "CH-0001", "testo", "stile", passage="par", first=1, last=12, of=5, whole="tutto",
+        )
+        later = self.bf._locale_reader_capsule(
+            "CH-0001", "testo", "stile", passage="par", first=13, last=24, of=5, whole="",
+        )
+        self.assertEqual(whole["asked"], ["stumbles", "unidentified"])
+        self.assertEqual(later["asked"], ["stumbles"])
+        self.assertIn("names_are_not_your_question", later)
+        self.assertNotIn("names_are_not_your_question", whole)
+
+    def test_a_chapter_short_enough_for_one_call_keeps_the_question(self):
+        one = self.bf._locale_reader_capsule("CH-0001", "testo", "stile", whole="testo")
+        self.assertEqual(one["asked"], ["stumbles", "unidentified"])
+
+    def test_only_the_first_of_five_slices_may_report_a_name(self):
+        """End to end over a chapter long enough to be sliced: every call returns the
+        same unidentified name, and only the one holding the whole chapter is heard."""
+        long_chapter = "# T\n\n" + "\n\n".join(f"Paragrafo numero {n} della prova." for n in range(1, 40))
+
+        class EveryCallNamesIt(ScriptedProvider):
+            def __call__(self, role, envelope, attempt_dir):
+                if role == "locale-reader":
+                    self.reader = TheNamesQuestionBelongsToTheWholeChapterTests.ANSWER
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = EveryCallNamesIt([translation(GOOD_BODY)])
+        found = self.bf._ask_locale_reader(
+            self.project, self.book, "it", "CH-0001", long_chapter, "stile", provider,
+        )
+        self.assertGreater(len(self.bf._paragraph_slices(long_chapter)), 1, "the chapter must be sliced")
+        self.assertEqual(len([row for row in found if row["kind"] == "unidentified"]), 1)

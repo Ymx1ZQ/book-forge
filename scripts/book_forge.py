@@ -9104,22 +9104,44 @@ def _locale_reader_capsule(  # noqa: PLR0913 - a slice needs to know which one i
         "translated_markdown": translated if passage is None else passage,
         "locale_style": style,
         "answer_bound": f"Report at most {LOCALE_READER_MAX_FINDINGS} stumbles, worst first.",
+        # Which of the two questions this call is being asked, because they have
+        # different scopes. Whether a sentence reads as the language is answered by
+        # the sentence; whether the text ever says what a thing is, is a claim about
+        # the whole chapter, and a slice cannot support it. landfall CH-0003 closes
+        # on «la gabbia ticchettava ancora, bevendo», and the reader of paragraphs
+        # 49-51 could not tell what the cage was — the chapter says so in paragraph
+        # 21. The finding reached the repair, which explained the closing image.
+        "asked": ["stumbles", "unidentified"] if bool(whole) else ["stumbles"],
     }
     if passage is not None and of > 1:
         capsule["passage"] = f"paragraphs {first} to {last} of {of}"
         if whole:
-            # Only the first slice carries it, and only to be summarised. A reader
-            # shown eleven paragraphs cannot say what the chapter is about, and that
-            # question is the one that finds the defect living in no single sentence.
+            # Only the first slice carries it. A reader shown eleven paragraphs
+            # cannot say what the chapter is about, and it is also the only call in
+            # a position to say that a name is never explained anywhere.
             capsule["whole_chapter_for_the_summary"] = whole
+        else:
+            capsule["names_are_not_your_question"] = (
+                "You are reading part of a chapter. A thing you cannot place may well be "
+                "given elsewhere in it, so do not report unidentified names from here."
+            )
     return capsule
 
 
-def _locale_reader_findings(value: object) -> list[dict[str, object]]:
+def _locale_reader_findings(value: object, *, names_asked: bool = True) -> list[dict[str, object]]:
     """Its stumbles, in the shape the repair already takes.
 
     Marked `origin: reader` so the two sources can be counted apart: a defect only
     the monolingual reader finds is the measure of whether this role earns its call.
+
+    `names_asked` is false for every call that was shown part of a chapter. A name
+    such a reader could not place is not evidence — the chapter may name the thing
+    in a paragraph it was never given — and the finding does not stop at being
+    useless: it routes to the repair that holds the source, which supplies what is
+    missing. On landfall CH-0003 that turned `the cage ticked on, drinking` into
+    «la gabbia ticchettava ancora, e le zecche dentro bevevano», explaining an image
+    the English withholds and the chapter had already given thirty paragraphs back.
+    Dropped here as well as asked for in the prompt, because a prompt is a request.
     """
     rows = value.get("stumbles") if isinstance(value, dict) else None
     findings: list[dict[str, object]] = []
@@ -9162,7 +9184,7 @@ def _locale_reader_findings(value: object) -> list[dict[str, object]]:
     # as `la Scrofa`, an ordinary word for a female pig, and the first person to read
     # the chapter asked what it was — the English had carried `she`, `her pilot` and
     # `a barge`, and none of that survives into a language that drops the possessive.
-    names = value.get("unidentified") if isinstance(value, dict) else None
+    names = value.get("unidentified") if isinstance(value, dict) and names_asked else None
     for index, row in enumerate(names if isinstance(names, list) else [], start=1):
         if not isinstance(row, dict):
             continue
@@ -10702,7 +10724,7 @@ def _read_one_slice(  # noqa: PLR0913 - one call over one run of paragraphs
         mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
         _refuse_empty_answer("locale-reader", chapter_id, result)
         value = _parse_contract_json(str(result["text"]))
-        findings = _locale_reader_findings(value)
+        findings = _locale_reader_findings(value, names_asked=bool(whole))
         if not value.get("followed", True) and whole:
             # A reader who cannot say what the chapter is about has found the largest
             # defect in it, and it lives in no single sentence.
