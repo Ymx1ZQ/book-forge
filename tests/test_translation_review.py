@@ -2322,3 +2322,118 @@ class AClaimHandedBackIsNotAFailureTests(TranslationReviewFixture):
 
     def test_recovery_does_not_walk_completed_work(self):
         self.assertNotIn("released", self.bf.AUTO_RECOVERABLE_ATTEMPT_STATES)
+
+
+NAMED_SENTENCE = "La Fede contava le lampade sulla torre in quel modo strano."
+OTHER_SENTENCE = "Masticava il gesso di marea e guardava salire l'acqua."
+REWRITTEN_OTHER = "Sminuzzava il gesso di marea mentre l'acqua saliva."
+NAMED_REWRITTEN = "La Fede teneva il conto delle lampade sulla torre."
+
+
+def body(named, other, count=11):
+    return " ".join([named] + [other] * count)
+
+
+class ARewriteThatLeftTheNamedSentenceStandingTests(TranslationReviewFixture):
+    """The reader runs after the rewrite as the acceptance test, and a passage it
+    still calls unnatural is written again with its own sentences as evidence that
+    the pass failed. Whether those sentences changed was never checked: a writer
+    that rewrote everything around them and left them word for word was counted as
+    having revised the passage, and the pass reported whatever the next read found.
+
+    The repair has had this since convergence learned to tell a repeated finding
+    from a new one — a finding that comes back after the call said it applied it is
+    recorded as not landed, because a call that claims and does nothing is worse
+    than one that refuses."""
+
+    class Reviser(ScriptedProvider):
+        """One scripted body per rewrite pass, in order."""
+
+        def __init__(self, bodies, **kw):
+            super().__init__([translation(body(NAMED_SENTENCE, OTHER_SENTENCE))], **kw)
+            self.bodies = list(bodies)
+            self.asks = 0
+
+        def __call__(self, role, envelope, attempt_dir):
+            if role != "locale-reviser":
+                return super().__call__(role, envelope, attempt_dir)
+            self.asks += 1
+            self.calls.append(role)
+            payload = envelope["payload"]
+            answer = {
+                "revised_markdown": f"# La chiatta dell'alba\n\n{self.bodies.pop(0)}",
+                "changed": [],
+            } if self.bodies else {"revised_markdown": envelope["payload"]["task"]["chapter_markdown"], "changed": []}
+            return {
+                "text": json.dumps(answer),
+                "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                "session_id": f"ses-rev-{self.asks}",
+                "tokens": {"input": envelope["estimated_input_tokens"], "output": 100},
+                "cost": 0.0, "latency_ms": 10, "finish": "stop",
+            }
+
+    READER = {
+        "summary": "letto", "followed": True,
+        "stumbles": [{"sentence": NAMED_SENTENCE, "why": "non è italiano", "natural": False, "severity": "warning"}],
+    }
+
+    def pass_over(self, bodies):
+        self.translate(ScriptedProvider([translation(body(NAMED_SENTENCE, OTHER_SENTENCE))]))
+        provider = self.Reviser(
+            bodies, critic={"findings": [], "verdict": "faithful"}, reader=self.READER,
+        )
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        review = json.loads(
+            (self.project / f"books/{self.book}/translations/it/reviews/CH-0001.json").read_text(encoding="utf-8")
+        )
+        return review, provider
+
+    def left_standing(self):
+        """First pass rewrites the other sentences; the second rewrites more of them
+        and leaves the one the reader named exactly as it was."""
+        return [
+            body(NAMED_SENTENCE, REWRITTEN_OTHER),
+            body(NAMED_SENTENCE, REWRITTEN_OTHER, count=10) + " " + OTHER_SENTENCE,
+        ]
+
+    def test_a_sentence_the_reader_named_that_came_back_word_for_word_is_recorded(self):
+        review, provider = self.pass_over(self.left_standing())
+        self.assertEqual(provider.asks, 2, "the reader's stumble must have bought a second rewrite")
+        self.assertEqual(review["rewrites_not_landed"], [NAMED_SENTENCE])
+
+    def test_a_sentence_the_second_pass_actually_rewrote_is_not(self):
+        review, provider = self.pass_over([
+            body(NAMED_SENTENCE, REWRITTEN_OTHER),
+            body(NAMED_REWRITTEN, REWRITTEN_OTHER),
+        ])
+        self.assertEqual(provider.asks, 2)
+        self.assertEqual(review["rewrites_not_landed"], [])
+
+    def test_a_pass_the_reader_never_stopped_records_nothing(self):
+        self.translate(ScriptedProvider([translation(body(NAMED_SENTENCE, OTHER_SENTENCE))]))
+        provider = self.Reviser(
+            [body(NAMED_SENTENCE, REWRITTEN_OTHER)],
+            critic={"findings": [], "verdict": "faithful"},
+            reader={"summary": "letto", "followed": True, "stumbles": []},
+        )
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        review = json.loads(
+            (self.project / f"books/{self.book}/translations/it/reviews/CH-0001.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(provider.asks, 1, "no stumble, no second pass")
+        self.assertEqual(review["rewrites_not_landed"], [])
+
+    def test_a_second_pass_that_changed_nothing_is_a_refusal_and_not_this(self):
+        """A rewrite that came back identical is already reported as one. Counting it
+        here as well would say the writer claimed something it never claimed."""
+        review, provider = self.pass_over([body(NAMED_SENTENCE, REWRITTEN_OTHER)])
+        self.assertEqual(provider.asks, 2)
+        self.assertEqual(review["rewrites_not_landed"], [])
+
+    def test_the_check_reads_the_text_and_not_the_next_reader(self):
+        flat = "Prima frase.  La seconda\nfrase è questa. Terza."
+        named = [{"translated": "La seconda frase è questa."}, {"translated": "Quarta frase."}]
+        self.assertEqual(self.bf._rewrites_that_did_not_land(named, flat), ["La seconda frase è questa."])
+
+    def test_a_stumble_that_quotes_nothing_cannot_be_counted(self):
+        self.assertEqual(self.bf._rewrites_that_did_not_land([{"translated": "  "}], "un testo"), [])

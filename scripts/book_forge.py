@@ -10962,6 +10962,33 @@ def _bilingual_repair_findings(findings: list[dict[str, object]]) -> list[dict[s
     ]
 
 
+def _rewrites_that_did_not_land(named: list[dict[str, object]], text: str) -> list[str]:
+    """The sentences a reader named that the rewrite aimed at them left standing.
+
+    The repair has had this since convergence learned to tell a repeated finding
+    from a new one: a finding that comes back after the call said it applied it is
+    recorded as not landed, because a call that claims and does nothing is worse
+    than one that refuses — the refusal is at least on the record. The rewriter had
+    no equivalent. Its second pass is handed the reader's own sentences as evidence
+    that the first pass failed, and whether those sentences changed was never
+    checked, so a writer that returned the passage untouched was counted as having
+    revised it and the pass reported whatever the next read happened to find.
+
+    Checked against the text, which is stronger than what the critic can do: the
+    reader quoted the sentence out of this chapter, so after a rewrite it is either
+    still there word for word or it is not, and no second opinion is needed to say
+    which. Whitespace is flattened first because a rewrite may re-wrap a paragraph
+    it did not otherwise touch.
+    """
+    flat = re.sub(r"\s+", " ", text)
+    standing = []
+    for row in named:
+        quoted = re.sub(r"\s+", " ", str(row.get("translated") or "")).strip()
+        if quoted and quoted in flat:
+            standing.append(quoted)
+    return standing
+
+
 def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
     root: Path,
     book_id: str,
@@ -11001,6 +11028,7 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
         row for row in language
         if str(row.get("severity")) in {"blocking", "warning"} and str(row.get("kind")) != "unidentified"
     ]
+    not_landed: list[str] = []
     if failing:
         print(
             f"[locale-reader] {chapter_id}: {len(failing)} passage-level defect(s) survived the rewrite; "
@@ -11012,6 +11040,17 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
         )
         if again is not None:
             carried = again
+            # Only when the rewrite came back and was kept, which is the same
+            # condition the repair's not-landed is counted under: a pass that
+            # refused is already reported as a refusal, and counting it twice
+            # would say the writer claimed something it never claimed.
+            not_landed = _rewrites_that_did_not_land(failing, str(carried["translated_markdown"]))
+            if not_landed:
+                print(
+                    f"[locale-reviser] {chapter_id}: {len(not_landed)} of {len(failing)} sentence(s) the "
+                    f"reader named came back unchanged — {not_landed[0][:100]}",
+                    file=sys.stderr,
+                )
             unread = []
             language = _mark_author_questions(_ask_locale_reader(
                 root, book_id, locale, chapter_id, str(carried["translated_markdown"]), style, runner, unread
@@ -11027,6 +11066,7 @@ def _read_revise_and_review(  # noqa: PLR0913 - three stages over one chapter
     review = _review_translation(
         root, book_id, locale, chapter_id, contract, source, str(carried["translated_markdown"]),
         runner=runner, language_findings=language, reader_unread=unread[0] if unread else "",
+        rewrites_not_landed=not_landed,
     )
     return carried, review
 
@@ -11536,6 +11576,7 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
     runner,
     language_findings: list[dict[str, object]] | None = None,
     reader_unread: str = "",
+    rewrites_not_landed: list[str] | None = None,
 ) -> dict[str, object]:
     """Read the translation back against the source, and repair what is cited.
 
@@ -11733,6 +11774,10 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
                     # reason here means nobody read it, which no count of findings
                     # can tell you apart from a clean pass.
                     "locale_reader_unread": reader_unread,
+                    # Sentences the reader named that the rewrite given them left
+                    # word for word. Recorded rather than counted as revised, the
+                    # way a repair that claimed a finding and did not apply it is.
+                    "rewrites_not_landed": list(rewrites_not_landed or []),
                     # Not a finding and not repairable: two rows of the glossary
                     # disagree and a person has to decide which one is the book's.
                     "glossary_contradictions": contradictions,
@@ -12294,6 +12339,9 @@ def review_translation(
         # hid it exactly where it mattered.
         inconsistent_seen = False
         not_landed_seen = 0
+        # Sticky for the same reason: a rewrite that left a named sentence standing
+        # did so, and a later pass rewriting something else does not unsay it.
+        rewrites_not_landed_seen = 0
         for _pass in range(1, (REVIEW_PASS_CAP if until_clean else 1) + 1):
             passes += 1
             # Re-read: the pass before this one may have rewritten the chapter.
@@ -12344,6 +12392,9 @@ def review_translation(
             )
             inconsistent_seen = inconsistent_seen or bool(review["convergence"]["verdict_inconsistent"])
             not_landed_seen = max(not_landed_seen, len(review["convergence"]["not_landed"] or []))
+            rewrites_not_landed_seen = max(
+                rewrites_not_landed_seen, len(review.get("rewrites_not_landed") or [])
+            )
             state = str(review["convergence"]["state"])
             if str(review["verdict"]) == "unread":
                 ended = "unread"
@@ -12373,6 +12424,7 @@ def review_translation(
             "why": convergence.get("reason"),
             "repeated": convergence.get("repeated"),
             "not_landed": not_landed_seen,
+            "rewrites_not_landed": rewrites_not_landed_seen,
             "verdict_inconsistent": inconsistent_seen,
         })
     raised = sum(int((row.get("machine_checks") or {}).get("raised", 0)) for row in reviewed)
