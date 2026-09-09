@@ -4481,9 +4481,9 @@ Both named the same two moments where the writing improves, and both are the mom
 **Done when:** Rewriting one chapter costs one chapter.
 
 
-## A locale that refuses everything reports it instead of crashing ⏸️
+## A locale that refuses everything reports it instead of crashing ✅
 
-**Status: ⏸️ Proposed — 2026-09-04**
+**Status: ✅ Done — 2026-09-09**
 
 **Found while testing the chapter reset, on a path the refusal work left uncovered.** `translate_next` ends by reading the locale's `status` out of its state file:
 
@@ -4498,10 +4498,10 @@ A freshly created workspace has no `status` key — `translate add` seeds `{"sch
 **Fix.** Read the status with a default, and name the state for what it is: a locale that has completed nothing and refused something is `refused`, not missing.
 
 **Tasks:**
-- [ ] `translate run` returns a state when nothing completed, instead of raising on a key the workspace has not written yet
-- [ ] The state distinguishes a locale that refused everything from one that has nothing to do
-- [ ] Test: every chapter refused on a fresh workspace returns the refusals rather than raising
-- [x] Suite green: 819 passed, 405 subtests. Reinstall, commit & push
+- [x] `translate run` returns a state when nothing completed, instead of raising on a key the workspace has not written yet
+- [x] The state distinguishes a locale that refused everything from one that has nothing to do: `refused` against the `current` the early return already gave a locale with no work
+- [x] Test: every chapter refused on a fresh workspace returns the refusals rather than raising — five tests, one of which asserts the seeded workspace really has no `status` key, so the others pass for the right reason
+- [x] Suite green: 891 passed, 405 subtests (era 886). Reinstall, commit & push
 
 **Done when:** A locale can refuse every chapter it has and still say so.
 

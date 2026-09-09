@@ -12157,7 +12157,7 @@ def translate_next(
             file=sys.stderr,
         )
     return {
-        "state": _read_json(locale_root / "state.yaml")["status"],
+        "state": _locale_run_state(locale_root, refused=bool(refused)),
         "book": book_id,
         "locale": canonical,
         "calls": sum(int(result["calls"]) for result in results),
@@ -12165,6 +12165,25 @@ def translate_next(
         "refused": standing,
     }
 
+
+
+def _locale_run_state(locale_root: Path, *, refused: bool) -> str:
+    """What a run says about a locale when the state file has not been written yet.
+
+    `status` is written by a chapter *completing*: `translate add` seeds a workspace
+    with `schema`, `locale`, `completed_chapters`, `current` and `boundary_hashes`,
+    and the key appears the first time something lands. So a locale whose every
+    chapter was refused reached the end of a run having done the work correctly —
+    the chapters were set aside, `refused.json` was written, the names were printed —
+    and died on the line that reports it, with `KeyError: 'status'`.
+
+    A locale that has completed nothing and refused something is `refused`, which is
+    a different answer from having nothing to do, and neither is a missing key.
+    """
+    status = _read_json(locale_root / "state.yaml").get("status")
+    if status:
+        return str(status)
+    return "refused" if refused else "empty"
 
 
 def review_translation(

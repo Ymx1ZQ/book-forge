@@ -174,6 +174,72 @@ class TranslateTests(unittest.TestCase):
         self.assertEqual(json.loads(record.read_text())["refused"], [])
 
 
+class ALocaleThatRefusedEverythingTests(unittest.TestCase):
+    """Found while testing the chapter reset, on the path the refusal work left
+    uncovered. `translate add` seeds a workspace without `status` — the key is first
+    written when a chapter *completes* — so a locale whose every chapter was refused
+    reached the end of the run having done the work correctly and died reporting it,
+    with `KeyError: 'status'`. The chapters were set aside, `refused.json` was
+    written, the names were printed, and the report took the run with it."""
+
+    BAD = {"translated_markdown": "# Capitolo\n\nManca il numero.", "glossary_updates": [], "boundary": ""}
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        _isolate_translator(self.bf, self.project)
+        self.book = self.bf.add_book(self.project, "Book")["id"]
+        chapters = self.project / f"books/{self.book}/chapters"
+        chapters.mkdir(exist_ok=True)
+        manuscript = self.project / f"books/{self.book}/manuscript/chapters"
+        for index in (1, 2):
+            chapter = f"CH-{index:04d}"
+            (chapters / f"{chapter}.json").write_text(json.dumps({
+                "schema": 1, "book": self.book, "id": chapter, "order": index, "pov": "Mara",
+                "beats": ["Find signal"], "target_words": 30, "imports": ["UNI-0001#kernel"], "pivotal": None,
+            }))
+            (manuscript / f"{chapter}.md").write_text(
+                f"# Chapter {index}\n\nMara finds signal {index} in the drowned city. "
+                "Memory changes every choice, but her name remains Mara.")
+        self.bf.add_translation(self.project, self.book, "it-IT")
+        _decide_locale_style(self.bf, self.project, self.book, "it-IT")
+
+    def refuse_everything(self):
+        provider = TranslationProvider([self.BAD] * (self.bf.TRANSLATION_ATTEMPTS * 2))
+        return self.bf.translate_next(self.project, self.book, "it-IT", provider=provider, run_all=True)
+
+    def test_a_run_that_completed_nothing_still_reports(self):
+        result = self.refuse_everything()
+        self.assertEqual([str(row["chapter"]) for row in result["refused"]], ["CH-0001", "CH-0002"])
+
+    def test_the_state_says_the_locale_refused_rather_than_nothing(self):
+        self.assertEqual(self.refuse_everything()["state"], "refused")
+
+    def test_a_locale_with_nothing_to_do_is_not_the_same_answer(self):
+        provider = TranslationProvider([translated(1, 1), translated(2, 2)])
+        self.bf.translate_next(self.project, self.book, "it-IT", provider=provider, run_all=True)
+        again = self.bf.translate_next(
+            self.project, self.book, "it-IT", provider=TranslationProvider([]), run_all=True,
+        )
+        self.assertEqual(again["state"], "current")
+
+    def test_the_seeded_workspace_really_has_no_status_to_read(self):
+        """The test above passes for the right reason only if the key is absent."""
+        state = json.loads(
+            (self.project / f"books/{self.book}/translations/it-IT/state.yaml").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("status", state)
+
+    def test_a_locale_that_translated_one_chapter_reports_its_own_status(self):
+        provider = TranslationProvider([translated(1, 1)] + [self.BAD] * self.bf.TRANSLATION_ATTEMPTS)
+        result = self.bf.translate_next(self.project, self.book, "it-IT", provider=provider, run_all=True)
+        self.assertEqual(result["state"], "in_progress")
+        self.assertEqual([str(row["chapter"]) for row in result["refused"]], ["CH-0002"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
