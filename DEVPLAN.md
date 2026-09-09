@@ -4132,9 +4132,9 @@ The critic exceeds its lease on **46 calls out of 51**. Half this engine's roles
 **Done when:** A claim outlives the work it covers, and only a dead process loses it.
 
 
-## The chapter reviewer's input does not grow with the book ⏸️
+## The chapter reviewer's input does not grow with the book ✅
 
-**Status: ⏸️ Proposed — 2026-09-03, measured and not started**
+**Status: ✅ Done — 2026-09-09, built as the design cleanup the addendum below says it is, and not as a cure for the failure rate**
 
 **Measured inside one run, on the role that gates every chapter.** The technical editor's capsule, in characters:
 
@@ -4179,6 +4179,25 @@ And the failures track it. On CH-0009 the technical editor answered twice and ca
 **CH-0010 carries the largest context of the book — 48037 characters — and answered in two calls**, while CH-0009 at 35126 came back empty five times in eight. The overall rate is 13 empty of 32, about 40%, and it is flat across chapter depth rather than climbing. So CH-0009 was an unlucky cluster on a role that fails four times in ten wherever it is asked, and the context growth, which is real, is not what decides.
 
 **What that leaves.** The growth is still worth removing on its own terms — an input that follows the book's length is the shape this engine slices everywhere else, and it will matter at forty chapters even if it does not at twenty-six. But it is no longer a fix for the failure rate, and building it expecting one would be building the wrong thing. The failure looks like what the arms found for the translation critic: a role sitting near enough to its ceiling that variance decides, where the remedy that works is the bounded re-ask already shipped.
+
+**The split, as built.** By dimension, which is a line the role's own answer already draws — `contract|canon|continuity|state` — rather than by which findings happened to cite a block:
+
+- **The contract half, asked with no imports.** The contract: is the POV the one named, are the beats covered, is the length what was asked, are the consequences the chapter creates the ones it was for. Dimensions `contract` and `state`, and the consequence extraction, which is read off the prose and the contract and never needed the canon. Its input is the prose and the contract, and neither follows the book's length.
+- **The canon half, with the imports it has now.** Voice, knowledge, place, era — the four checks whose answer is in a block. It still grows, and that is inherent: those questions are answerable only against the canon a chapter imports.
+
+Both are the same role under the same prompt, told which checks are theirs by an `asked` field, which is the shape the locale reader was given for the same reason a month ago. Separate task ids, so each half is claimed, promoted and resumed on its own and the two answers stay separately readable on disk — the comparison this entry owes has to be made against something.
+
+**Tasks:**
+- [x] The contract half is asked with no imports, and a test reads the envelope's own `context` to say so rather than trusting the argument
+- [x] The canon half keeps its imports and is asked only the four checks that need them
+- [x] Both halves reach the caller as one review: findings concatenated, `verified` true only if both say so, consequences from the half that extracts them, and the refusal of an answer that extracted none still fires — now against the half that was asked for them, so the canon half is no longer refused for a question it was not given the material to answer
+- [x] The resume reuses whichever halves are already promoted, the way this pass already reuses a whole role that answered while its sibling failed. A claim per half, so a run that dies between them pays for one call again and not for both
+- [x] The prompt says which checks belong to which call, and that the other half is asked separately — including that silence about the world, from the call with no blocks in its context, is what that call is for and not a gap in it
+- [x] Each half is asked again on its own when it spends its ceiling, which is the remedy the addendum below says is the one that works on this role
+- [x] Test: the two envelopes, the `asked` fields, the contract half being the smaller envelope, the merge, the conjunction, the consequence refusal on each side, a resume that pays for neither half twice, and both halves left separately readable on disk
+- [x] Suite green: 907 passed, 405 subtests (era 891). Reinstall, commit & push
+- [x] **What this costs, stated because it is a recurring price on a gating role:** one more call per chapter, where there was one. The contract half is the cheap one — prose and contract, no context — and the canon half is the one that was already being paid for.
+- [ ] **What cannot be measured yet, stated rather than assumed:** whether the two halves find what the whole one found needs both versions asked over the same chapters, and the chapters this entry measured — CH-0004 to CH-0017 — were deleted on 2026-09-07 to be rewritten. That comparison belongs to the rewrite, and it is the one thing that could still send this back. The two answers are written to separate files, `technical-editor.json` and `technical-editor-contract.json`, so the comparison has something to be made against.
 
 **Done when:** The role that gates every chapter is asked a question whose size does not depend on how far the book has got — undertaken as the design cleanup it is, and not as a cure for a rate it does not explain.
 

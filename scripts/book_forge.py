@@ -8754,6 +8754,34 @@ def recheck_style_closed_chapter(
     return {"state": "style_revised", "book": book_id, "chapter": chapter_id, "calls": 4, "findings": len(style_findings), "receipt": receipt["attempt"]}
 
 
+# The calls this review pass makes, as (key, role, task prefix, output).
+#
+# The technical editor is two of them. Its capsule grew with the book — 19429
+# characters of context at CH-0004, 35126 at CH-0009, 48037 at CH-0010 — while the
+# prose it reads stayed flat, because what grows is the canon a chapter imports and
+# the blocks themselves fatten as chapters close and write back into them. This
+# engine slices against that shape everywhere else and the role that gates every
+# chapter had none of it.
+#
+# Split by dimension, which is a line the role's own answer already draws. The
+# contract half is asked with no imports at all: the contract, the chapter's own
+# state, and the consequence extraction, all of which are read off the prose in
+# front of it. The canon half keeps the imports and is asked the four checks whose
+# answer lives in a block. The first no longer follows the book's length; the
+# second still does, and that is inherent to the question.
+REVIEW_CALLS = (
+    ("cold-reader", "cold-reader", "REVIEW-COLD", "cold-reader.json"),
+    ("technical-editor", "technical-editor", "REVIEW-TECH", "technical-editor.json"),
+    ("technical-contract", "technical-editor", "REVIEW-TECHC", "technical-editor-contract.json"),
+)
+# What each half of the technical review is asked, in the capsule as well as in the
+# prompt, so neither half reports a defect it was not given the material to judge.
+TECHNICAL_ASKED = {
+    "technical-editor": ["voice", "knowledge", "place", "era"],
+    "technical-contract": ["contract", "state", "consequences"],
+}
+
+
 def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str, dict[str, object]]:
     draft_id = f"DRAFT-{book_id}-{chapter_id}"
     plan = _load_plan(root)
@@ -8761,17 +8789,12 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
         raise BookForgeError("Chapter must have a promoted draft before review")
     specs = [
         (
-            f"REVIEW-COLD-{book_id}-{chapter_id}",
-            "cold-reader",
+            f"{prefix}-{book_id}-{chapter_id}",
+            role,
             [draft_id],
-            [f"books/{book_id}/reviews/{chapter_id}/cold-reader.json"],
-        ),
-        (
-            f"REVIEW-TECH-{book_id}-{chapter_id}",
-            "technical-editor",
-            [draft_id],
-            [f"books/{book_id}/reviews/{chapter_id}/technical-editor.json"],
-        ),
+            [f"books/{book_id}/reviews/{chapter_id}/{output}"],
+        )
+        for _, role, prefix, output in REVIEW_CALLS
     ]
     existing = {str(task["id"]) for task in plan["tasks"]}
     for task_id, role, deps, outputs in specs:
@@ -8784,7 +8807,7 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
             root,
             reviser_id,
             "reviser",
-            deps=[specs[0][0], specs[1][0]],
+            deps=[spec[0] for spec in specs],
             priority=70,
             outputs=[
                 f"books/{book_id}/manuscript/chapters/{chapter_id}.md",
@@ -8910,17 +8933,19 @@ def _call_parallel_reviews(
     runner,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     materialized = {}
-    for role, task_id, output in (
-        ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}", f"books/{book_id}/reviews/{chapter_id}/cold-reader.json"),
-        ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}", f"books/{book_id}/reviews/{chapter_id}/technical-editor.json"),
-    ):
-        review_path = root / output
+    for key, _, prefix, output in REVIEW_CALLS:
+        task_id = f"{prefix}-{book_id}-{chapter_id}"
+        review_path = root / f"books/{book_id}/reviews/{chapter_id}/{output}"
         plan = _load_plan(root)
         task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
         if review_path.is_file() and task and task["state"] == "succeeded":
-            materialized[role] = _read_json(review_path)
-    if len(materialized) == 2:
-        return materialized["cold-reader"], materialized["technical-editor"], []
+            materialized[key] = _read_json(review_path)
+    if len(materialized) == len(REVIEW_CALLS):
+        return (
+            materialized["cold-reader"],
+            _merge_technical_halves(materialized["technical-editor"], materialized["technical-contract"]),
+            [],
+        )
     jobs = []
     # A pass of two roles can half-succeed, and the resume above only understood
     # total success. On CH-0005 the cold reader answered, was validated and
@@ -8933,6 +8958,9 @@ def _call_parallel_reviews(
             f"[review] {chapter_id}: reusing the {', '.join(sorted(materialized))} answer already paid for",
             file=sys.stderr,
         )
+    # Two halves of one role, and the second is the reason this pass exists in this
+    # shape: a claim per half, so a run that dies between them pays for one call
+    # again and not for both.
     # Build synthetic previous-chapters summary for cold-reader — persisted artifact, not reconstructed
     previous_synthetic = ""
     try:
@@ -8950,11 +8978,9 @@ def _call_parallel_reviews(
                 previous_synthetic = reader_state_path.read_text(encoding="utf-8").strip()[-2000:]
     except Exception:
         previous_synthetic = ""
-    for role, task_id in (
-        ("cold-reader", f"REVIEW-COLD-{book_id}-{chapter_id}"),
-        ("technical-editor", f"REVIEW-TECH-{book_id}-{chapter_id}"),
-    ):
-        if role in materialized:
+    for key, role, prefix, _ in REVIEW_CALLS:
+        task_id = f"{prefix}-{book_id}-{chapter_id}"
+        if key in materialized:
             continue
         capsule = {
             "book": book_id, "chapter": chapter_id, "contract": contract, "prose": draft,
@@ -8966,25 +8992,31 @@ def _call_parallel_reviews(
             # set aside when it fails to answer.
             "answer_bound": f"Report at most {REVIEW_MAX_FINDINGS} findings, most severe first.",
         }
-        if role == "cold-reader":
+        if key == "cold-reader":
             capsule["contract"] = _withheld_for_reader(contract)
             capsule["previous_synthetic"] = previous_synthetic
             capsule["has_full_canon"] = False
-        if role == "technical-editor":
+        if key in TECHNICAL_ASKED:
+            capsule["asked"] = TECHNICAL_ASKED[key]
+        if key == "technical-contract":
             capsule["writer_consequences"] = writer_consequences.get("consequences", [])
+            # The whole point of the half: the questions it is asked are answered
+            # against the prose and the contract, so it is asked without the canon
+            # whose size follows how far the book has got.
+            capsule["has_full_canon"] = False
         envelope = build_envelope(
             root,
             role=role,
             task_capsule=capsule,
-            imports=list(contract.get("imports", [])),
+            imports=[] if key == "technical-contract" else list(contract.get("imports", [])),
             state={},
             tools=[],
-            max_output_tokens=2500 if role == "cold-reader" else 3000,
+            max_output_tokens=2500 if key == "cold-reader" else 3000,
         )
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
         attempt_dir = Path(claim["capsule"]).parent
         _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
-        jobs.append((role, task_id, envelope, claim, attempt_dir))
+        jobs.append((key, role, task_id, envelope, claim, attempt_dir))
     def ask(role, envelope, attempt_dir):
         """One reviewer's answer, re-asked while it spends its ceiling and says nothing.
 
@@ -9013,7 +9045,7 @@ def _call_parallel_reviews(
     # calls themselves can raise — a reviewer that spends its ceiling on every
     # re-ask does — and a claim left behind by that becomes `outcome_unknown` and
     # stops the run for a person.
-    unsettled = {task_id: claim for _, task_id, _, claim, _ in jobs}
+    unsettled = {task_id: claim for _, _, task_id, _, claim, _ in jobs}
 
     def abandon(reason: str) -> None:
         for _, claim in unsettled.items():
@@ -9023,8 +9055,11 @@ def _call_parallel_reviews(
                 pass
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {executor.submit(ask, role, envelope, attempt_dir): (role, task_id, envelope, claim) for role, task_id, envelope, claim, attempt_dir in jobs}
+        with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
+            futures = {
+                executor.submit(ask, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
+                for key, role, task_id, envelope, claim, attempt_dir in jobs
+            }
             results = []
             for future, metadata in futures.items():
                 results.append((*metadata, future.result()))
@@ -9041,7 +9076,7 @@ def _call_parallel_reviews(
     # `outcome_unknown` and halt the run for a person, which is right only when the
     # engine does not know what happened. Here it does.
     try:
-        for role, task_id, envelope, claim, result in results:
+        for key, role, task_id, envelope, claim, result in results:
             mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
             _refuse_empty_answer(role, task_id, result)
             value = _parse_contract_json(str(result["text"]))
@@ -9056,9 +9091,13 @@ def _call_parallel_reviews(
             # carried beside it rather than dropped on the floor.
             value["findings"] = usable
             value["set_aside"] = set_aside
-            if role == "technical-editor" and not isinstance(value.get("consequences"), list):
+            # Asked of the half that is given the material to answer it. The canon
+            # half reads blocks and reports what contradicts them; the consequences a
+            # chapter creates are read off the prose and the contract, which is the
+            # other half's question.
+            if key == "technical-contract" and not isinstance(value.get("consequences"), list):
                 raise BookForgeError("Technical review has no independent consequence extraction")
-            parsed[role] = value
+            parsed[key] = value
             receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
             unsettled.pop(task_id, None)
     except BookForgeError as unusable:
@@ -9066,7 +9105,29 @@ def _call_parallel_reviews(
         # that actually happened, not one invented by the cleanup.
         abandon(str(unusable))
         raise
-    return parsed["cold-reader"], parsed["technical-editor"], receipts
+    return (
+        parsed["cold-reader"],
+        _merge_technical_halves(parsed["technical-editor"], parsed["technical-contract"]),
+        receipts,
+    )
+
+
+def _merge_technical_halves(canon: dict[str, object], contract: dict[str, object]) -> dict[str, object]:
+    """The two calls of the technical editor, as the one review the caller reads.
+
+    `verified` is the conjunction and cannot be anything else: each half is the only
+    one that looked at its own half of the question, so a chapter is cleared when
+    both clear it. The findings concatenate — they are renumbered `T-0001` upward by
+    position before they reach the reviser, so the halves cannot collide on an id
+    the dispositions are keyed by.
+    """
+    return {
+        **canon,
+        "findings": list(canon.get("findings") or []) + list(contract.get("findings") or []),
+        "set_aside": list(canon.get("set_aside") or []) + list(contract.get("set_aside") or []),
+        "consequences": list(contract.get("consequences") or []),
+        "verified": bool(canon.get("verified")) and bool(contract.get("verified")),
+    }
 
 
 # What one chapter review may return. The same lever the translation critic's bound

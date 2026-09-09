@@ -23,14 +23,36 @@ def prose(words=700):
 
 
 class RoleProvider:
+    """Answers per role, and per half for the role that is asked in two calls.
+
+    The technical editor is asked twice on one chapter — the canon half with the
+    imported blocks, the contract half with none — and both calls arrive under the
+    same role name. They are told apart by the capsule's `asked` field, which is
+    what the engine uses to tell them apart too. A test that scripts only
+    `technical-editor` is scripting the canon half and gets an empty contract half,
+    so it goes on measuring what it was written to measure."""
+
+    QUIET_CONTRACT_HALF = {"findings": [], "consequences": [], "verified": True}
+
     def __init__(self, responses):
         self.responses = {role: list(values) for role, values in responses.items()}
         self.calls = []
         self.lock = threading.Lock()
 
+    def _key(self, role, envelope):
+        if role != "technical-editor":
+            return role
+        asked = envelope["payload"]["task"].get("asked") or []
+        return "technical-contract" if "contract" in asked else "technical-editor"
+
     def __call__(self, role, envelope, attempt_dir):
+        key = self._key(role, envelope)
         with self.lock:
-            text = self.responses[role].pop(0)
+            scripted = self.responses.get(key)
+            if key == "technical-contract" and not scripted:
+                text = dict(self.QUIET_CONTRACT_HALF)
+            else:
+                text = scripted.pop(0)
             number = len(self.calls) + 1
             self.calls.append(role)
         variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "low"}
@@ -165,7 +187,9 @@ class ReviewTests(unittest.TestCase):
         })
         self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
         self.assertEqual(provider.calls.count("cold-reader"), 1)
-        self.assertEqual(provider.calls.count("technical-editor"), 1)
+        # Two, and it is the change this counts: the technical editor is asked its
+        # canon half and its contract half, and the second carries no imports.
+        self.assertEqual(provider.calls.count("technical-editor"), 2)
 
         contract = json.loads((self.project / f"books/{self.book}/chapters/CH-0001.json").read_text())
         draft = (self.project / f"books/{self.book}/work/CH-0001/draft.md").read_text()
@@ -576,14 +600,18 @@ class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
             self.calls = []
 
         def __call__(self, role, envelope, attempt_dir):
-            self.calls.append(role)
+            # Counted per half, not per role: the technical editor is two calls on
+            # one chapter and each is asked again on its own when it spends its
+            # ceiling, which is what these two tests measure.
+            key = RoleProvider._key(self, role, envelope)
+            self.calls.append(key)
             payload = envelope["payload"]
             base = {
                 "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
                 "session_id": f"ses-{len(self.calls)}", "cost": 0.1, "latency_ms": 1, "finish": "stop",
             }
-            if self.empties[role] < self.budget:
-                self.empties[role] += 1
+            if self.empties[key] < self.budget:
+                self.empties[key] += 1
                 return {**base, "text": "", "tokens": {"input": 15000, "output": 0, "reasoning": 32000}}
             answer = {"findings": [], "verdict": "faithful"}
             if role == "technical-editor":
@@ -602,6 +630,7 @@ class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
         provider = self.SpendsThenAnswers(1)
         self.close_chapter(provider)
         self.assertEqual(provider.calls.count("technical-editor"), 2, "asked again inside the pass")
+        self.assertEqual(provider.calls.count("technical-contract"), 2, "and so is its other half")
         self.assertEqual(provider.calls.count("cold-reader"), 2, "and so is the role beside it")
 
     def test_a_reviewer_empty_every_time_still_fails_and_costs_a_constant(self):
@@ -653,3 +682,124 @@ class TheReviserIsGivenRoomForTheAnswerAskedForTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheChapterReviewersInputDoesNotGrowTests(ReviewTests):
+    """The technical editor's capsule grew with the book — 19429 characters of
+    context at CH-0004, 35126 at CH-0009, 48037 at CH-0010 — while the prose it read
+    stayed flat. What grows is the canon a chapter imports, and the blocks fatten as
+    chapters close and write back into them, so the input of the role that gates
+    every chapter followed how far the book had got.
+
+    Split by dimension, which is a line the role's own answer already draws. The
+    contract half is asked with no imports at all; the canon half keeps them and is
+    asked only the four checks whose answer lives in a block."""
+
+    class Watching(RoleProvider):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.payloads = {}
+
+        def __call__(self, role, envelope, attempt_dir):
+            self.payloads[self._key(role, envelope)] = envelope["payload"]
+            return super().__call__(role, envelope, attempt_dir)
+
+    def reviews(self, provider):
+        contract = json.loads((self.project / f"books/{self.book}/chapters/CH-0001.json").read_text())
+        draft = (self.project / f"books/{self.book}/work/CH-0001/draft.md").read_text()
+        consequences = json.loads((self.project / f"books/{self.book}/work/CH-0001/consequences.json").read_text())
+        self.bf._ensure_review_tasks(self.project, self.book, "CH-0001")
+        return self.bf._call_parallel_reviews(
+            self.project, self.book, "CH-0001", contract, draft, consequences, provider,
+        )
+
+    def quiet(self, **halves):
+        answers = {
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"verified": True, "findings": []}],
+            "technical-contract": [{"verified": True, "findings": [], "consequences": []}],
+        }
+        answers.update({key: [value] for key, value in halves.items()})
+        return self.Watching(answers)
+
+    def test_the_contract_half_is_asked_with_no_canon_at_all(self):
+        provider = self.quiet()
+        self.reviews(provider)
+        self.assertEqual(provider.payloads["technical-contract"]["context"], [])
+
+    def test_the_canon_half_still_carries_what_the_chapter_imports(self):
+        provider = self.quiet()
+        self.reviews(provider)
+        self.assertEqual(
+            [row["id"] for row in provider.payloads["technical-editor"]["context"]], ["UNI-0001#kernel"],
+        )
+
+    def test_each_half_is_told_which_checks_are_its_own(self):
+        provider = self.quiet()
+        self.reviews(provider)
+        self.assertEqual(provider.payloads["technical-editor"]["task"]["asked"], ["voice", "knowledge", "place", "era"])
+        self.assertEqual(provider.payloads["technical-contract"]["task"]["asked"], ["contract", "state", "consequences"])
+
+    def test_the_contract_half_is_the_smaller_envelope(self):
+        """Not a preference: it is the whole reason for the split."""
+        provider = self.quiet()
+        self.reviews(provider)
+        canon = json.dumps(provider.payloads["technical-editor"])
+        contract = json.dumps(provider.payloads["technical-contract"])
+        self.assertLess(len(contract), len(canon))
+
+    def test_the_consequences_come_from_the_half_that_extracts_them(self):
+        fact = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
+        _, technical, _ = self.reviews(self.quiet(
+            **{"technical-contract": {"verified": True, "findings": [], "consequences": [fact]}}
+        ))
+        self.assertEqual(technical["consequences"], [fact])
+
+    def test_a_chapter_is_cleared_only_when_both_halves_clear_it(self):
+        _, technical, _ = self.reviews(self.quiet(
+            **{"technical-contract": {"verified": False, "findings": [], "consequences": []}}
+        ))
+        self.assertFalse(technical["verified"], "the half that did not clear it decides")
+
+    def test_what_both_halves_found_reaches_the_caller_as_one_review(self):
+        canon = {"id": "F-0001", "dimension": "canon", "severity": "warning",
+                 "evidence": "paragraph two", "issue": "the place has no harbour", "fix_required": True,
+                 "objective": True}
+        state = {"id": "F-0001", "dimension": "state", "severity": "warning",
+                 "evidence": "the last line", "issue": "the consequence is not carried", "fix_required": True,
+                 "objective": False}
+        _, technical, _ = self.reviews(self.quiet(
+            **{
+                "technical-editor": {"verified": True, "findings": [canon]},
+                "technical-contract": {"verified": True, "findings": [state], "consequences": []},
+            }
+        ))
+        self.assertEqual([row["dimension"] for row in technical["findings"]], ["canon", "state"])
+
+    def test_the_canon_half_is_not_refused_for_extracting_no_consequences(self):
+        """It was never its question, and it has no contract half's material to answer it."""
+        _, technical, _ = self.reviews(self.quiet(
+            **{"technical-editor": {"verified": True, "findings": []}}
+        ))
+        self.assertTrue(technical["verified"])
+
+    def test_the_contract_half_still_has_to_extract_them(self):
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.reviews(self.quiet(**{"technical-contract": {"verified": True, "findings": []}}))
+        self.assertIn("consequence extraction", str(caught.exception))
+
+    def test_a_resume_pays_for_neither_half_twice(self):
+        self.reviews(self.quiet())
+        again = self.quiet()
+        cold, technical, receipts = self.reviews(again)
+        self.assertEqual(again.calls, [], "both halves were promoted and both are reused")
+        self.assertEqual(receipts, [])
+        self.assertTrue(technical["verified"])
+
+    def test_the_halves_stay_separately_readable_on_disk(self):
+        """The comparison this entry owes — do the two halves find what the whole
+        one found — has to be made against something."""
+        self.reviews(self.quiet())
+        reviews = self.project / f"books/{self.book}/reviews/CH-0001"
+        self.assertTrue((reviews / "technical-editor.json").is_file())
+        self.assertTrue((reviews / "technical-editor-contract.json").is_file())
