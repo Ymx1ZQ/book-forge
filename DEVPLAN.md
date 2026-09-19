@@ -5238,9 +5238,9 @@ rimasti rispondono a `opencode run --pure -m <id>`, e l'agente globale
 (`~/Documents/art/books/landfall`, `~/Documents/art/books/margherita`) pinnano nel proprio
 `book-forge.yaml` modelli che la whitelist non ha più. Vedi l'entry seguente.
 
-## I due progetti esistenti pinnano modelli che la whitelist non ha più
+## I due progetti esistenti pinnano modelli che la whitelist non ha più ✅
 
-**Status: aperta — in attesa di decisione, 2026-09-19**
+**Status: ✅ Done — 2026-09-19, entrambi migrati e risincronizzati**
 
 `landfall` ha `chorus.models` con `deepseek-v4-flash-0731`, `deepseek-v4-pro-0813`, `kimi-k3` e
 `gpt-5.6-luna`, sintetizzatore `deepseek-v4-pro-0813`, `style_review` con `gpt-5.6-luna`, e
@@ -5257,3 +5257,22 @@ La mappatura senza perdite è quella già decisa per la skill: `0731` → `deeps
 `kimi-k3` e `gpt-5.6-luna` fuori dal coro. La sola scelta che cambia un risultato è la catena di
 landfall: con terra fuori resta `[gemini-3.8-flash]`, cioè un anello invece di due, e quella
 catena è la riscrittura che decide se il libro tradotto si legge.
+
+**Come sono stati migrati.** `0731` → `deepseek-v4.1-flash`, `gemini-3.7-flash` →
+`gemini-3.8-flash`, `kimi-k3` e `gpt-5.6-luna` fuori dal coro e dalla style review, la catena di
+landfall ridotta a `[gemini-3.8-flash]`. Poi `runtime sync` in ciascun progetto, perché il
+runtime si rigenera dal config e non si corregge a mano: entrambi rispondono `synced: true` con
+`roles_without_an_agent: []`, e nei due progetti il catalogo generato e i 34 agenti non nominano
+più nessun modello fuori whitelist.
+
+**Il campo `chorus.synthesizer` del progetto non viene letto da nessuna parte.** Il
+sintetizzatore è la costante `CHORUS_SYNTHESIZER` del modulo, che `_role_pin` e `_write_agents`
+leggono direttamente; `grep` su `get("synthesizer")` non trova niente. Nei due config è stato
+aggiornato lo stesso, perché registrava un modello che non esiste più, ma cambiarlo non cambia
+chi sintetizza. Vale la pena saperlo prima di provare a differenziare il sintetizzatore per
+progetto: oggi non si può dal config.
+
+**Una scelta su margherita.** Il suo coro era un solo advisor diverso dal sintetizzatore. La
+successione diretta (`gemini-3.7-flash` → `gemini-3.8-flash`) lo avrebbe reso identico al
+sintetizzatore effettivo, cioè lo stesso modello che rilegge il proprio parere, quindi l'advisor
+è `deepseek-v4.1-flash`. È l'unica riga di questa migrazione scelta e non derivata.
