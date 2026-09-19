@@ -7,8 +7,23 @@ import unittest
 from pathlib import Path
 
 
+def _project_catalogue(bf):
+    """What a generated project carries, which is not the default fleet alone.
+
+    `_opencode_config` and `_write_agents` both append the style review models and the
+    spicy rewriter to whatever chorus a project chose, so a runtime built from the
+    defaults holds those too. Deriving the expectation from CHORUS_DEFAULT_MODELS alone
+    was true only while grok sat in the fleet.
+    """
+    models = list(bf.CHORUS_DEFAULT_MODELS)
+    for extra in list(bf.STYLE_REVIEW_MODELS) + ["openrouter/x-ai/grok-4.6"]:
+        if extra not in models:
+            models.append(extra)
+    return models
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 
 
 def load_module():
@@ -29,7 +44,7 @@ class RuntimeSyncTests(unittest.TestCase):
     def _decay(self):
         """Reproduce a project generated before the effort ladder was corrected."""
         config = json.loads((self.project / "opencode.json").read_text())
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
         model["options"]["reasoning"]["effort"] = "medium"
         model["variants"] = {
             "low": {"reasoning": {"effort": "low"}},
@@ -55,19 +70,19 @@ class RuntimeSyncTests(unittest.TestCase):
 
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
         self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertEqual(set(model["variants"]), {"low", "medium", "high", "max"})
         # Chorus catalog is restored as well (7 models by default).
-        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in _project_catalogue(self.bf)})
 
         agents = self.project / ".opencode" / "agents"
         expected_agents = (
             set(self.bf.ROLE_SPECS)
-            | {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
-            | {self.bf._writer_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
-            | {self.bf._translator_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
-            | {self.bf._reviser_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS}
+            | {self.bf._chorus_advisor_name(m) for m in _project_catalogue(self.bf)}
+            | {self.bf._writer_candidate_name(m) for m in _project_catalogue(self.bf)}
+            | {self.bf._translator_candidate_name(m) for m in _project_catalogue(self.bf)}
+            | {self.bf._reviser_candidate_name(m) for m in _project_catalogue(self.bf)}
             | {self.bf.CHORUS_SYNTHESIZER_AGENT}
         )
         self.assertEqual({path.stem for path in agents.glob("*.md")}, expected_agents)
@@ -98,7 +113,7 @@ class RuntimeSyncTests(unittest.TestCase):
         self.assertTrue(json.loads(stream.getvalue())["synced"])
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
-        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in _project_catalogue(self.bf)})
 
 
 if __name__ == "__main__":
@@ -147,14 +162,16 @@ class ChorusCatalogTests(unittest.TestCase):
         self.assertEqual(list(entry["variants"]), ["high"])
         self.assertEqual(entry["limit"]["context"], 1000000)
 
-    def test_style_review_runs_on_glm_flash_and_kimi_stays_in_the_chorus(self):
+    def test_style_review_runs_on_glm_flash_and_grok_stays_out_of_the_fleet(self):
+        """grok answers the spicy rule, not the style pass and not the default chorus."""
         self.assertIn("openrouter/z-ai/glm-5.3-flash", self.bf.STYLE_REVIEW_MODELS)
-        self.assertNotIn("openrouter/moonshotai/kimi-k3", self.bf.STYLE_REVIEW_MODELS)
-        self.assertIn("openrouter/moonshotai/kimi-k3", self.bf.CHORUS_DEFAULT_MODELS)
+        self.assertNotIn("openrouter/x-ai/grok-4.6", self.bf.STYLE_REVIEW_MODELS)
+        self.assertNotIn("openrouter/x-ai/grok-4.6", self.bf.CHORUS_DEFAULT_MODELS)
+        self.assertIn("openrouter/x-ai/grok-4.6", self.bf.CHORUS_MODEL_CONFIGS)
 
     def test_a_configured_model_outside_the_default_fleet_still_resolves(self):
         """chorus.models accepts any configured model, so its advisor must be runnable."""
-        for model in ("openrouter/qwen/qwen3.8-max", "openrouter/z-ai/glm-5.3"):
+        for model in ("openrouter/x-ai/grok-4.6",):
             with self.subTest(model=model):
                 advisor = self.bf._chorus_advisor_name(model)
                 self.assertNotIn(model, self.bf.CHORUS_DEFAULT_MODELS)

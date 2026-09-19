@@ -46,10 +46,10 @@ never bypass a block by editing canonical files.
 - Make the universe the root object and allow it to contain any number of books.
 - Model continuities separately from optional series, sagas, cycles, and reading orders.
 - Relate books explicitly without forcing standalone, trilogy, or fixed-length modes.
-- Pin primary OpenCode roles to `openrouter/deepseek/deepseek-v4-flash-0731` on a reasoning
-  effort that model declares: `low`, `high`, or `max`; chorus advisors use the configured ensemble
-  (`flash`, `pro`, `glm-5.3-flash`, `qwen3.8-max`, `kimi-k3`, `grok-4.6`, `gemini-3.7-flash`, `luna`) and the
-  synthesizer uses `openrouter/deepseek/deepseek-v4-pro-0813` on `max`; `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
+- Pin primary OpenCode roles to `openrouter/deepseek/deepseek-v4.1-flash` on a reasoning
+  effort that model declares: `low`, `medium`, `high`, or `max`; chorus advisors use the configured
+  ensemble (`deepseek-v4.1-flash`, `glm-5.3-flash`, `qwen3.8-flash`, `gemini-3.8-flash`, `grok-4.6`) and the
+  synthesizer uses `openrouter/google/gemini-3.8-flash` on `high`; `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
 - Let one orchestrator decide work while a deterministic control plane performs every state and canonical write.
 - Persist task receipts, hashes, leases, and staged outputs so pause and resume survive process loss.

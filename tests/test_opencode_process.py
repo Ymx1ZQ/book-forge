@@ -28,7 +28,7 @@ class DerivedConfigTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.config = Path(self.temp.name) / "opencode.json"
         self.config.write_text(json.dumps({
-            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "model": "openrouter/deepseek/deepseek-v4.1-flash",
             "provider": {"openrouter": {"options": {}}},
             "permission": {"edit": "deny"},
             "mcp": {"airtable": {"command": ["npx", "airtable"]}, "linkedin": {"command": ["uvx", "scraper@latest"]}},
@@ -55,7 +55,7 @@ class DerivedConfigTests(unittest.TestCase):
 
     def test_the_model_pin_and_the_permissions_survive(self):
         _, config = self.derived()
-        self.assertEqual(config["model"], "openrouter/deepseek/deepseek-v4-flash-0731")
+        self.assertEqual(config["model"], "openrouter/deepseek/deepseek-v4.1-flash")
         self.assertEqual(config["permission"], {"edit": "deny"})
         self.assertIn("openrouter", config["provider"])
 

@@ -20,7 +20,7 @@ def mock_runner_for(role_map):
             return {"text": json.dumps({"patches": [{"finding": "W-0001", "patch": "p", "location": "universe/worldbuilding.md"}], "ranked_findings": []}), "session_id": "s", "provider": "openrouter", "model": role}
         # designer/auditor fallback
         val = role_map.get(role, {"findings": []})
-        return {"text": json.dumps(val), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "max", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+        return {"text": json.dumps(val), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "variant": "max", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
     return runner
 
 class ChorusTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class ChorusTests(unittest.TestCase):
 
     def test_chorus_run_standalone_produces_report(self):
         envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=2000)
-        res = self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"], provider=mock_runner_for({}))
+        res = self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4.1-flash", "openrouter/x-ai/grok-4.6"], provider=mock_runner_for({}))
         self.assertEqual(res["total_findings"], 2)
         self.assertTrue((Path(res["dir"]) / "chorus-report.md").exists())
         st = self.bf.chorus_status(self.project)
@@ -46,12 +46,12 @@ class ChorusTests(unittest.TestCase):
             calls.append(role)
             if role.startswith("advisor-"):
                 raise AssertionError("should not be called")
-            return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "medium", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+            return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "variant": "medium", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
         # Need to also mock auditor
         orig = runner
         def wrapped(role, envelope, attempt_dir):
             if role == "canon-auditor":
-                return {"text": json.dumps({"findings": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+                return {"text": json.dumps({"findings": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
             return orig(role, envelope, attempt_dir)
         # Disable via flag
         self.bf.execute_universe_design(self.project, provider=wrapped, no_chorus=True)
@@ -65,7 +65,7 @@ class ChorusTests(unittest.TestCase):
                 return {"text": json.dumps({"findings": [{"severity": "warning", "issue": "no id here"}]}), "session_id": "s", "provider": "openrouter", "model": role}
             return {"text": json.dumps({"findings": [{"id": "W-0001", "severity": "note", "issue": f"issue from {role}", "evidence": [], "suggestion": "sug"}], "suggestions": ["s"]}), "session_id": "s", "provider": "openrouter", "model": role}
         envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=2000)
-        res = self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"], provider=runner)
+        res = self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4.1-flash", "openrouter/x-ai/grok-4.6"], provider=runner)
         self.assertEqual(res["total_findings"], 1)
         report = (Path(res["dir"]) / "chorus-report.md").read_text()
         self.assertIn("FAILED (non-blocking)", report)
@@ -74,7 +74,7 @@ class ChorusTests(unittest.TestCase):
     def test_with_chorus_context_injects_report(self):
         # First run chorus to create a report
         envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=2000)
-        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4-flash-0731"], provider=mock_runner_for({}))
+        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4.1-flash"], provider=mock_runner_for({}))
         self.bf.chorus_synthesize(self.project, provider=mock_runner_for({}))
         # Now design with with_chorus_context should inject
         seen = {}
@@ -89,7 +89,7 @@ class ChorusTests(unittest.TestCase):
             # Provide designer that succeeds
             def provider(role, envelope, attempt_dir):
                 if role == "designer":
-                    return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+                    return {"text": json.dumps({"kernel": [{"id": "LAW-0001", "summary": "s"}], "eras": [], "events": [], "places": [], "factions": [], "characters": [], "themes": ["t"], "style": {"tense": "past", "person": "third-limited"}, "continuity_material": {}, "book_local": {}, "unresolved_questions": []}), "session_id": "s", "provider": "openrouter", "model": "openrouter/deepseek/deepseek-v4.1-flash", "variant": "high", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
                 if role.startswith("advisor-"):
                     return {"text": json.dumps({"findings": [], "suggestions": []}), "session_id": "s", "provider": "openrouter", "model": role}
                 return {"text": json.dumps({"findings": []}), "session_id": "s", "provider": "openrouter", "model": role, "variant": "max", "tokens": {"input": 100, "output": 100}, "cost": 0, "latency_ms": 1, "finish": "stop"}
@@ -120,7 +120,7 @@ class ChorusTests(unittest.TestCase):
         # Two advisors with same issue text
         def dup_runner(role, envelope, attempt_dir):
             return {"text": json.dumps({"findings": [{"id": "W-1", "severity": "warning", "issue": "Same issue", "evidence": [], "suggestion": "s"}], "suggestions": []}), "session_id": "s", "provider": "openrouter", "model": role}
-        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"], provider=dup_runner)
+        self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, ["openrouter/deepseek/deepseek-v4.1-flash", "openrouter/x-ai/grok-4.6"], provider=dup_runner)
         syn = self.bf.chorus_synthesize(self.project, provider=mock_runner_for({}))
         # Deduplicated to 1 finding (same issue)
         self.assertEqual(len(syn["findings"]), 1)
@@ -132,7 +132,7 @@ if __name__ == "__main__":
 class ChorusAccountingTests(ChorusTests):
     def test_a_round_records_what_each_advisor_cost(self):
         envelope = self.bf.build_envelope(self.project, role="designer", task_capsule={"scope": "universe"}, imports=[], state={}, tools=[], max_output_tokens=100)
-        models = ["openrouter/deepseek/deepseek-v4-flash-0731", "openrouter/x-ai/grok-4.6"]
+        models = ["openrouter/deepseek/deepseek-v4.1-flash", "openrouter/x-ai/grok-4.6"]
         self.bf.run_chorus(self.project, {"scope": "universe"}, envelope, models, provider=mock_runner_for({}))
 
         rounds = sorted((self.project / ".book-forge/chorus").glob("*/*/chorus-telemetry.json"))
@@ -141,7 +141,7 @@ class ChorusAccountingTests(ChorusTests):
         self.assertEqual(value["task"], "CHORUS-universe")
         self.assertEqual(
             sorted(entry["role"] for entry in value["advisors"]),
-            ["advisor-deepseek-deepseek-v4-flash-0731", "advisor-grok-4-6"],
+            ["advisor-deepseek-deepseek-v4-1-flash", "advisor-grok-4-6"],
         )
         # The round reaches the report under each advisor's own role.
         report = self.bf.telemetry_report(self.project)

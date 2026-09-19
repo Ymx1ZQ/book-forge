@@ -30,7 +30,7 @@ class InitProjectTests(unittest.TestCase):
         self.assertTrue(result["created"])
         config = json.loads((project / "book-forge.yaml").read_text())
         self.assertEqual(config["source_language"], "en")
-        self.assertEqual(config["model"], "openrouter/deepseek/deepseek-v4-flash-0731")
+        self.assertEqual(config["model"], "openrouter/deepseek/deepseek-v4.1-flash")
         self.assertEqual(config["universe"], "UNI-0001")
         opencode = json.loads((project / "opencode.json").read_text())
         self.assertNotIn("enabled_providers", opencode)

@@ -98,7 +98,7 @@ class DesignChunkingTests(unittest.TestCase):
             def always_length(role, env, attempt_dir):
                 calls["n"] += 1
                 return {
-                    "text": "", "provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731",
+                    "text": "", "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
                     "variant": "max", "session_id": f"ses-len-{calls['n']}",
                     "tokens": {"input": 100, "output": 0, "reasoning": 32000}, "cost": 0.001,
                     "latency_ms": 5, "finish": "length",
@@ -129,7 +129,7 @@ class DesignChunkingTests(unittest.TestCase):
                 finish = "length" if calls["n"] < 3 else "stop"
                 return {
                     "text": "{}" if finish == "stop" else "", "provider": "openrouter",
-                    "model": "deepseek/deepseek-v4-flash-0731", "variant": "max",
+                    "model": "deepseek/deepseek-v4.1-flash", "variant": "max",
                     "session_id": f"ses-{calls['n']}", "tokens": {"input": 100, "output": 10},
                     "cost": 0.001, "latency_ms": 5, "finish": finish,
                 }

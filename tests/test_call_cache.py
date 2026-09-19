@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 
 
 def load_module():

@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 GLM = "openrouter/z-ai/glm-5.3-flash"
 QWEN = "openrouter/qwen/qwen3.8-flash"
 
@@ -139,9 +139,9 @@ class ARoleCarriesItsOwnPinTests(WriterPinFixture):
         self.assertIn("approved, not audited", str(raised.exception))
 
     def test_the_generated_catalogue_carries_a_pin_the_chorus_does_not(self):
-        config = {"roles": {"writer": {"model": "openrouter/z-ai/glm-5.3"}}}
+        config = {"roles": {"writer": {"model": "openrouter/x-ai/grok-4.6"}}}
         catalogue = self.bf._opencode_config([MODEL], config)["provider"]["openrouter"]["models"]
-        self.assertIn("z-ai/glm-5.3", catalogue)
+        self.assertIn("x-ai/grok-4.6", catalogue)
 
     def test_the_receipt_is_measured_against_the_override(self):
         """An override moves what it names and nothing else: glm-5.3-flash has a
@@ -224,7 +224,7 @@ class TheSameChapterAskedOfSeveralModelsTests(WriterPinFixture):
             self.bf.draft_bakeoff(self.project, self.book, "CH-0001", [MODEL], provider=EnvelopePinnedProvider())
 
     def test_a_model_can_be_named_the_short_way(self):
-        index, _ = self.bakeoff(models=("deepseek-v4-flash-0731", "glm-5.3-flash"))
+        index, _ = self.bakeoff(models=("deepseek-v4.1-flash", "glm-5.3-flash"))
         self.assertEqual({row["model"] for row in index["candidates"]}, {MODEL, GLM})
 
     def test_a_candidate_gets_the_writer_prompt_and_the_writer_budget(self):

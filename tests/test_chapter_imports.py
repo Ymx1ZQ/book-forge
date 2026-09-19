@@ -154,7 +154,7 @@ class BlockCatalogueTests(unittest.TestCase):
                                      "beats": ["b"], "plants": [], "reveals": [], "target_words": 900,
                                      "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None}]}
         return {"text": json.dumps(payload), "provider": "openrouter",
-                "model": "openrouter/deepseek/deepseek-v4-flash-0731", "variant": "medium",
+                "model": "openrouter/deepseek/deepseek-v4.1-flash", "variant": "medium",
                 "session_id": "s", "tokens": {"input": 1, "output": 1}, "cost": 0.0, "latency_ms": 1, "finish": "stop"}
 
     def test_the_repair_hint_names_the_catalogue_when_imports_fail(self):

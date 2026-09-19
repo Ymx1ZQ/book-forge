@@ -210,7 +210,7 @@ class WithheldIsItsOwnCallTests(unittest.TestCase):
                     ]}
             return {
                 "text": json.dumps(payload), "provider": "openrouter",
-                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "model": "openrouter/deepseek/deepseek-v4.1-flash",
                 "variant": {name: spec[1] for name, spec in self.bf.ROLE_SPECS.items()}.get(role, "high"),
                 "session_id": "ses-1", "tokens": {"input": 100, "output": 200},
                 "cost": 0.001, "latency_ms": 5, "finish": "stop",

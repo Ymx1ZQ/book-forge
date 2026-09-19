@@ -69,7 +69,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 SCHEMA_VERSION = 1
 MODEL_ID = MODEL.split("/", 1)[1]
 VARIANT_EFFORTS = {"low": "low", "medium": "medium", "high": "high", "max": "max"}
@@ -99,23 +99,21 @@ ROLE_SPECS = {
 
 # Chorus ensemble — default-on, opt-out via chorus.enabled or --no-chorus.
 # Mirrors the user's global opencode.json catalog so every generated project
-# exposes the same 7 models without hand-editing provider config.
-CHORUS_SYNTHESIZER = "openrouter/deepseek/deepseek-v4-pro-0813"
+# exposes the same 5 models without hand-editing provider config.
+CHORUS_SYNTHESIZER = "openrouter/google/gemini-3.8-flash"
 STYLE_REVIEW_MODELS: list[str] = [
-    "openrouter/openai/gpt-5.6-luna",
     "openrouter/z-ai/glm-5.3-flash",
     "openrouter/google/gemini-3.8-flash",
     "openrouter/qwen/qwen3.8-flash",
 ]
+# grok-4.6 is in the catalogue and not in this fleet: it is not a general advisor but
+# the model the `spicy` rewrite rule names, and `_opencode_config` appends it to every
+# project regardless. A project that wants it advising says so in chorus.models.
 CHORUS_DEFAULT_MODELS: list[str] = [
-    "openrouter/deepseek/deepseek-v4-flash-0731",
-    "openrouter/deepseek/deepseek-v4-pro-0813",
+    "openrouter/deepseek/deepseek-v4.1-flash",
     "openrouter/z-ai/glm-5.3-flash",
     "openrouter/qwen/qwen3.8-flash",
-    "openrouter/moonshotai/kimi-k3",
-    "openrouter/x-ai/grok-4.6",
     "openrouter/google/gemini-3.8-flash",
-    "openrouter/openai/gpt-5.6-luna",
 ]
 # Prose style presets. A project picks one in book-forge.yaml under `style.preset`;
 # the named file is appended to the role prompt of every role that writes or judges
@@ -128,32 +126,23 @@ STYLE_PROMPT_ROLES = frozenset({"writer", "reviser", "style-review"})
 # Per-model provider pin and reasoning ladder — taken from the global config.
 # Each entry mirrors provider.openrouter.models[<id>] in ~/.config/opencode/opencode.json.
 CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
-    "openrouter/deepseek/deepseek-v4-flash-0731": {
-        "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
+    # Primary. `limit` is not decoration: `_model_input_window` divides the context by
+    # four, and a model missing from this map falls back to `ROLE_BUDGETS[role][0] * 8`
+    # instead. The window is 1_048_576 against the 1_310_720 of the v4-flash-0731 this
+    # replaced on 2026-09-19, so every role's envelope lost about 65k tokens that day.
+    # The ladder keeps `medium` because designer, locale-reader and locale-reviser pin
+    # it, and a step absent from `variants` has nothing to resolve against.
+    "openrouter/deepseek/deepseek-v4.1-flash": {
+        "provider": {"order": ["deepseek"], "only": ["deepseek"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
-        "limit": {"context": 1310720, "output": 131072},
-    },
-    "openrouter/deepseek/deepseek-v4-pro-0813": {
-        "provider": {"order": ["deepseek", "baidu"], "only": ["deepseek", "baidu"], "allow_fallbacks": False},
-        "default_effort": "high",
-        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
-    },
-    "openrouter/z-ai/glm-5.3": {
-        "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
-        "default_effort": "max",
-        "variants": {"high": "high", "max": "max"},
+        "limit": {"context": 1048576, "output": 131072},
     },
     "openrouter/z-ai/glm-5.3-flash": {
         "provider": {"order": ["z-ai"], "only": ["z-ai"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
         "limit": {"context": 1048576, "output": 131072},
-    },
-    "openrouter/qwen/qwen3.8-max": {
-        "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
-        "default_effort": "xhigh",
-        "variants": {"medium": "medium", "high": "high", "xhigh": "xhigh"},
     },
     # The only model of the catalog whose OpenRouter parameters omit reasoning_effort:
     # it reasons, but the effort is not steerable, so it declares the one operating
@@ -164,47 +153,30 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
         "variants": {"high": "high"},
         "limit": {"context": 1000000, "output": 131072},
     },
-    "openrouter/moonshotai/kimi-k3": {
-        "provider": {"order": ["moonshotai"], "only": ["moonshotai"], "allow_fallbacks": False},
-        "default_effort": "max",
-        "variants": {"high": "high", "max": "max"},
-    },
+    # Kept when the whitelist was cut to five on 2026-09-19, for the `spicy` rewrite
+    # rule: it is the model the others refuse that work, and nothing left replaces it.
     "openrouter/x-ai/grok-4.6": {
         "provider": {"order": ["xai"], "only": ["xai"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
     },
-    # Released 2026-09-02. Reachable only from OpenCode 1.18.27 or newer: the 1.18.23
-    # binary that shipped before it answered `Model not found` however the model was
-    # written into the project's config, because the binary validates against a list
-    # of its own rather than against `~/.cache/opencode/models.json`.
-    "openrouter/google/gemini-3.7-flash": {
-        "provider": {"order": ["google-vertex", "google-ai-studio"], "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
-        "default_effort": "high",
-        "variants": {"low": "low", "medium": "medium", "high": "high"},
-    },
-    "openrouter/openai/gpt-5.6-luna": {
-        "provider": {"order": ["openai"], "only": ["openai"], "allow_fallbacks": False},
-        "default_effort": "high",
-        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
-    },
-    # Ten times luna's output price, and in the catalogue for one reason: the
-    # monolingual rewrite is the call that decides whether a translated book reads,
-    # and it is the only one whose envelope carries no source, so it is the place
-    # where a model this expensive is still affordable. Nothing else should pin it.
-    # Whitelisted on 2026-09-06 after two sessions had it down as unreachable: the
-    # switch was `provider.openrouter.whitelist` in the user's global opencode.json,
-    # not anything about the model. See the project memory.
+    # Released 2026-09-02, and reachable only from OpenCode 1.18.27 or newer: the
+    # 1.18.23 binary that shipped before it answered `Model not found` however the model
+    # was written into the project's config, because it validates against a list of its
+    # own rather than against `~/.cache/opencode/models.json`. That note sat above the
+    # gemini-3.7-flash entry until 2026-09-19, describing a model released three weeks
+    # earlier than the date it carried.
+    #
+    # It is also the synthesizer, and the pin of the monolingual translation rewrite.
+    # Both were gpt-5.6-terra's until the whitelist dropped it. The argument that put
+    # the rewrite on the most capable model available is unchanged: it is the only call
+    # whose envelope carries no source text, and it decides whether a translated book
+    # reads, so it does not fall back to the primary.
     "openrouter/google/gemini-3.8-flash": {
         "provider": {"order": ["google-vertex", "google-ai-studio"],
                      "only": ["google-vertex", "google-ai-studio"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high"},
-    },
-    "openrouter/openai/gpt-5.6-terra": {
-        "provider": {"order": ["openai"], "only": ["openai"], "allow_fallbacks": False},
-        "default_effort": "high",
-        "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
     },
 }
 
@@ -4757,7 +4729,7 @@ def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, 
     return {
         "text": json.dumps(merged, ensure_ascii=False, sort_keys=True),
         "provider": "openrouter",
-        "model": "deepseek/deepseek-v4-flash-0731",
+        "model": MODEL_ID,
         "variant": ROLE_SPECS[role][1],
         "session_id": session_id,
         "tokens": tokens,

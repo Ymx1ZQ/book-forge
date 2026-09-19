@@ -5148,3 +5148,112 @@ except BookForgeError as exc:
 - [x] Suite green. Reinstall, commit & push
 
 **Done when:** A provider saying *retry shortly* is retried shortly.
+
+## The catalogue names eight models the global whitelist no longer allows ✅
+
+**Status: ✅ Done — 2026-09-19**
+
+La whitelist globale in `~/.config/opencode/opencode.json` passa da tredici modelli a
+cinque: `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3-flash`, `qwen/qwen3.8-flash`,
+`google/gemini-3.8-flash`, `x-ai/grok-4.6`. Escono il primario `deepseek-v4-flash-0731`, il
+sintetizzatore `deepseek-v4-pro-0813`, e poi `kimi-k3`, `gpt-5.6-luna`, `gpt-5.6-terra`,
+`glm-5.3`, `qwen3.8-max`, `gemini-3.7-flash`.
+
+**Il catalogo per progetto non riabilita niente, misurato.** Sembrava che questa skill fosse
+al riparo, perché `_opencode_config` scrive un `opencode.json` per progetto con il proprio
+`provider.openrouter.models`. Non è così: dichiarando `deepseek/deepseek-v3.2` — fuori dalla
+whitelist globale — nel config di un progetto, `opencode run -m openrouter/deepseek/deepseek-v3.2`
+è rimasto appeso fino al timeout di 120s senza rispondere né fallire. Il controllo, stessa
+cartella e stesso config, cambiando solo il modello con `glm-5.3-flash`, ha risposto in pochi
+secondi con exit 0. Quindi ogni ruolo pinnato e ogni advisor deve nominare un modello che
+sopravvive, dentro i progetti come fuori.
+
+**Cosa cambia, e perché queste scelte.**
+
+Il primario diventa `deepseek-v4.1-flash`. La conseguenza da sapere è il contesto: 1.048.576
+token contro 1.310.720, e `_model_input_window` divide la finestra per quattro, quindi ogni
+ruolo perde circa 65k token di envelope (262.144 invece di 327.680, prima di sottrarre output
+e riserva). Dichiarare `limit` nella voce non è cosmetico: senza, quella funzione cade sul
+ramo `ROLE_BUDGETS[role][0] * 8` e la finestra cambia di nuovo, in silenzio.
+
+La scala del modello primario tiene `medium`. Tre ruoli lo pinnano — `designer`,
+`locale-reader`, `locale-reviser` — e uno scalino assente dalle `variants` del modello non ha
+nulla su cui risolversi. La voce globale ne dichiara tre (low, high, max): viene allineata
+anche quella, così il mirror resta vero.
+
+Il sintetizzatore passa a `gemini-3.8-flash`. È il più vicino al `v4-pro-0813` che esce
+(0.75/3.75 contro 1.32/3.96 $/M) ed è di un altro fornitore rispetto al primario, che è la
+ragione per cui un sintetizzatore legge gli advisor invece di riscrivere da solo.
+
+La riscrittura monolingue delle traduzioni passa anch'essa a `gemini-3.8-flash`. Il commento
+che pinnava `gpt-5.6-terra` diceva che quella chiamata è l'unica il cui envelope non porta il
+testo sorgente, ed è quella che decide se un libro tradotto si legge: l'argomento sopravvive
+al modello, quindi il ruolo prende il più capace rimasto invece di ricadere sul primario.
+
+`grok-4.6` resta. La regola `spicy → grok with rewrite` esiste perché gli altri modelli quei
+contenuti li rifiutano, e fra i rimasti non c'è un sostituto.
+
+**Tasks:**
+- [x] `MODEL`, `CHORUS_SYNTHESIZER`, `STYLE_REVIEW_MODELS` e `CHORUS_DEFAULT_MODELS` sui cinque modelli rimasti.
+- [x] `CHORUS_MODEL_CONFIGS` ridotto ai cinque, rispecchiando le voci globali, con `limit` sul primario e lo scalino `medium`.
+- [x] La catena della riscrittura monolingue e la regola per tag non nominano più `gpt-5.6-terra` — **scostamento dal piano: nel motore non la nominavano già.** L'unico riferimento in codice era la voce in `CHORUS_MODEL_CONFIGS`; la catena arriva da `translation.rewriters` nel `book-forge.yaml` del progetto, quindi il pin di terra vive nei progetti, non qui.
+- [x] Le costanti nei test seguono i modelli nuovi; i test che nominano i modelli usciti vanno riscritti sui rimasti.
+- [x] `SKILL.md` e `references/init.md` aggiornati dove elencano i modelli.
+- [x] Suite verde, `./install.sh --force`, poi `./install.sh --check` senza drift.
+
+**Done when:** Nessun file della skill, fuori dai DEVPLAN, nomina un modello che la whitelist
+globale non ha; l'agente globale `book-forge-orchestrator` parte sul primario nuovo.
+
+**Execution notes.**
+
+**Scostamento: grok esce dalla flotta di default, non solo dal catalogo che non era.** Il
+piano diceva cinque modelli e cinque advisor. Tenendo grok fra i default, `CHORUS_DEFAULT_MODELS`
+e `CHORUS_MODEL_CONFIGS` diventavano lo stesso insieme, e tre test perdevano il loro oggetto:
+coprono il percorso *un modello configurato fuori dalla flotta di default si risolve comunque*,
+che senza un modello in quella posizione non è più esprimibile. Grok è il candidato giusto per
+starci: non è un advisor generale ma il modello della regola `spicy`, e `_opencode_config` e
+`_write_agents` lo aggiungono comunque a ogni progetto. Così la flotta di default è quattro
+flash, il catalogo cinque, e il coro non paga 2/6 $/M a ogni round.
+
+**I test hanno preso due errori che la lettura non avrebbe preso.** Il primo: `_chorus_slug`
+trasforma i punti in trattini, quindi la sostituzione meccanica dell'id ha prodotto
+`advisor-deepseek-deepseek-v4.1-flash` dove il codice genera `...v4-1-flash`. Il secondo: le
+aspettative sul runtime generato erano derivate da `CHORUS_DEFAULT_MODELS`, vero solo finché
+grok stava nella flotta; ora dicono la regola che il codice applica — flotta più modelli di
+style review più il riscrittore spicy — con `_project_catalogue` nei due file di test.
+
+**Due difetti preesistenti trovati passando, corretti qui.** Un record di risultato scriveva
+`"model": "deepseek/deepseek-v4-flash-0731"` a mano invece di `MODEL_ID`: con il primario
+cambiato avrebbe riportato in telemetria un modello che non ha risposto. E due commenti in
+`CHORUS_MODEL_CONFIGS` stavano sopra la voce sbagliata: *Released 2026-09-02* sopra
+`gemini-3.7-flash`, che è del 13 agosto, e *Ten times luna's output price* sopra
+`gemini-3.8-flash`, che di luna è il triplo — descrivevano entrambi la voce due righe sotto.
+
+**Verifica.** Suite: `913 passed, 404 subtests`. `./install.sh --force` seguito da
+`./install.sh --check`: nessun drift. Dopo il taglio della whitelist globale, i cinque modelli
+rimasti rispondono a `opencode run --pure -m <id>`, e l'agente globale
+`book-forge-orchestrator` parte sul primario nuovo.
+
+**Resta aperto, e non è lavoro di questa skill:** i due progetti su questo disco
+(`~/Documents/art/books/landfall`, `~/Documents/art/books/margherita`) pinnano nel proprio
+`book-forge.yaml` modelli che la whitelist non ha più. Vedi l'entry seguente.
+
+## I due progetti esistenti pinnano modelli che la whitelist non ha più
+
+**Status: aperta — in attesa di decisione, 2026-09-19**
+
+`landfall` ha `chorus.models` con `deepseek-v4-flash-0731`, `deepseek-v4-pro-0813`, `kimi-k3` e
+`gpt-5.6-luna`, sintetizzatore `deepseek-v4-pro-0813`, `style_review` con `gpt-5.6-luna`, e
+`translation.rewriters: [gpt-5.6-terra, google/gemini-3.8-flash]`. `margherita` ha un coro di un
+solo modello, `gemini-3.7-flash`, e lo stesso sintetizzatore e style review.
+
+Nessuno dei due gira in questo momento, ma alla prossima sessione ogni round di coro, la sintesi,
+la style review e — su landfall — la riscrittura monolingue chiamano modelli che non si risolvono
+più. Il `book-forge.yaml` è la fonte di quei pin: si corregge lì, non rigenerando il runtime, che
+li rileggerebbe uguali.
+
+La mappatura senza perdite è quella già decisa per la skill: `0731` → `deepseek-v4.1-flash`,
+`v4-pro-0813` (sintetizzatore) → `gemini-3.8-flash`, `gemini-3.7-flash` → `gemini-3.8-flash`,
+`kimi-k3` e `gpt-5.6-luna` fuori dal coro. La sola scelta che cambia un risultato è la catena di
+landfall: con terra fuori resta `[gemini-3.8-flash]`, cioè un anello invece di due, e quella
+catena è la riscrittura che decide se il libro tradotto si legge.

@@ -5,8 +5,23 @@ import unittest
 from pathlib import Path
 
 
+def _project_catalogue(bf):
+    """What a generated project carries, which is not the default fleet alone.
+
+    `_opencode_config` and `_write_agents` both append the style review models and the
+    spicy rewriter to whatever chorus a project chose, so a runtime built from the
+    defaults holds those too. Deriving the expectation from CHORUS_DEFAULT_MODELS alone
+    was true only while grok sat in the fleet.
+    """
+    models = list(bf.CHORUS_DEFAULT_MODELS)
+    for extra in list(bf.STYLE_REVIEW_MODELS) + ["openrouter/x-ai/grok-4.6"]:
+        if extra not in models:
+            models.append(extra)
+    return models
+
+
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 
 
 def load_module():
@@ -31,7 +46,7 @@ class RoleTopologyTests(unittest.TestCase):
         # Neither the opening agent nor the catalogue is narrowed: the roles carry their own pins.
         self.assertNotIn("default_agent", config)
         self.assertNotIn("whitelist", config["provider"]["openrouter"])
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4-flash-0731"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
         self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
         self.assertEqual(model["variants"], {
@@ -56,22 +71,22 @@ class RoleTopologyTests(unittest.TestCase):
         files = {path.stem: path.read_text() for path in (self.project / ".opencode/agents").glob("*.md")}
         # Primary roles must be present with exact pins; chorus advisors are additive.
         self.assertTrue(set(expected) <= set(files), f"missing primary roles: {set(expected) - set(files)}")
-        expected_chorus = {self.bf._chorus_advisor_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
+        expected_chorus = {self.bf._chorus_advisor_name(m) for m in _project_catalogue(self.bf)} | {self.bf.CHORUS_SYNTHESIZER_AGENT}
         self.assertTrue(expected_chorus <= set(files), f"missing chorus agents: {expected_chorus - set(files)}")
         # A writer agent per catalogue model: the bake-off needs several pins live
         # at once, and the set stays exact so a stray agent is still a failure.
-        expected_writers = {self.bf._writer_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {
+        expected_writers = {self.bf._writer_candidate_name(m) for m in _project_catalogue(self.bf)} | {
             self.bf._writer_candidate_name("openrouter/x-ai/grok-4.6")
         }
         # A translator pin per catalogue model, for the same reason: the bake-off
         # that picks the translator needs every candidate live at once.
-        expected_translators = {self.bf._translator_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {
+        expected_translators = {self.bf._translator_candidate_name(m) for m in _project_catalogue(self.bf)} | {
             self.bf._translator_candidate_name("openrouter/x-ai/grok-4.6")
         }
         # And a reviser pin per model: the monolingual rewrite is the call that decides
         # whether the book reads and the only one whose envelope carries no source, so
         # it is compared like the other two.
-        expected_revisers = {self.bf._reviser_candidate_name(m) for m in self.bf.CHORUS_DEFAULT_MODELS} | {
+        expected_revisers = {self.bf._reviser_candidate_name(m) for m in _project_catalogue(self.bf)} | {
             self.bf._reviser_candidate_name("openrouter/x-ai/grok-4.6")
         }
         # The critic is the one role whose pin is deliberately not the project's:
@@ -102,7 +117,7 @@ class RoleTopologyTests(unittest.TestCase):
             self.assertIn('"*": deny', body)
             self.assertNotIn("bash:", body)
         # Opencode config must expose the full chorus catalog (default 7 models).
-        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in self.bf.CHORUS_DEFAULT_MODELS})
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in _project_catalogue(self.bf)})
 
     def test_local_runtime_has_required_model_and_json_sessions(self):
         report = self.bf.verify_runtime(self.project)
@@ -149,10 +164,10 @@ class ChorusPinResolutionTests(unittest.TestCase):
             self.bf._project_root_from(orphan)
 
     def test_expected_pin_matches_written_agents(self):
-        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4-flash-0731", "medium"))
-        self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4-flash-0731", "low"))
-        self.assertEqual(self.bf._expected_pin("advisor-qwen-qwen3-8-max"), ("qwen/qwen3.8-max", "xhigh"))
-        self.assertEqual(self.bf._expected_pin("advisor-openai-gpt-5-6-luna"), ("openai/gpt-5.6-luna", "high"))
+        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4.1-flash", "medium"))
+        self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4.1-flash", "low"))
+        self.assertEqual(self.bf._expected_pin("advisor-qwen-qwen3-8-flash"), ("qwen/qwen3.8-flash", "high"))
+        self.assertEqual(self.bf._expected_pin("advisor-grok-4-6"), ("x-ai/grok-4.6", "high"))
         pro_id = self.bf.CHORUS_SYNTHESIZER.split("/", 1)[1]
         cfg = self.bf.CHORUS_MODEL_CONFIGS.get(self.bf.CHORUS_SYNTHESIZER, {})
         variant = str(cfg.get("default_effort", "max"))
