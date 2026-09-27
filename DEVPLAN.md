@@ -5276,3 +5276,262 @@ progetto: oggi non si può dal config.
 successione diretta (`gemini-3.7-flash` → `gemini-3.8-flash`) lo avrebbe reso identico al
 sintetizzatore effettivo, cioè lo stesso modello che rilegge il proprio parere, quindi l'advisor
 è `deepseek-v4.1-flash`. È l'unica riga di questa migrazione scelta e non derivata.
+
+---
+
+## Phase L — Ground Truth adoption: reader isolation, evidence and bounded production
+
+**Status (2026-09-27): planned, not implemented.** The author explicitly requested
+this documentation and its commits for a Claude handoff. No engine changes,
+deployment, migration or new prose were performed in this phase. The source
+inspected was `c41a7e755949d7a2225e2c9b45e40b47dcbdcf74`. Existing pending work
+above remains pending; this phase does not retroactively close it.
+
+**Companion plans:** Ground Truth
+`../../../art/books/ground-truth/DEVPLAN.md`, Phase 157 (editorial decisions,
+research, source preservation, import and pilot); legacy
+`../ground-truth-book/DEVPLAN.md`, Phase 35 (hold on the old controller route).
+Recovered advisory memos and receipts live in the book's
+`archive/redesign-2026-09-27/`. They are evidence, not approved implementations.
+
+### Resume instructions and boundaries
+
+1. Read Phase 157 before executing this phase. The goal is readable, technically
+   persuasive fiction at a measured lower production cost, not a larger review
+   system. Landfall is the working reference consumer and must keep working.
+2. Follow the user's devplan gate: present the scoped implementation milestone
+   and obtain explicit approval before code changes. A later explicit instruction
+   to execute this plan supplies that approval; do not ask repeatedly for work
+   already authorized. This handoff itself authorizes documentation/commits only.
+3. Implement in this development tree, not installed skill copies. Use TDD for
+   behavior changes and serialize writes/commits within this repository. Research
+   and independent review may use subagents; do not add mandatory paid production
+   roles merely because more agents are available.
+4. First confirm current source, active installation and local dirty state. At
+   discovery, dev and OpenCode engine SHA-256 was
+   `42f26a0cd7783e9a6aef349d183d14fca0d7e8a479376e9700376f8194a5e46d`;
+   Codex's installed copy differed:
+   `f4ec6da5950a1e3b351269180b4420e4900d08f3032c3098b09787dc45c22696`.
+5. Reuse the existing engine, blocks/imports, staged promotion, receipts,
+   transaction recovery, style presets and relation obligations. Avoid a broad
+   rewrite of the large Python file or a universal migration/research platform.
+6. Commit scoped changes and record actual tests. For this handoff no push or
+   install is requested. Future installation must use committed source and
+   `./install.sh --force`; first isolate through `BOOK_FORGE_CONFIG_HOME`, which
+   the installer already supports. Do not silently replace Landfall's runtime.
+
+### Findings and mechanisms to preserve
+
+Locations below refer to the discovery commit; use symbols after code moves.
+
+- `build_envelope` (~3546) drops author history for selected roles and avoids
+  imports for the cold-reader, but has no shared role-section allowlist.
+  `_withheld_for_reader` (~5061) removes `fact`/`never_write`, not chapter
+  beats/plants/reveals. `_call_parallel_reviews` (~8915) falls back to the last
+  2,000 characters of `reader-state.md` when no previous snapshot exists; the
+  initial file (~5104) includes intended exit knowledge. This is a concrete
+  first-chapter leak, not evidence that all future chapter beats are exposed.
+- `validate_book_design` (~4941/5004) expects withheld reveal IDs in the same
+  book and rejects the first chapter. `_withheld_for_chapter` (~5027) cannot
+  protect a secret present in imported canon or summaries. `_withheld_leak`
+  (~7153) is lexical. Cross-book and POV safety requires following imports.
+- Reader findings and dispositions are persisted (~8715/9657), but no feedback
+  ingestion/readback loop makes accepted decisions operational. Previous chapter
+  tail is already stored (~9642): use bounded existing context before inventing
+  a new adjacency service or reviewer.
+- Chapter `calls` includes a literal 3 (~9671), then a verification increment
+  (~9707). Audit (~2431) checks a retrospective 5/7 ordinary/pivotal allowance,
+  but this is not a comprehensive cap before dispatch. Include chorus, split
+  technical review, retries and accepted attempts whose result is unknown.
+- `migrate_project` (~1414) upgrades native schema 0→1, not arbitrary legacy
+  fiction. `init` (~1159) validates a nonempty directory as already native.
+  Ground Truth therefore needs a fresh native sibling and project-specific
+  translation, not `init` in its populated source directory.
+- `_execute_materialized_task` provides useful validated promotion and receipts.
+  `apply_universe_design` (~4850) and `apply_book_design` (~5136) create synthetic
+  `design_clean` evidence: structural acceptance must not masquerade as an
+  independent editorial audit after import. Preserve valid native behavior with
+  an explicit provenance distinction and production gate where needed.
+- CLI entry (~13739) calls transaction recovery even for apparently observational
+  commands. Pending journals can write files and commit; completed ones are
+  no-ops. Never copy runtime journals into the experiment or use live `check`
+  as a guaranteed read-only inspection. Recovery does not itself push.
+- `agents/style-review.md` requires replacements to be shorter. Combined with
+  blanket anti-explanation criteria, this can reject the clarification the author
+  wants. Existing plain/concrete presets are useful and should be retained.
+
+Borrow the legacy `compile_context_packet.py` role-section permissions, explicit
+feedback dispositions, adjacency/motif awareness and evidence discipline. Do not
+port repeated full-canon detector passes, automatic graph builds, tournaments or
+another controller. Preserve objective verification before promotion and actual
+closure receipts; do not weaken successful checks to meet a cost target.
+
+### M44 — Make reader and writer visibility explicit
+
+**Why:** A cold-read should measure what prose teaches; writers must not receive
+future or foreign-POV secrets through a transitive import.
+
+- [ ] Define minimal role capsules/section permissions. Cold-reader receives
+  current prose and earned prior reader memory, without intended outcomes,
+  chapter beats/plants/reveals, canon answers or feedback that supplies answers.
+- [ ] Replace the first-chapter fallback with an explicit empty/entry-only
+  earned state; preserve valid prior snapshots on resume.
+- [ ] Trace canon blocks and summaries through all imports. Use perspective-safe
+  blocks plus existing relation obligations for B1/B2/B3 before changing schema.
+- [ ] Add deterministic context checks for role permissions and dependency
+  closure. Lexical secret matching may supplement, not replace, these checks.
+
+**Tests/done:** Fixture with a future-book secret in a directly referenced block,
+an imported summary and a second-hop import; distinct POV permissions; first
+chapter and resume cases. Safe roles retain the needed material, blind roles
+cannot see it. Extend context/withheld/review tests; no extra paid reviewer.
+
+### M45 — Make author and reader feedback durable without contaminating the cold-read
+
+**Why:** User feedback must be able to supersede old style prohibitions and stop
+previously settled issues from reappearing indefinitely.
+
+- [ ] Add the smallest explicit feedback record: stable ID, source/scope,
+  rationale, accepted/rejected/deferred/superseded disposition and affected
+  constraints. Distinguish preference from objective canon defect.
+- [ ] Feed applicable accepted decisions to drafting/revision/adjudication;
+  preserve an uninformed cold-reader. Never seed its expected reaction.
+- [ ] Read dispositions on resume and deduplicate semantically identical findings
+  by supported stable identity; invalidate them when their actual scope changes.
+- [ ] Document how a changed artistic contract supersedes an old accepted rule
+  while retaining historical rationale.
+
+**Tests/done:** An accepted simplification survives resume; rejected advice does
+not become a mandatory fix; obsolete approval cannot excuse a new defect; the
+same fixed issue does not create an endless paid loop. Reuse current review
+artifacts and objective verifier, not a new universal review database.
+
+### M46 — Account for all production work and enforce limits before dispatch
+
+**Why:** Lower cost must be demonstrated by receipts, including exceptional paths.
+
+- [ ] Replace synthetic call totals with receipt-derived totals for actual paid
+  attempts, including chorus, split reviewers and retries. Show logical role
+  count separately. Separate research/design and production without hiding either.
+- [ ] Check the configured run allowance before every paid dispatch; make pivotal
+  escalation explicit. Account for in-flight reservations across parallel roles.
+- [ ] Retain unknown cost/usage as unknown, never zero. After accepted-but-unknown
+  provider outcomes, require reconciliation or an explicit disposition before
+  another potentially duplicating attempt; do not claim provider-side idempotency.
+- [ ] Keep raw elapsed time, concurrent critical path and summed provider latency
+  distinct. Preserve provider/model, price basis, cache and retry metadata.
+
+**Tests/done:** Mocked ordinary, chorus, split-review, timeout-after-acceptance,
+retry, resume and exhausted-budget paths reconcile with their receipts. No hidden
+paid call bypasses the cap and no unknown outcome silently repeats. Reuse the
+existing telemetry/receipt mechanisms and Ground Truth baseline definitions.
+
+### M47 — Pin the executable workflow and isolate deployments
+
+**Why:** Source and installed engines differed during recovery; an interrupted
+run must not continue under silently changed behavior.
+
+- [ ] Record engine/source fingerprint, skill commit, configuration/model pins and
+  relevant prompt hashes in a run manifest. Envelope prompt hashing already
+  exists: extend missing coverage instead of duplicating it.
+- [ ] Detect material engine/config drift on resume before dispatch or mutation.
+  Require an explicit supported restart/migration decision with old receipts kept.
+- [ ] Document and test `BOOK_FORGE_CONFIG_HOME` isolation, installation manifest
+  verification and the selected runtime path. Keep Landfall on its known version
+  until shared deployment is intentionally promoted.
+
+**Tests/done:** A changed engine with unchanged prompt is detected; identical
+fingerprints resume normally; intentional migration has clear provenance; isolated
+installation leaves the shared installation untouched. Use current installer
+interfaces and `--check`; no second package manager or parallel skill fork.
+
+### M48 — Support honest, minimal native import proposals
+
+**Why:** Ground Truth's legacy Markdown needs conversion, but most migration
+logic and artistic decisions belong in the book repository.
+
+- [ ] Define/document the minimal validated native proposal interface needed by
+  the project translator. Reuse ID checks, import/index validation and staged
+  promotion; never direct-edit machine state to simulate completed work.
+- [ ] Distinguish structurally accepted/imported design from independent audited
+  design. Require genuine review before production where import skipped it.
+- [ ] Preserve source hashes and mappings in receipts; support replay without
+  duplicate IDs, files, closure records or paid calls.
+- [ ] Keep legacy prose archived for comparison by default. If prose is imported,
+  mark it staged/unreviewed; do not create a closed-chapter importer merely to
+  preserve thirteen chapters whose prose is being reconsidered.
+
+**Tests/done:** Malformed imports fail without partial promotion; interruption
+recovers correctly; replay is idempotent; structural validation cannot forge
+editorial clearance. Extend migration/transaction fixtures. The project-specific
+translator and content mapping remain in the experimental Ground Truth repo.
+
+### M49 — Carry research provenance without adding a per-chapter research stage
+
+**Why:** Experiments, observed incidents, hypotheses and fictional history must
+not acquire the same authority merely by entering canon.
+
+- [ ] Establish a small project evidence record: stable ID, primary source,
+  author/publication/check dates, supported proposition, type, limitations,
+  affected canon and scenes. Keep inference and fictional transformation distinct.
+- [ ] Put concise evidence references on relevant canon blocks; import only what
+  a role needs. Do not attach the whole bibliography to every chapter envelope.
+- [ ] Document stale/contested-source handling and successful remedies alongside
+  harms. Use Ground Truth's Phase 157 dossier as a fixture, not universal canon.
+- [ ] Add shared engine support only for a demonstrated missing requirement;
+  a documented convention may satisfy this milestone without new schema/code.
+
+**Tests/done:** One observed report, one lab experiment and one fictional event
+remain distinguishable after import/context assembly. No automatic web pass or
+new paid fact-checker runs for every chapter. Unverified claims stay marked.
+
+### M50 — Optimize prose for comprehension and dramatic consequence
+
+**Why:** Mandatory shortening and blanket explanation bans can produce dense,
+cryptic prose rather than readable fiction.
+
+- [ ] Make the style contract positive and scoped: readable action, desire,
+  choice, consequence, distinct voice, selective detail and earned imagery.
+- [ ] Remove the universal requirement that every style replacement be shorter.
+  Permit necessary clarification while preserving role boundaries and verifier
+  checks for additions that change canon or plot.
+- [ ] Allow technical language/dialogue when it changes a decision, dispute or
+  understanding. Judge information timing and dramatic function, not a blanket
+  dialogue quota or ban on explanatory speech.
+- [ ] Use bounded previous-tail/reader-memory context in existing appropriate
+  roles to catch adjacency repetition and stagnant motifs. Keep the cold-reader
+  free of future knowledge and adjudication answers.
+
+**Tests/done:** Review fixtures distinguish useful explanation from an inert
+lecture, repetition from deliberate development, and intentional ambiguity from
+missing causal information. Existing style presets and unrelated project voices
+remain selectable. No mandatory new review lane or fixed sentence-length metric.
+
+### M51 — Prove compatibility, then hand off to the bounded book pilot
+
+**Why:** Recovered tests validate prior code, not these future changes.
+
+- [ ] Run focused tests for changed behavior, then the repository's complete
+  applicable suite and installer/reference checks from the final source state.
+- [ ] Include three-book disclosure fixtures, two POVs, feedback replay,
+  interrupted import/resume, unknown provider outcome and budget exhaustion.
+- [ ] Exercise Landfall-compatible native fixtures without mutating the real
+  Landfall project; record any explicit compatibility decision before rollout.
+- [ ] Commit, install to an isolated root from that commit, verify the manifest,
+  and record the pinned engine in Ground Truth's Phase 157. Record exact commands
+  and counts, including limitations; do not reuse an old passing count.
+
+**Done:** Required fixtures and compatibility gates pass; the next action is the
+book's bounded pilot (Noah, Lena, one explanation scene and a climax causal
+outline), with all-in receipts and an explicit author verdict before full rewrite.
+Do not promise a cost saving until measured on comparable output and quality.
+
+### Dependencies and exclusions
+
+M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
+independent designs; serialize shared engine edits. M48 depends on the final
+visibility model and the book's source-preservation/mapping work. M49 can begin as
+project documentation in parallel. M51 gates production; Phase 157 owns the
+artistic decision and author pilot verdict. None of these milestones authorizes
+deleting the legacy project, copying secrets/runtime journals, rewriting Landfall,
+porting the legacy tournament/graph system, or automatic publication/push.
