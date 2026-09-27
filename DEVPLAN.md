@@ -5437,6 +5437,11 @@ artifacts and objective verifier, not a new universal review database.
   and reviser 14,000; the verifier runs as technical editor and shares its
   10,000. Done when a default first chapter produces no `envelope_budget`
   violation, or the project overrides are the documented way to raise them.
+- [ ] Count every re-ask. Each ask in the review re-ask loop (~9001–9003) and
+  in any verifier re-ask (M53) writes `provider-events.jsonl` over the previous
+  one (~7527, ~7536), and the receipt carries the last ask's telemetry only.
+  Done when an attempt asked three times reports three calls and their summed
+  cost.
 
 **Tests/done:** Mocked ordinary, chorus, split-review, timeout-after-acceptance,
 retry, resume and exhausted-budget paths reconcile with their receipts. No hidden
@@ -5567,6 +5572,29 @@ project naming a synthesizer gets it in the agent file, `status` and the
 dispatch receipt; the qwen case either receives a response or is refused before
 dispatch. Extend the runtime-sync tests; no new role.
 
+### M53 — Release claims on failed verification and re-ask on empty output
+
+**Why:** One empty verifier answer left a staged revision that no command
+except a chapter reset can reach.
+
+- [ ] Settle both claims when verification raises. The verify dispatch
+  (~9693–9697) calls `runner` and `_parse_contract_json` outside any handler,
+  so VERIFY stays `running` and the reviser attempt stays `promotion_pending`
+  (set by `record_execution`, ~2026); `claim_task` then refuses REVISE (~1945).
+  The handled rejection (~9701–9703) fails VERIFY and also leaves the reviser
+  pending. Both paths must fail or release the reviser attempt.
+- [ ] Re-ask the verifier when it spends its ceiling with nothing written,
+  reusing `_refuse_empty_answer` (~10540) and the `ask` loop
+  (~8992–9013, `REVIEW_CEILING_REASKS` ~9296). The runner already returns
+  `finish: "length"` with empty text (~7585–7597).
+- [ ] Settle each review as it returns. The batch promotes nothing until all
+  three futures finish (~9030–9037, ~9051), so a killed process loses answers
+  already paid for.
+
+**Tests/done:** A mocked empty verifier answer is re-asked; three empty answers
+leave REVISE retryable by `run --next` without `reset`; a kill after one review
+returns keeps that review. Extend the review-and-close tests.
+
 ### Observations from the Ground Truth pilot (2026-09-27)
 
 One chapter (CH-0001 of a fresh native project) ran at `1d0ad41`, engine
@@ -5600,6 +5628,30 @@ sha256 `42f26a0c…`, OpenCode 1.18.32. Line numbers refer to that commit.
   technical editor) 17,225 / 10,000 (`ROLE_BUDGETS` ~3357–3362). Owner: M46.
   Done when a default first chapter stays within budget or the override is
   the documented route.
+- Three-chapter run (same engine): the verifier (ATT-0019, deepseek-v4.1-flash
+  high under the technical-editor pin) spent 33,499 reasoning tokens and wrote
+  nothing (`finish: length`); `_parse_contract_json` raised outside any handler
+  (~9697), VERIFY stayed `running` and the reviser's ATT-0018 stayed
+  `promotion_pending`. No `run`, `resume` or `advance` path releases it;
+  `reset --scope prose --chapter` (~13380–13394) drops the chapter's draft,
+  reviews and revision. Owner: M53. Done when an empty verifier answer leaves
+  REVISE retryable without a reset.
+- deepseek-v4.1-flash high spent its reasoning ceiling with no output on three
+  technical-editor asks (ATT-0010, ATT-0013) and on the verifier. The review
+  path detects this (`_refuse_empty_answer` ~10540) and re-asks up to three
+  times (~9001–9013); the verify path does not. The operator re-pinned the
+  technical editor to glm-5.3-flash high. Owner: M53 (re-ask), M46 (re-asks
+  overwrite `provider-events.jsonl`, ~7536). Done when the verifier re-asks
+  and every ask is counted.
+- A `run --next` killed by a 12-minute wrapper timeout during the review batch
+  left ATT-0009..0011 `running`. The code does not wait for the 20-minute lease
+  (`LEASE_SECONDS` ~1918): `claim_task` → `recover_before_dispatch` (~1852) →
+  `recover_run` orphans a claim whose `owner_pid` is dead (~2953–2956). The
+  leases expired at 23:17:58 and the next invocation claimed at 23:18:20, so
+  the wait was the operator's. What the kill did cost: the cold reader and
+  contract review had answered, and the batch promotes nothing until every
+  future returns (~9030–9037). Owner: M53. Done when a kill keeps finished
+  reviews.
 
 ### Dependencies and exclusions
 
