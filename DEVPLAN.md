@@ -5420,6 +5420,23 @@ artifacts and objective verifier, not a new universal review database.
   another potentially duplicating attempt; do not claim provider-side idempotency.
 - [ ] Keep raw elapsed time, concurrent critical path and summed provider latency
   distinct. Preserve provider/model, price basis, cache and retry metadata.
+- [ ] Derive the per-chapter allowance from the configured ordinary path.
+  `telemetry_report` counts one call per execution receipt (~2356) against a
+  fixed 5/7 (~2428–2431), while an ordinary chapter with style review on lands
+  8 receipts (writer, style reviewers, cold reader, split technical review,
+  reviser). Done when a default run with style review on reports no
+  `chapter_call_budget` violation and one extra paid call does.
+- [ ] Keep no-model tasks out of pin and call accounting. The receipts of
+  `apply_universe_design`/`apply_book_design` carry no provider, model or
+  variant, so the pin checks (~2376–2386) report `model_pin` and `variant_pin`
+  for each and `_add_telemetry` (~2293) counts each as a call. Done when a
+  project whose design was applied without a model reports zero pin violations
+  and zero calls for those tasks, and still lists them as structural acceptance.
+- [ ] Size the advisory envelope budgets from measured ordinary envelopes.
+  `ROLE_BUDGETS` (~3357–3362) gives cold reader 8,000, technical editor 10,000
+  and reviser 14,000; the verifier runs as technical editor and shares its
+  10,000. Done when a default first chapter produces no `envelope_budget`
+  violation, or the project overrides are the documented way to raise them.
 
 **Tests/done:** Mocked ordinary, chorus, split-review, timeout-after-acceptance,
 retry, resume and exhausted-budget paths reconcile with their receipts. No hidden
@@ -5526,12 +5543,71 @@ book's bounded pilot (Noah, Lena, one explanation scene and a climax causal
 outline), with all-in receipts and an explicit author verdict before full rewrite.
 Do not promise a cost saving until measured on comparable output and quality.
 
+### M52 — Honor project chorus and synthesizer pins and write only configured agents
+
+**Why:** A project's `book-forge.yaml` must decide which models its runtime can
+call; today the engine adds models and ignores the synthesizer the project names.
+
+- [ ] Generate `opencode.json` and `.opencode/agents/` from the project's
+  configured models only: chorus, role pins, rewriter chain and style-review
+  models the project declares or its rules name. Remove the unconditional grok
+  appends in `_opencode_config` (~597–600) and `_write_agents` (~874–875), and
+  the bake-off candidate agents written for every catalogue model (~942–958).
+- [ ] Resolve `chorus.synthesizer` from the project config in `_role_pin`
+  (~270–273), `_write_agents` (~927–934) and the synthesis dispatch
+  (~6182–6194); keep `CHORUS_SYNTHESIZER` as the default only.
+- [ ] Make qwen3.8-flash runnable as a style reviewer on OpenCode 1.18.32, or
+  refuse it at `runtime sync` with the reason. The generated entry sets only
+  `reasoning.effort` (~618–625); OpenRouter received `reasoning.max_tokens`
+  as well. Cause not located in the engine; reproduce with
+  `opencode run --agent advisor-qwen-qwen3-8-flash` on a fixture project.
+
+**Tests/done:** A project without grok gets no grok agent or catalogue entry; a
+project naming a synthesizer gets it in the agent file, `status` and the
+dispatch receipt; the qwen case either receives a response or is refused before
+dispatch. Extend the runtime-sync tests; no new role.
+
+### Observations from the Ground Truth pilot (2026-09-27)
+
+One chapter (CH-0001 of a fresh native project) ran at `1d0ad41`, engine
+sha256 `42f26a0c…`, OpenCode 1.18.32. Line numbers refer to that commit.
+
+- `runtime sync` wrote grok-4.6 into `opencode.json` and four grok agents
+  (advisor, writer, reviser, translator) although the project declares no grok
+  model. Cause: `_opencode_config` ~597–600, `_write_agents` ~874–875, candidate
+  agents ~942–958. Owner: M52. Done when a grok-free config writes no grok file.
+- `chorus.synthesizer: deepseek-v4.1-flash` was recorded by `status`
+  (~1200, ~1708) but `chorus-synthesizer.md` stayed on gemini-3.8-flash:
+  `_role_pin` ~270–273 and `_write_agents` ~927–934 read the constant
+  `CHORUS_SYNTHESIZER` (~103). Owner: M52. Done when the configured model is
+  the one dispatched.
+- The qwen3.8-flash style review (ATT-0007) failed with HTTP 400, "Only one of
+  `reasoning.effort` and `reasoning.max_tokens` can be specified". The engine
+  sets only `reasoning.effort` (~618–625) and no `max_tokens` anywhere; cause
+  not located in the engine. The chapter closed on the two remaining reviewers
+  and the call was not retried. Owner: M52 (provider compatibility). Done when
+  the reviewer answers or is refused before dispatch.
+- `status` reported 8 calls for CH-0001 against 8 receipts and flagged
+  `chapter_call_budget` (8 > 5): the fixed allowance (~2428–2431) is below the
+  ordinary path with style review on. Owner: M46. Done when the ordinary path
+  passes and an extra call fails.
+- `status` reported 8 `model_pin`/`variant_pin` violations and 2 extra book
+  calls from the four apply tasks (universe and book design and audit), whose
+  receipts carry no model (~2376–2386, ~2293). Owner: M46. Done when no-model
+  tasks produce neither.
+- Four envelopes exceeded their advisory budgets: cold reader 8,480 / 8,000,
+  technical editor 15,127 / 10,000, reviser 19,960 / 14,000, verifier (runs as
+  technical editor) 17,225 / 10,000 (`ROLE_BUDGETS` ~3357–3362). Owner: M46.
+  Done when a default first chapter stays within budget or the override is
+  the documented route.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
 independent designs; serialize shared engine edits. M48 depends on the final
 visibility model and the book's source-preservation/mapping work. M49 can begin as
-project documentation in parallel. M51 gates production; Phase 157 owns the
+project documentation in parallel. M52 touches `runtime sync`, as M47 does:
+serialize them. M51 gates production; Phase 157 owns the
 artistic decision and author pilot verdict. None of these milestones authorizes
 deleting the legacy project, copying secrets/runtime journals, rewriting Landfall,
 porting the legacy tournament/graph system, or automatic publication/push.
