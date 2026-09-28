@@ -7,6 +7,7 @@ import html
 import hashlib
 import io
 import contextlib
+import difflib
 import json
 import os
 import re
@@ -464,6 +465,17 @@ class ProviderLimitReached(BookForgeError):
     it as `the critic was not read in 3 ask(s)`, which sent the operator to the model
     and the memory file. Raised instead of `ProviderOutcomeUnknown` so the run stops
     on the first one and quotes what the provider said.
+    """
+
+
+class StaleRuntime(ProviderLimitReached):
+    """The project's generated agents pin a model the project's config no longer names.
+
+    Not a provider refusal, but handled as one on purpose: every retry handler that
+    lets `ProviderLimitReached` through stops on this too, because asking again
+    cannot clear it. After the Ground Truth pilot re-pinned its translator, three
+    attempts were claimed, recorded as `validation_failed`, and each ended telling
+    the operator to run `runtime sync`. `claim_task` now refuses first.
     """
 
 
@@ -1967,6 +1979,48 @@ def _task_of(plan: dict[str, object], attempt_ids: list[str]) -> list[str]:
 LEASE_SECONDS = OPENCODE_CALL_TIMEOUT * 4 / 3
 
 
+def _stale_agent_pins(root: Path) -> list[str]:
+    """Roles whose `.opencode/agents/<role>.md` pins something other than book-forge.yaml.
+
+    Read from the files `_write_agents` writes, without starting OpenCode, so a claim
+    can be refused before it exists. A role with no agent file is not reported:
+    `run_opencode_role` regenerates the runtime for that case itself. Every pinned
+    role is compared, not only the one being claimed, because a role can run under
+    another's agent (the verifier asks as the technical editor).
+    """
+    agents = root / ".opencode" / "agents"
+    if not agents.is_dir():
+        return []
+    try:
+        config = _project_config(root)
+    except (OSError, ValueError, BookForgeError):
+        return []
+    stale = []
+    for role in [*ROLE_SPECS, CHORUS_SYNTHESIZER_AGENT]:
+        path = agents / f"{role}.md"
+        if not path.is_file():
+            continue
+        header = path.read_text(encoding="utf-8").split("\n---", 1)[0]
+        written = dict(re.findall(r"(?m)^(model|variant):\s*(\S+)\s*$", header))
+        model, variant = _role_pin(config, role)
+        if written.get("model") != model or written.get("variant") != variant:
+            stale.append(
+                f"{role} (agent {written.get('model', '?')} {written.get('variant', '?')}, "
+                f"book-forge.yaml {model} {variant})"
+            )
+    return stale
+
+
+def _refuse_stale_runtime(root: Path) -> None:
+    stale = _stale_agent_pins(root)
+    if stale:
+        raise StaleRuntime(
+            "The project's .opencode/agents do not match the pins in book-forge.yaml: "
+            + "; ".join(stale)
+            + ". Nothing was dispatched. Run `book-forge runtime sync` to regenerate them, then run again"
+        )
+
+
 def claim_task(
     project: Path | str,
     task_id: str,
@@ -1977,6 +2031,7 @@ def claim_task(
 ) -> dict[str, object]:
     root = _project_root(project)
     current_time = time.time() if now is None else now
+    _refuse_stale_runtime(root)
     if not provider_ready(root, now=current_time):
         raise BookForgeError("Provider is rate-limited; dispatch is not yet eligible")
     recover_before_dispatch(root, task_id=task_id, now=current_time)
@@ -10203,11 +10258,19 @@ def _locale_checks(locale_root: Path) -> dict[str, object]:
 
 
 def _forbidden_form_problems(translated: str, checks: dict[str, object]) -> list[str]:
-    """Forms the locale forbids outright.
+    r"""Forms the locale forbids outright.
 
     Exact, free, and never wrong about what it found: the pattern either matches
     the delivered text or it does not. Landfall's `stette` sat in three chapters
     that every other gate passed, because no gate read the target language.
+
+    A pattern ignores case unless its row says `case_sensitive: true`. Ignoring it
+    is the default because the rules written so far depend on it — `stette` has to
+    catch the `Stette` that opens a sentence — and the Ground Truth pilot showed
+    what it costs: `\b(in|a|da|di)\s+(il|lo|…)\b` matched "A lo" in "Settore 7-A lo
+    accolse", a correct sentence. The refusal therefore quotes the whole match, the
+    text around it and the pattern with its case rule, so both the translator and
+    the person who wrote the rule can see which one is wrong.
     """
     problems = []
     for row in checks.get("forbidden", []) if isinstance(checks.get("forbidden"), list) else []:
@@ -10216,15 +10279,22 @@ def _forbidden_form_problems(translated: str, checks: dict[str, object]) -> list
         pattern = str(row.get("pattern") or "").strip()
         if not pattern:
             continue
+        case_sensitive = row.get("case_sensitive") is True
+        flags = re.UNICODE if case_sensitive else re.IGNORECASE | re.UNICODE
         try:
-            found = re.findall(pattern, translated, re.IGNORECASE | re.UNICODE)
+            found = [hit for hit in re.finditer(pattern, translated, flags) if hit.group(0)]
         except re.error:
             problems.append(f"locale checks: {pattern} is not a usable pattern")
             continue
         if found:
-            seen = sorted({str(match if isinstance(match, str) else match[0]) for match in found})
+            quoted = [
+                f"«{hit.group(0)}» in «{_sentence_around(translated, *hit.span(), limit=120)}»"
+                for hit in found[:3]
+            ]
+            more = f" and {len(found) - 3} more" if len(found) > 3 else ""
             reason = str(row.get("reason") or "forbidden by the locale checks")
-            problems.append(f"forbidden form {', '.join(seen[:4])}: {reason}")
+            rule = "case-sensitive" if case_sensitive else "case-insensitive"
+            problems.append(f"forbidden form {'; '.join(quoted)}{more} (pattern {pattern}, {rule}): {reason}")
     return problems
 
 
@@ -10543,6 +10613,76 @@ def _glossary_self_contradictions(glossary: str) -> list[str]:
     return sorted(set(problems))
 
 
+# A locale writes 5,8 where the source writes 5.8. Comparing the literal strings
+# made a correctly localized number look like a changed one, and since the repair
+# attempt carries the failure reason, the loop taught the translator to keep the
+# source's separator — which is how an Italian edition ends up writing 0.2%.
+# Normalizing keeps 131 and 1.31 distinct, and order and count still hold.
+_NUMBER_RE = re.compile(r"(?<!\w)\d+(?:[.,]\d+)?")
+NUMBER_MISMATCHES_NAMED = 3
+
+
+def _sentence_around(text: str, start: int, end: int, *, limit: int = 160) -> str:
+    """The sentence holding text[start:end], on one line and cut to `limit` characters."""
+    left = max(text.rfind(mark, 0, start) for mark in (". ", "! ", "? ", "\n", "\u2026 "))
+    left = 0 if left < 0 else left + 1
+    rights = [index for index in (text.find(mark, end) for mark in (". ", "! ", "? ", "\n")) if index >= 0]
+    right = min(rights) + 1 if rights else len(text)
+    sentence = " ".join(text[left:right].split())
+    if len(sentence) > limit:
+        middle = " ".join(text[start:end].split())
+        at = sentence.find(middle)
+        begin = max(0, min(at - limit // 2, len(sentence) - limit)) if at >= 0 else 0
+        sentence = ("…" if begin else "") + sentence[begin:begin + limit] + ("…" if begin + limit < len(sentence) else "")
+    return sentence
+
+
+def _number_mismatch(source: str, translated: str) -> str | None:
+    """The numbers the translation does not carry as the source does, named with their sentences.
+
+    "numbers differ from source" alone was the whole repair reason, and on the Ground
+    Truth pilot the translator wrote `7-F` for the source's `Seven-F` on every one of
+    three asks, because nothing said which number. The retry is given this string as
+    its reason, so it names the number on each side and the sentence it sits in.
+    """
+    source_hits = list(_NUMBER_RE.finditer(source))
+    target_hits = list(_NUMBER_RE.finditer(translated))
+    source_numbers = [hit.group(0).replace(",", ".") for hit in source_hits]
+    target_numbers = [hit.group(0).replace(",", ".") for hit in target_hits]
+    if source_numbers == target_numbers:
+        return None
+    named: list[str] = []
+    matcher = difflib.SequenceMatcher(a=source_numbers, b=target_numbers, autojunk=False)
+    for tag, first_source, last_source, first_target, last_target in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        for offset in range(max(last_source - first_source, last_target - first_target)):
+            here_source = source_hits[first_source + offset] if first_source + offset < last_source else None
+            here_target = target_hits[first_target + offset] if first_target + offset < last_target else None
+            if here_source and here_target:
+                named.append(
+                    f"the source's {here_source.group(0)} in «{_sentence_around(source, *here_source.span())}» "
+                    f"is {here_target.group(0)} in «{_sentence_around(translated, *here_target.span())}»"
+                )
+            elif here_source:
+                named.append(
+                    f"the source's {here_source.group(0)} in «{_sentence_around(source, *here_source.span())}» "
+                    "is missing from the translation"
+                )
+            elif here_target:
+                named.append(
+                    f"the translation adds {here_target.group(0)} in «{_sentence_around(translated, *here_target.span())}», "
+                    "which the source does not write as a number"
+                )
+    more = len(named) - NUMBER_MISMATCHES_NAMED
+    listed = "; ".join(named[:NUMBER_MISMATCHES_NAMED]) + (f"; and {more} more" if more > 0 else "")
+    return (
+        f"numbers differ from source ({len(source_numbers)} in the source, {len(target_numbers)} in the "
+        f"translation): {listed}. Numbers must match the source in value and order; write a number the "
+        "source spells out in words as words"
+    )
+
+
 def _translation_validation(source: str, value: dict[str, object], checks: dict[str, object] | None = None) -> list[str]:
     translated = value.get("translated_markdown")
     problems = []
@@ -10556,16 +10696,9 @@ def _translation_validation(source: str, value: dict[str, object], checks: dict[
     if heading:
         problems.append(heading)
     problems.extend(_forbidden_form_problems(translated, checks or {}))
-    # A locale writes 5,8 where the source writes 5.8. Comparing the literal strings
-    # made a correctly localized number look like a changed one, and since the repair
-    # attempt carries the failure reason, the loop taught the translator to keep the
-    # source's separator — which is how an Italian edition ends up writing 0.2%.
-    # Normalizing keeps 131 and 1.31 distinct, and order and count still hold.
-    def _numbers(text_value: str) -> list[str]:
-        return [value.replace(",", ".") for value in re.findall(r"(?<!\w)\d+(?:[.,]\d+)?", text_value)]
-
-    if _numbers(source) != _numbers(translated):
-        problems.append("numbers differ from source")
+    numbers = _number_mismatch(source, translated)
+    if numbers:
+        problems.append(numbers)
     source_headings = len(re.findall(r"(?m)^#{1,6}\s", source))
     translated_headings = len(re.findall(r"(?m)^#{1,6}\s", translated))
     if source_headings != translated_headings or source.count("\n***\n") != translated.count("\n***\n"):

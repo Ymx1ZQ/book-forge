@@ -23,6 +23,6 @@ roles:
     variant: high
 ```
 
-Then `runtime sync`. Name the variant as well as the model: an override moves only what it names, so a writer pinned to a new model without an effort keeps the effort it had, which is not the one the bake-off drafts were read at. A variant the target model does not offer is refused, with that model's ladder in the message.
+Then `runtime sync`. Until it runs, every dispatch is refused before a task is claimed, with a message naming each role whose agent file disagrees with `book-forge.yaml`; no attempt is recorded and nothing is spent. Name the variant as well as the model: an override moves only what it names, so a writer pinned to a new model without an effort keeps the effort it had, which is not the one the bake-off drafts were read at. A variant the target model does not offer is refused, with that model's ladder in the message.
 
 Every other role stays where it was. The design, the canon audit and the reviser keep the project's pinned model unless they are named too.

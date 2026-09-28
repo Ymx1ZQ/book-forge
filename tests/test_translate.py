@@ -257,14 +257,130 @@ class NumberLocalizationTests(unittest.TestCase):
 
     def test_a_comma_localized_number_is_not_a_changed_number(self):
         italian = "# Capitolo\n\nIl Campo ronzava a 5,8 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
-        self.assertNotIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(italian)))
+        self.assertFalse(any(p.startswith("numbers differ from source") for p in self.bf._translation_validation(self.SOURCE, self.value(italian))))
 
     def test_a_number_that_actually_changed_is_still_caught(self):
         wrong = "# Capitolo\n\nIl Campo ronzava a 5,9 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
-        self.assertIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(wrong)))
+        self.assertTrue(any(p.startswith("numbers differ from source") for p in self.bf._translation_validation(self.SOURCE, self.value(wrong))))
 
     def test_an_integer_is_not_confused_with_a_decimal(self):
         wrong = "# Capitolo\n\nIl Campo ronzava a 58 hertz sotto 1,31 g, e l'esalato segnava 0,2% candela."
-        self.assertIn("numbers differ from source", self.bf._translation_validation(self.SOURCE, self.value(wrong)))
+        self.assertTrue(any(p.startswith("numbers differ from source") for p in self.bf._translation_validation(self.SOURCE, self.value(wrong))))
 
 
+
+
+class ActionableRefusalTests(unittest.TestCase):
+    """M56. A refusal the translator cannot act on is asked three times for the same text.
+
+    The Ground Truth pilot's CH-0003 wrote "Seven-F" in the source and "7-F" in the
+    translation on every ask, told only that numbers differed.
+    """
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def value(self, translated):
+        return {"translated_markdown": translated, "glossary_updates": [], "boundary": "Mara sa."}
+
+    def numbers_problem(self, source, translated):
+        problems = [p for p in self.bf._translation_validation(source, self.value(translated)) if p.startswith("numbers differ from source")]
+        self.assertEqual(len(problems), 1, problems)
+        return problems[0]
+
+    def test_a_number_the_translation_added_is_named_with_its_sentence(self):
+        source = "# Chapter\n\nThe gate held. Seven-F had taken the same cut, and 12 crews went down."
+        italian = "# Capitolo\n\nIl cancello resse. Il Settore 7-F aveva subito lo stesso taglio, e 12 squadre scesero."
+        problem = self.numbers_problem(source, italian)
+        self.assertIn("7", problem)
+        self.assertIn("Il Settore 7-F aveva subito lo stesso taglio", problem)
+        self.assertNotIn("12", problem.split(":", 1)[1].replace("12 squadre", ""), "a number that matches is not reported")
+
+    def test_a_changed_number_names_the_source_number_and_its_sentence(self):
+        source = "# Chapter\n\nThe Field hummed at 5.8 hertz. Nobody slept."
+        italian = "# Capitolo\n\nIl Campo ronzava a 5,9 hertz. Nessuno dormiva."
+        problem = self.numbers_problem(source, italian)
+        self.assertIn("5.8", problem)
+        self.assertIn("The Field hummed at 5.8 hertz", problem)
+        self.assertIn("5,9", problem)
+
+    def test_a_missing_number_names_the_source_sentence(self):
+        source = "# Chapter\n\nShe counted 40 lamps. Then she left."
+        italian = "# Capitolo\n\nContò le lampade. Poi se ne andò."
+        problem = self.numbers_problem(source, italian)
+        self.assertIn("40", problem)
+        self.assertIn("She counted 40 lamps", problem)
+
+    def test_the_retry_is_told_which_number_differs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "world"
+            self.bf.init_project(project, "World")
+            _isolate_translator(self.bf, project)
+            book = self.bf.add_book(project, "Book")["id"]
+            chapters = project / f"books/{book}/chapters"
+            chapters.mkdir()
+            (chapters / "CH-0001.json").write_text(json.dumps({"schema": 1, "book": book, "id": "CH-0001", "order": 1, "pov": "Mara", "beats": ["x"], "target_words": 30, "imports": ["UNI-0001#kernel"], "pivotal": None}))
+            (project / f"books/{book}/manuscript/chapters/CH-0001.md").write_text("# Chapter 1\n\nMara finds the signal in the drowned city. Seven-F had taken the same cut, and her name remains Mara.")
+            state = project / f"books/{book}/state.yaml"
+            data = json.loads(state.read_text())
+            data["closed_chapters"] = ["CH-0001"]
+            state.write_text(json.dumps(data))
+            self.bf.add_translation(project, book, "it-IT")
+            _decide_locale_style(self.bf, project, book, "it-IT")
+            bad = {"translated_markdown": "# Capitolo 1\n\nMara trova il segnale nella città sommersa. Il Settore 7-F aveva subito lo stesso taglio, e il suo nome rimane Mara.", "glossary_updates": [], "boundary": "Mara sa."}
+            good = {**bad, "translated_markdown": bad["translated_markdown"].replace("7-F", "Sette-F")}
+            provider = TranslationProvider([bad, good])
+            self.bf.translate_next(project, book, "it-IT", provider=provider)
+            reason = provider.calls[1]["task"]["repair"]["reason"]
+            self.assertIn("Il Settore 7-F aveva subito lo stesso taglio", reason)
+
+
+class ForbiddenFormQuotingTests(unittest.TestCase):
+    """M56. The Italian preposition rule matched "A lo" inside "Settore 7-A lo accolse"
+    and the refusal quoted a single letter."""
+
+    PATTERN = r"\b(in|a|da|di)\s+(il|lo)\b"
+
+    def setUp(self):
+        self.bf = load_module()
+
+    def test_the_refusal_quotes_the_whole_match_its_context_and_the_pattern(self):
+        text = "Il varco si aprì. Il Settore 7-A lo accolse senza una parola."
+        problems = self.bf._forbidden_form_problems(text, {"forbidden": [{"pattern": self.PATTERN, "reason": "preposizione non articolata"}]})
+        self.assertEqual(len(problems), 1, problems)
+        problem = problems[0]
+        self.assertIn("A lo", problem)
+        self.assertIn("Settore 7-A lo accolse", problem)
+        self.assertIn(self.PATTERN, problem)
+        self.assertIn("case-insensitive", problem)
+        self.assertIn("preposizione non articolata", problem)
+
+    def test_patterns_ignore_case_by_default(self):
+        """Existing locale rules rely on it: `stette` must also catch a sentence-initial `Stette`."""
+        problems = self.bf._forbidden_form_problems("Stette zitta.", {"forbidden": [{"pattern": r"\bstette\b", "reason": "x"}]})
+        self.assertEqual(len(problems), 1)
+
+    def test_a_row_can_ask_for_case_sensitive_matching(self):
+        checks = {"forbidden": [{"pattern": self.PATTERN, "reason": "x", "case_sensitive": True}]}
+        self.assertEqual(self.bf._forbidden_form_problems("Il Settore 7-A lo accolse.", checks), [])
+        problems = self.bf._forbidden_form_problems("Andò a lo sportello.", checks)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("case-sensitive", problems[0])
+
+
+class StaleTranslatorPinTests(unittest.TestCase):
+    """M56. A pin changed without `runtime sync` stops the route before any call."""
+
+    setUp = TranslateTests.setUp
+
+    def test_translation_is_refused_before_the_provider_is_asked(self):
+        path = self.project / "book-forge.yaml"
+        config = json.loads(path.read_text())
+        config["roles"] = {"translator": {"model": "openrouter/z-ai/glm-5.3-flash", "variant": "high"}}
+        path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        provider = TranslationProvider([translated(1, 1)])
+        with self.assertRaises(self.bf.StaleRuntime) as refused:
+            self.bf.translate_next(self.project, self.book, "it-IT", provider=provider)
+        self.assertIn("runtime sync", str(refused.exception))
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(self.bf._load_plan(self.project)["attempts"], [])

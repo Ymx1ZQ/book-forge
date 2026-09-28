@@ -119,6 +119,42 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class APinChangeWithoutSyncIsRefusedBeforeDispatchTests(unittest.TestCase):
+    """M56. After the translator's pin changed, the pilot recorded three attempts that
+    each told the operator to run `runtime sync`. The refusal belongs before the claim."""
+
+    GLM = "openrouter/z-ai/glm-5.3-flash"
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+        path = self.project / "book-forge.yaml"
+        config = json.loads(path.read_text())
+        config["roles"] = {"translator": {"model": self.GLM, "variant": "high"}}
+        path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.bf.add_task(self.project, "TASK-STALE", "translator", priority=10)
+
+    def test_the_claim_is_refused_naming_the_role_and_runtime_sync(self):
+        with self.assertRaises(self.bf.StaleRuntime) as refused:
+            self.bf.claim_task(self.project, "TASK-STALE", request_hash="0" * 64)
+        message = str(refused.exception)
+        self.assertIn("runtime sync", message)
+        self.assertIn("translator", message)
+        self.assertIn("glm-5.3-flash", message)
+        self.assertEqual(self.bf._load_plan(self.project)["attempts"], [], "no attempt row for a call never made")
+
+    def test_asking_again_does_not_clear_it(self):
+        self.assertTrue(issubclass(self.bf.StaleRuntime, self.bf.ProviderLimitReached))
+
+    def test_after_sync_the_claim_goes_through(self):
+        self.bf.sync_runtime(self.project)
+        claim = self.bf.claim_task(self.project, "TASK-STALE", request_hash="0" * 64)
+        self.assertTrue(claim["attempt"])
+
+
 class ChorusCatalogTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()

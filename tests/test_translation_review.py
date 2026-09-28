@@ -129,6 +129,7 @@ class TranslationReviewFixture(unittest.TestCase):
         config = json.loads((self.project / "book-forge.yaml").read_text())
         config["roles"] = {"translator": {"model": GLM, "variant": "high"}}
         (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.bf.sync_runtime(self.project)  # a pin change reaches dispatch through `runtime sync`
 
     def checks(self, forbidden):
         self.bf._write_json(self.locale_root / "checks.yaml", {"schema": 1, "locale": "it", "forbidden": forbidden})
@@ -1262,7 +1263,7 @@ class TheRewriteIsGatedSentenceBySentenceTests(TranslationReviewFixture):
         _, chapter, record = self.read_back(moved, changed=[{"before": "a", "after": "b", "why": "x"}])
         self.assertNotIn("14", chapter)
         self.assertFalse(record["applied"])
-        self.assertIn("numbers differ from source", record["rejected"])
+        self.assertTrue(any(p.startswith("numbers differ from source") for p in record["rejected"]))
 
     def test_a_check_that_cannot_be_reached_reverts_everything(self):
         """Fails closed. The rewrite was made blind; nobody downstream can see what it

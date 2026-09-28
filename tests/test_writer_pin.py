@@ -88,6 +88,7 @@ class WriterPinFixture(unittest.TestCase):
         config = json.loads((self.project / "book-forge.yaml").read_text())
         config["roles"] = {"writer": override}
         (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.bf.sync_runtime(self.project)  # a pin change reaches dispatch through `runtime sync`
         return config
 
     def agent(self, name):
