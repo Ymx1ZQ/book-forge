@@ -6,15 +6,14 @@ from pathlib import Path
 
 
 def _project_catalogue(bf):
-    """What a generated project carries, which is not the default fleet alone.
+    """What a generated project carries: the models its own config names, no more.
 
-    `_opencode_config` and `_write_agents` both append the style review models and the
-    spicy rewriter to whatever chorus a project chose, so a runtime built from the
-    defaults holds those too. Deriving the expectation from CHORUS_DEFAULT_MODELS alone
-    was true only while grok sat in the fleet.
+    A default project names the default chorus, the default style reviewers, the
+    default synthesizer and the default role pins, and every one of them is in the
+    default fleet. grok is not: it used to be appended to every project (M52).
     """
     models = list(bf.CHORUS_DEFAULT_MODELS)
-    for extra in list(bf.STYLE_REVIEW_MODELS) + ["openrouter/x-ai/grok-4.6"]:
+    for extra in list(bf.STYLE_REVIEW_MODELS) + [bf.CHORUS_SYNTHESIZER]:
         if extra not in models:
             models.append(extra)
     return models
@@ -75,20 +74,14 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertTrue(expected_chorus <= set(files), f"missing chorus agents: {expected_chorus - set(files)}")
         # A writer agent per catalogue model: the bake-off needs several pins live
         # at once, and the set stays exact so a stray agent is still a failure.
-        expected_writers = {self.bf._writer_candidate_name(m) for m in _project_catalogue(self.bf)} | {
-            self.bf._writer_candidate_name("openrouter/x-ai/grok-4.6")
-        }
+        expected_writers = {self.bf._writer_candidate_name(m) for m in _project_catalogue(self.bf)}
         # A translator pin per catalogue model, for the same reason: the bake-off
         # that picks the translator needs every candidate live at once.
-        expected_translators = {self.bf._translator_candidate_name(m) for m in _project_catalogue(self.bf)} | {
-            self.bf._translator_candidate_name("openrouter/x-ai/grok-4.6")
-        }
+        expected_translators = {self.bf._translator_candidate_name(m) for m in _project_catalogue(self.bf)}
         # And a reviser pin per model: the monolingual rewrite is the call that decides
         # whether the book reads and the only one whose envelope carries no source, so
         # it is compared like the other two.
-        expected_revisers = {self.bf._reviser_candidate_name(m) for m in _project_catalogue(self.bf)} | {
-            self.bf._reviser_candidate_name("openrouter/x-ai/grok-4.6")
-        }
+        expected_revisers = {self.bf._reviser_candidate_name(m) for m in _project_catalogue(self.bf)}
         # The critic is the one role whose pin is deliberately not the project's:
         # a translation reread by the model that wrote it is approved, not audited.
         self.assertEqual(

@@ -207,9 +207,17 @@ class TheDeclaredBudgetReachesTheProviderTests(unittest.TestCase):
     def test_the_effort_ladder_uses_the_key_the_provider_reads(self):
         """`reasoningEffort` is not a key `@openrouter/ai-sdk-provider` knows: it
         travelled as an unknown field and was dropped, so every variant set no
-        effort at all, which is why lowering it never helped any role."""
+        effort at all, which is why lowering it never helped any role.
+
+        A model whose reasoning is budget-controlled is the exception: OpenCode
+        supplies `reasoning.max_tokens` for it, and an effort beside that is
+        refused by OpenRouter (M52), so its entry carries no reasoning key."""
         config = self.bf._opencode_config()
         for model_id, entry in config["provider"]["openrouter"]["models"].items():
+            if self.bf.CHORUS_MODEL_CONFIGS.get(f"openrouter/{model_id}", {}).get("reasoning_control") == "budget":
+                self.assertNotIn("reasoning", entry["options"], model_id)
+                self.assertTrue(all(variant == {} for variant in entry["variants"].values()), model_id)
+                continue
             self.assertIn("reasoning", entry["options"], model_id)
             self.assertIn("effort", entry["options"]["reasoning"], model_id)
             self.assertNotIn("reasoningEffort", entry["options"], model_id)

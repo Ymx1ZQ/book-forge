@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import html
 import hashlib
 import io
@@ -147,10 +147,20 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     # The only model of the catalog whose OpenRouter parameters omit reasoning_effort:
     # it reasons, but the effort is not steerable, so it declares the one operating
     # point it has rather than a ladder whose steps would all behave the same.
+    #
+    # `reasoning_control: budget` — its reasoning is steered by a token budget, and
+    # OpenCode supplies that budget itself: models.dev lists `budget_tokens` for it,
+    # so OpenCode 1.18.32 builds its `high` variant as `reasoning: {max_tokens}`. The
+    # generated entry used to add `reasoning: {effort}` beside it, OpenRouter
+    # received both, and every style review on this model died on HTTP 400, "Only
+    # one of reasoning.effort and reasoning.max_tokens can be specified" (Ground
+    # Truth pilot, ATT-0007/0022/0032). Reproduced and fixed on a fixture project
+    # 2026-09-28: without the effort the same agent answers.
     "openrouter/qwen/qwen3.8-flash": {
         "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"high": "high"},
+        "reasoning_control": "budget",
         "limit": {"context": 1000000, "output": 131072},
     },
     # Kept when the whitelist was cut to five on 2026-09-19, for the `spicy` rewrite
@@ -257,6 +267,26 @@ def _role_overrides(config: dict[str, object] | None) -> dict[str, dict[str, obj
     return {str(name): value for name, value in roles.items() if isinstance(value, dict)}
 
 
+def _chorus_synthesizer(config: dict[str, object] | None) -> str:
+    """The model the project names under `chorus.synthesizer`, or the default.
+
+    `status` reported the configured synthesizer while the agent file and the
+    dispatch used the constant, so the pilot's deepseek-v4.1-flash synthesizer ran
+    on gemini-3.8-flash. A short catalogue name is accepted as the chorus is.
+    """
+    chorus = (config or {}).get("chorus")
+    named = chorus.get("synthesizer") if isinstance(chorus, dict) else None
+    if not isinstance(named, str) or not named.strip():
+        return CHORUS_SYNTHESIZER
+    named = named.strip()
+    if named.startswith("openrouter/") and named.count("/") >= 2:
+        return named
+    try:
+        return _resolve_catalogue_model(named)
+    except BookForgeError as exc:
+        raise BookForgeError(f"chorus.synthesizer names a model the catalogue does not configure: {named}") from exc
+
+
 def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     """The (model, variant) a role runs under, as a full `openrouter/...` path.
 
@@ -268,9 +298,10 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     if role in CANDIDATE_MODELS:
         return CANDIDATE_MODELS[role][0], BAKEOFF_VARIANT
     if role == CHORUS_SYNTHESIZER_AGENT:
-        cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
+        synthesizer = _chorus_synthesizer(config)
+        cfg = CHORUS_MODEL_CONFIGS.get(synthesizer, {})
         variant = str(cfg.get("default_effort", "max")) if isinstance(cfg, dict) else "max"
-        return CHORUS_SYNTHESIZER, variant
+        return synthesizer, variant
     if role in CHORUS_ADVISOR_MODELS:
         return CHORUS_ADVISOR_MODELS[role], CHORUS_ADVISOR_SPECS[role][1]
     if role.startswith("advisor-"):
@@ -401,6 +432,16 @@ class ReasoningCeilingSpent(BookForgeError):
     for a provider that went quiet and wrong here, because the provider replied and
     billed. The remedy is to change the question — which is what the designer, the
     audit and `_audit_proposal` each concluded before this.
+    """
+
+
+class MalformedAnswer(BookForgeError):
+    """The model answered with text that is not the JSON object the contract asks for.
+
+    Variance, not a verdict: on the pilot the reviser's answer broke on one
+    single-quoted value 22,955 characters in (ATT-0027) and the identical envelope
+    answered cleanly on the next ask. Told apart from an answer that parses and is
+    wrong, which is a finding about the work and is not re-asked.
     """
 
 
@@ -578,11 +619,15 @@ def _block_record(block: str) -> dict[str, str]:
 
 
 def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> dict[str, object]:
-    """Build opencode.json with primary model + chorus catalog + style review models (even if not in chorus.models)."""
-    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    """Build opencode.json from the models the project's config names, and no others.
+
+    `chorus_models` is that list (`_runtime_models`), or it is derived from `config`.
+    The style reviewers and grok used to be appended to every project, so the pilot's
+    runtime carried a grok-4.6 entry it had never declared.
+    """
+    models = list(chorus_models) if chorus_models is not None else _runtime_models(config or {})
     # A role pinned to a model outside the chorus would resolve against a catalogue
     # that never heard of it, and the agent would die on its first call.
-    models = list(models)
     for role_name in ROLE_SPECS:
         pinned = _role_pin(config, role_name)[0]
         if pinned not in models:
@@ -590,14 +635,6 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
     # Ensure primary MODEL is included even if caller filters.
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
-    # Always include style review models (used for chapter style, may not be in chorus.models, e.g., grok for spicy)
-    for sm in STYLE_REVIEW_MODELS:
-        if sm not in models:
-            models.append(sm)
-    # Also include grok for spicy rewrite if not already (used via per-tag rule)
-    spicy_grok = "openrouter/x-ai/grok-4.6"
-    if spicy_grok not in models:
-        models.append(spicy_grok)
     models_dict: dict[str, object] = {}
     for mid in models:
         cfg = CHORUS_MODEL_CONFIGS.get(mid)
@@ -617,11 +654,18 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
         # in the plan as a mystery for two days before the key was read out of the
         # provider bundled in the binary.
         options: dict[str, object] = {"reasoning": {"effort": cfg["default_effort"]}}
+        variant_options = {name: {"reasoning": {"effort": effort}} for name, effort in variants.items()}  # type: ignore[union-attr]
+        if cfg.get("reasoning_control") == "budget":
+            # OpenCode's own variant carries `reasoning.max_tokens` for this model;
+            # the effort beside it is refused by OpenRouter with HTTP 400. The
+            # variant names stay, so agents and receipts keep their pin.
+            options = {}
+            variant_options = {name: {} for name in variants}  # type: ignore[union-attr]
         if "provider" in cfg:
             options["provider"] = cfg["provider"]
         entry: dict[str, object] = {
             "options": options,
-            "variants": {name: {"reasoning": {"effort": effort}} for name, effort in variants.items()},  # type: ignore[union-attr]
+            "variants": variant_options,
         }
         if "limit" in cfg:
             entry["limit"] = cfg["limit"]  # type: ignore[index]
@@ -651,6 +695,13 @@ def _runtime_models(config: dict[str, object]) -> list[str]:
     declared = config.get("translation")
     chain = (declared or {}).get("rewriters") if isinstance(declared, dict) else None
     named = list(chain) if isinstance(chain, list) else []
+    # The style reviewers the project runs — declared, or the default set while the
+    # pass is on — and any reviewer a tag rule names (the `spicy` rule's grok).
+    # Nothing is added that the config does not name: M52.
+    if _style_review_enabled(config):
+        named.extend(_style_review_models(config))
+        named.extend(str(rule["reviewer"]) for rule in _style_review_rules(config) if rule.get("reviewer"))
+    named.append(_chorus_synthesizer(config))
     for role_name in ROLE_SPECS:
         try:
             named.append(_role_pin(config, role_name)[0])
@@ -865,15 +916,14 @@ def _parse_chorus_csv(csv: str | None) -> list[str] | None:
 
 
 def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> None:
-    # Ensure style review models have advisors even if not in chorus.models
-    if chorus_models is not None:
-        extended = list(chorus_models)
-        for sm in STYLE_REVIEW_MODELS:
-            if sm not in extended:
-                extended.append(sm)
-        if "openrouter/x-ai/grok-4.6" not in extended:
-            extended.append("openrouter/x-ai/grok-4.6")
-        chorus_models = extended
+    """Write one agent per role, and one advisor and one candidate per configured model.
+
+    `chorus_models` is the project's runtime list (`_runtime_models`), or it is
+    derived from `config`. The style reviewers and grok used to be appended here too,
+    so the pilot got four grok agents it never declared.
+    """
+    if chorus_models is None:
+        chorus_models = _runtime_models(config or {})
     agents = stage / ".opencode" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
     for name, (mode, _variant, steps) in ROLE_SPECS.items():
@@ -904,7 +954,7 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
     # Chorus advisors — one per model in the catalog, plus synthesizer.
-    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    models = list(chorus_models)
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
     for mid in models:
@@ -924,14 +974,13 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
     # Synthesizer
-    synth_cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
-    synth_variant = str(synth_cfg.get("default_effort", "max")) if isinstance(synth_cfg, dict) else "max"
+    synthesizer, synth_variant = _role_pin(config, CHORUS_SYNTHESIZER_AGENT)
     _write_bytes_atomic(
         agents / f"{CHORUS_SYNTHESIZER_AGENT}.md",
         (
             "---\n"
             f"description: Book Forge {CHORUS_SYNTHESIZER_AGENT} role.\n"
-            f"mode: all\nmodel: {CHORUS_SYNTHESIZER}\nvariant: {synth_variant}\nsteps: 8\n"
+            f"mode: all\nmodel: {synthesizer}\nvariant: {synth_variant}\nsteps: 8\n"
             'permission:\n  "*": deny\n'
             "---\n\n"
             "You are the Book Forge chorus synthesizer. Deduplicate and rank chorus findings. "
@@ -1197,7 +1246,7 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
         "variants": VARIANT_EFFORTS,
         "roles": {name: dict(zip(("model", "variant"), _role_pin(config, name))) for name in ROLE_SPECS},
         "chorus_models": chorus_models,
-        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "chorus_synthesizer": _chorus_synthesizer(config),
         "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
@@ -1705,7 +1754,7 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
         "session_resume": "--session" in help_text,
         "chorus_models": chorus_models,
         "chorus_enabled": _chorus_enabled(config),
-        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "chorus_synthesizer": _chorus_synthesizer(config),
         "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
@@ -2958,7 +3007,17 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
         orphaned_owner = isinstance(owner, int) and owner != os.getpid() and not _pid_alive(owner)
         if expired or orphaned_owner:
             task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
-            if attempt.get("provider_accepted"):
+            if _is_chapter_verification(str(attempt["task"])):
+                # A verifier's answer is read only by the process that asked it, to
+                # decide whether that process promotes its revision. With the process
+                # gone nobody will read a late answer, so a retry cannot pay twice for
+                # a result anyone uses: settled as failed, not outcome_unknown.
+                attempt["state"] = "validation_failed"
+                attempt["failure"] = "Verification owner died before the answer was read"
+                task["state"] = "pending"
+                task.pop("attempt", None)
+                orphaned.append(str(attempt["id"]))
+            elif attempt.get("provider_accepted"):
                 attempt["state"] = "outcome_unknown"
                 task["state"] = "outcome_unknown"
                 unknown.append(str(attempt["id"]))
@@ -2967,6 +3026,7 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
                 task["state"] = "pending"
                 task.pop("attempt", None)
                 orphaned.append(str(attempt["id"]))
+    released = _release_dead_revisions(root, plan)
     _save_plan(root, plan)
     render_plan(root)
     if unknown:
@@ -2976,7 +3036,51 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
             run = _read_json(run_path)
             run["state"] = "blocked"
             _write_json(run_path, run)
-    return {"orphaned": orphaned, "outcome_unknown": unknown}
+    return {"orphaned": orphaned, "outcome_unknown": unknown, "released": released}
+
+
+def _is_chapter_verification(task_id: str) -> bool:
+    return re.fullmatch(r"VERIFY-BOOK-\d{4}-CH-\d{4}", task_id) is not None
+
+
+def _release_dead_revisions(root: Path, plan: dict[str, object]) -> list[str]:
+    """Release a chapter revision staged by a process that died before promoting it.
+
+    `review_and_close_chapter` records the revision (`promotion_pending`) and then
+    asks the verifier in the same process. The exception path settles both claims;
+    a SIGKILL raises nothing, and the revision stayed `promotion_pending` under a
+    dead pid, which `claim_task` refuses — only a chapter reset reached it. A
+    revision is released only when its owner is dead and no promotion transaction
+    names it: a transaction in flight is `recover_transactions`' to finish.
+    """
+    in_transaction: set[str] = set()
+    transactions = root / ".book-forge" / "transactions"
+    if transactions.is_dir():
+        for journal in transactions.glob("TXN-*/journal.json"):
+            try:
+                in_transaction.add(str(_read_json(journal).get("attempt")))
+            except (OSError, ValueError):
+                continue
+    released = []
+    for attempt in plan["attempts"]:
+        if attempt["state"] != "promotion_pending":
+            continue
+        if re.fullmatch(r"REVISE-BOOK-\d{4}-CH-\d{4}", str(attempt["task"])) is None:
+            continue
+        owner = attempt.get("owner_pid")
+        if not isinstance(owner, int) or owner == os.getpid() or _pid_alive(owner):
+            continue
+        if str(attempt["id"]) in in_transaction:
+            continue
+        attempt["state"] = "validation_failed"
+        attempt["failure"] = "Revision not verified: its process died before promotion"
+        task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+        task["state"] = "pending"
+        task.pop("attempt", None)
+        released.append(str(attempt["id"]))
+    if released:
+        print(f"[recover] released revisions whose process died before promotion: {', '.join(released)}", file=sys.stderr)
+    return released
 
 
 def record_late_result(project: Path | str, attempt_id: str, output_hash: str) -> dict[str, object]:
@@ -6173,7 +6277,8 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
     rank = {"blocking": 0, "warning": 1, "note": 2}
     deduped = sorted(seen.values(), key=lambda r: (rank.get(str(r.get("severity")), 9), str(r.get("id"))))
     # Call synthesizer to rank/propose patches if provider available, else just dedup.
-    synthesis = {"schema": 1, "scope": scope_id, "run": latest, "findings": deduped, "patches": []}
+    synthesis = {"schema": 1, "scope": scope_id, "run": latest, "findings": deduped, "patches": [],
+                 "synthesizer": _chorus_synthesizer(_project_config(root))}
     if provider or True:
         runner = provider or run_opencode_role
         try:
@@ -7049,13 +7154,13 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
                 stripped = stripped.lstrip()[5:]
     start = stripped.find("{")
     if start < 0:
-        raise BookForgeError("Model output contains no JSON object")
+        raise MalformedAnswer("Model output contains no JSON object")
     try:
         value, _ = json.JSONDecoder(strict=False).raw_decode(stripped[start:])
     except json.JSONDecodeError as exc:
-        raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
+        raise MalformedAnswer(f"Model output is not contract JSON: {exc}") from exc
     if not isinstance(value, dict):
-        raise BookForgeError("Model output contract must be an object")
+        raise MalformedAnswer("Model output contract must be an object")
     return value
 
 
@@ -7879,7 +7984,7 @@ def rewrite_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, lo
     if not resolved:
         raise BookForgeError("A bake-off needs at least one model")
     config = _project_config(root)
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
@@ -8087,7 +8192,7 @@ def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, 
     if len(resolved) < 2:
         raise BookForgeError("A bake-off compares at least two models")
     config = _project_config(root)
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
@@ -8162,7 +8267,7 @@ def draft_bakeoff(
     # project's chorus has no agent and no catalogue entry, and would die at the probe
     # with a claim already taken. Regenerating the runtime over the union is the same
     # operation `runtime sync` performs, so the state stays reproducible from config.
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
@@ -8989,30 +9094,6 @@ def _call_parallel_reviews(
         attempt_dir = Path(claim["capsule"]).parent
         _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
         jobs.append((key, role, task_id, envelope, claim, attempt_dir))
-    def ask(role, envelope, attempt_dir):
-        """One reviewer's answer, re-asked while it spends its ceiling and says nothing.
-
-        Bounded, and only for this failure: a malformed answer has its own remedy
-        upstream, and silence has the backoff. This is the third class — the model
-        answered, was charged, and left no room to write — and for this role it is
-        variance, so the same question asked again is a question that gets answered.
-        """
-        last = None
-        for attempt in range(1, REVIEW_CEILING_REASKS + 1):
-            result = runner(role, envelope, attempt_dir)
-            try:
-                _refuse_empty_answer(role, role, result)
-                return result
-            except ReasoningCeilingSpent as spent:
-                last = spent
-                if attempt < REVIEW_CEILING_REASKS:
-                    print(
-                        f"[{role}] spent its ceiling with nothing written; asking again "
-                        f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
-                        file=sys.stderr,
-                    )
-        raise last  # type: ignore[misc]
-
     # Held from the moment they are claimed, and dropped as each is promoted. The
     # calls themselves can raise — a reviewer that spends its ceiling on every
     # re-ask does — and a claim left behind by that becomes `outcome_unknown` and
@@ -9026,57 +9107,66 @@ def _call_parallel_reviews(
             except BookForgeError:
                 pass
 
-    try:
-        with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
-            futures = {
-                executor.submit(ask, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
-                for key, role, task_id, envelope, claim, attempt_dir in jobs
-            }
-            results = []
-            for future, metadata in futures.items():
-                results.append((*metadata, future.result()))
-    except BookForgeError as unanswered:
-        abandon(str(unanswered))
-        raise
     parsed: dict[str, dict[str, object]] = dict(materialized)
-    receipts = []
+    receipts_by_key: dict[str, dict[str, object]] = {}
+
+    def settle(key, role, task_id, envelope, claim, result) -> None:
+        """Validate and promote one review the moment it returns.
+
+        The batch used to promote nothing until all three futures had finished, so a
+        `run --next` killed by a wrapper's timeout during the review batch lost the
+        cold reader's and the contract review's answers although both had come back
+        and been paid for. Settled one at a time on this thread, a kill costs only
+        the calls still in flight.
+        """
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        _refuse_empty_answer(role, task_id, result)
+        value = _parse_contract_json(str(result["text"]))
+        usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
+        if set_aside:
+            print(
+                f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
+                f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
+                file=sys.stderr,
+            )
+        # The review is acted on through what survived, and what did not is
+        # carried beside it rather than dropped on the floor.
+        value["findings"] = usable
+        value["set_aside"] = set_aside
+        # Asked of the half that is given the material to answer it. The canon
+        # half reads blocks and reports what contradicts them; the consequences a
+        # chapter creates are read off the prose and the contract, which is the
+        # other half's question.
+        if key == "technical-contract" and not isinstance(value.get("consequences"), list):
+            raise BookForgeError("Technical review has no independent consequence extraction")
+        parsed[key] = value
+        receipts_by_key[key] = _materialize_review_result(root, task_id, claim, envelope, result, value)
+        unsettled.pop(task_id, None)
+
     # Every claim this pass holds, dropped as each one is promoted. Whatever is left
     # when the pass raises is settled before the exception leaves: an answer that
-    # came back and could not be used is a *failed* attempt, and the sibling role's
-    # claim — accepted and never looked at, because the loop raised before reaching
-    # it — is not an unknown outcome either. Left unsettled, both become
+    # came back and could not be used is a *failed* attempt, and a sibling's claim
+    # whose call raised is not an unknown outcome either. Left unsettled, both become
     # `outcome_unknown` and halt the run for a person, which is right only when the
-    # engine does not know what happened. Here it does.
-    try:
-        for key, role, task_id, envelope, claim, result in results:
-            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-            _refuse_empty_answer(role, task_id, result)
-            value = _parse_contract_json(str(result["text"]))
-            usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
-            if set_aside:
-                print(
-                    f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
-                    f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
-                    file=sys.stderr,
-                )
-            # The review is acted on through what survived, and what did not is
-            # carried beside it rather than dropped on the floor.
-            value["findings"] = usable
-            value["set_aside"] = set_aside
-            # Asked of the half that is given the material to answer it. The canon
-            # half reads blocks and reports what contradicts them; the consequences a
-            # chapter creates are read off the prose and the contract, which is the
-            # other half's question.
-            if key == "technical-contract" and not isinstance(value.get("consequences"), list):
-                raise BookForgeError("Technical review has no independent consequence extraction")
-            parsed[key] = value
-            receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
-            unsettled.pop(task_id, None)
-    except BookForgeError as unusable:
+    # engine does not know what happened. Here it does. One unusable review does not
+    # discard the others: they are promoted as they return and reused on the retry.
+    failures: list[BookForgeError] = []
+    with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
+        futures = {
+            executor.submit(_ask_past_empty, runner, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
+            for key, role, task_id, envelope, claim, attempt_dir in jobs
+        }
+        for future in as_completed(futures):
+            try:
+                settle(*futures[future], future.result())
+            except BookForgeError as unusable:
+                failures.append(unusable)
+    if failures:
         # Nothing here may raise on the way out: the caller must see the failure
         # that actually happened, not one invented by the cleanup.
-        abandon(str(unusable))
-        raise
+        abandon(str(failures[0]))
+        raise failures[0]
+    receipts = [receipts_by_key[key] for key, *_ in REVIEW_CALLS if key in receipts_by_key]
     return (
         parsed["cold-reader"],
         _merge_technical_halves(parsed["technical-editor"], parsed["technical-contract"]),
@@ -9294,6 +9384,38 @@ STYLE_MAX_FINDINGS = 4
 # The stage above also retries, but each of its attempts costs a fresh call of
 # every unfinished role. Re-asking here costs one call.
 REVIEW_CEILING_REASKS = 3
+# How many times one claim of the reviser or the changed-span verifier is asked
+# before an answer that is not contract JSON blocks its task. Two: the pilot's
+# malformed revision (ATT-0027) answered on the second ask of the identical
+# envelope, and the reviser is the most expensive call of a chapter, so a model
+# that cannot write the contract twice in a row is left to recovery and a person.
+MALFORMED_ANSWER_ASKS = 2
+
+
+def _ask_past_empty(runner, role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
+    """One answer, re-asked while it spends its ceiling and says nothing.
+
+    Bounded, and only for this failure: a malformed answer has its own remedy in
+    the caller, and silence has the backoff. This is the third class — the model
+    answered, was charged, and left no room to write — and for the reviewers and
+    the verifier it is variance, so the same question asked again is a question
+    that gets answered.
+    """
+    last = None
+    for attempt in range(1, REVIEW_CEILING_REASKS + 1):
+        result = runner(role, envelope, attempt_dir)
+        try:
+            _refuse_empty_answer(role, role, result)
+            return result
+        except ReasoningCeilingSpent as spent:
+            last = spent
+            if attempt < REVIEW_CEILING_REASKS:
+                print(
+                    f"[{role}] spent its ceiling with nothing written; asking again "
+                    f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
+                    file=sys.stderr,
+                )
+    raise last  # type: ignore[misc]
 
 
 # What one disposition costs the reviser: the finding id, the action taken, the
@@ -9576,6 +9698,88 @@ def _validate_revision(
     return validated
 
 
+def _verify_revision(
+    root: Path,
+    verify_id: str,
+    envelope: dict[str, object],
+    runner,
+    *,
+    reviser_attempt: str,
+    rejected_path: Path | None = None,
+) -> dict[str, object]:
+    """Ask the changed-span verifier, and settle both claims whatever happens.
+
+    The revision it reads is staged under the reviser's attempt, which sits in
+    `promotion_pending` until this returns. On the pilot the verifier spent 33,499
+    reasoning tokens and wrote nothing (ATT-0019); the parse raised outside any
+    handler, VERIFY stayed `running`, the reviser's attempt stayed
+    `promotion_pending`, and `claim_task` refused REVISE from then on — only a
+    chapter reset reached it. Every way out of here now releases both: VERIFY to
+    `pending`, the revision to a failed attempt whose task `run --next` claims
+    again. An empty answer is re-asked on the same claim, as the reviewers' are;
+    an unreadable one on a fresh claim, up to MALFORMED_ANSWER_ASKS.
+    """
+    verify_claim: dict[str, object] | None = None
+
+    def release_both(reason: str) -> None:
+        # Nothing here may raise on the way out: the caller must see the failure
+        # that actually happened, not one invented by the cleanup.
+        plan = _load_plan(root)
+        states = {str(row["id"]): str(row["state"]) for row in plan["attempts"]}
+        if verify_claim is not None and states.get(str(verify_claim["attempt"])) in {"running", "promotion_pending"}:
+            _set_attempt_failure(root, str(verify_claim["attempt"]), block=False, reason=reason)
+        if states.get(reviser_attempt) in {"running", "promotion_pending"}:
+            _set_attempt_failure(root, reviser_attempt, block=False, reason=f"Revision not verified: {reason}")
+
+    try:
+        for ask_number in range(1, MALFORMED_ANSWER_ASKS + 1):
+            verify_claim = claim_task(root, verify_id, request_hash=str(envelope["hash"]))
+            verify_dir = Path(verify_claim["capsule"]).parent
+            _write_bytes_atomic(verify_dir / "envelope.json", envelope["bytes"])
+            result = _ask_past_empty(runner, "technical-editor", envelope, verify_dir)
+            mark_provider_accepted(root, verify_claim["attempt"], str(result["session_id"]))
+            try:
+                verification = _parse_contract_json(str(result["text"]))
+            except MalformedAnswer as exc:
+                if ask_number == MALFORMED_ANSWER_ASKS:
+                    raise
+                _set_attempt_failure(root, str(verify_claim["attempt"]), block=False, reason=str(exc))
+                verify_claim = None
+                print(
+                    f"[technical-editor] {verify_id}: the verification was not contract JSON ({exc}); asking again "
+                    f"{ask_number + 1}/{MALFORMED_ANSWER_ASKS}",
+                    file=sys.stderr,
+                )
+                continue
+            break
+        # Gate: only blocking findings fail promotion; warning/note are advisory.
+        blocking_findings = [f for f in (verification.get("findings") or []) if isinstance(f, dict) and f.get("severity") == "blocking"]
+        if verification.get("verified") is not True or blocking_findings:
+            if rejected_path is not None:
+                # Not VERIFY's declared output, which is written only on a pass: an
+                # undeclared working file the retried reviser is handed, so it is not
+                # asked for the same revision the verifier just refused.
+                _write_json(rejected_path, {
+                    "schema": 1,
+                    "attempt": str(verify_claim["attempt"]),
+                    "revision_attempt": reviser_attempt,
+                    "verified": verification.get("verified"),
+                    "findings": [f for f in (verification.get("findings") or []) if isinstance(f, dict)],
+                })
+            raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
+        # Materialized on success too, for traceability.
+        receipt = _materialize_review_result(root, verify_id, verify_claim, envelope, result, verification)
+        if rejected_path is not None and rejected_path.is_file():
+            rejected_path.unlink()
+        return receipt
+    except BaseException as failure:
+        try:
+            release_both(str(failure) or type(failure).__name__)
+        except Exception:  # noqa: BLE001 - the original failure is the one to report
+            pass
+        raise
+
+
 def review_and_close_chapter(
     project: Path | str,
     book_id: str,
@@ -9613,26 +9817,54 @@ def review_and_close_chapter(
     except Exception:
         pass
     reviser_id = f"REVISE-{book_id}-{chapter_id}"
-    envelope = build_envelope(
-        root,
-        role="reviser",
-        task_capsule={"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]},
-        imports=list(contract.get("imports", [])),
-        state=_read_json(root / "books" / book_id / "state.yaml"),
-        tools=[],
-        max_output_tokens=_reviser_budget(contract, findings),
-    )
-    claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
-    attempt_dir = Path(claim["capsule"]).parent
-    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
-    result = runner("reviser", envelope, attempt_dir)
-    mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-    try:
-        value = _parse_contract_json(str(result["text"]))
-        validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
-    except BookForgeError as exc:
-        _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
-        raise
+    rejected_path = root / "books" / book_id / "work" / chapter_id / "verification-rejected.json"
+    rejected = _read_json(rejected_path) if rejected_path.is_file() else None
+    malformed = ""
+    for ask_number in range(1, MALFORMED_ANSWER_ASKS + 1):
+        capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]}
+        if rejected:
+            # What the last verifier refused, beside the findings rather than among
+            # them: it is context for the repair, not a finding owed a disposition.
+            capsule["rejected_verification"] = {"attempt": rejected.get("attempt"), "findings": rejected.get("findings", [])}
+        if malformed:
+            capsule["repair"] = {"attempt": ask_number, "validation_error": malformed}
+        envelope = build_envelope(
+            root,
+            role="reviser",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state=_read_json(root / "books" / book_id / "state.yaml"),
+            tools=[],
+            max_output_tokens=_reviser_budget(contract, findings),
+        )
+        claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+        result = runner("reviser", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        try:
+            value = _parse_contract_json(str(result["text"]))
+        except MalformedAnswer as exc:
+            # Each ask on its own claim, so the unreadable answer keeps its attempt,
+            # its provider events and its cost, and the one that answers is the one
+            # promoted. Blocking stays the terminal state, after the bound.
+            last_ask = ask_number == MALFORMED_ANSWER_ASKS
+            _set_attempt_failure(root, claim["attempt"], block=last_ask, reason=str(exc))
+            if last_ask:
+                raise
+            malformed = str(exc)
+            print(
+                f"[reviser] {chapter_id}: the answer was not contract JSON ({exc}); asking again "
+                f"{ask_number + 1}/{MALFORMED_ANSWER_ASKS}",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
+            raise
+        break
     state_path = root / "books" / book_id / "state.yaml"
     state = _read_json(state_path)
     if chapter_id in state.get("closed_chapters", []):
@@ -9690,22 +9922,14 @@ def review_and_close_chapter(
             tools=[],
             max_output_tokens=1500,
         )
-        verify_claim = claim_task(root, verify_id, request_hash=str(verification_envelope["hash"]))
-        verify_dir = Path(verify_claim["capsule"]).parent
-        verification_result = runner("technical-editor", verification_envelope, verify_dir)
-        mark_provider_accepted(root, verify_claim["attempt"], str(verification_result["session_id"]))
-        verification = _parse_contract_json(str(verification_result["text"]))
-        verification_findings = verification.get("findings") or []
-        # Gate: only blocking findings fail promotion; warning/note are advisory (verifier is stochastic/pignolo)
-        blocking_findings = [f for f in verification_findings if f.get("severity") == "blocking"]
-        if verification.get("verified") is not True or blocking_findings:
-            _set_attempt_failure(root, verify_claim["attempt"], block=True, reason="Independent semantic verification failed")
-            raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
-        # Always materialize verification even on success (for traceability)
-        
-        receipts.append(_materialize_review_result(root, verify_id, verify_claim, verification_envelope, verification_result, verification))
+        receipts.append(_verify_revision(
+            root, verify_id, verification_envelope, runner,
+            reviser_attempt=str(claim["attempt"]), rejected_path=rejected_path,
+        ))
         calls += 1
     promote_task(root, claim["attempt"], claim["fence"])
+    if rejected_path.is_file():
+        rejected_path.unlink()
     machine_state = _read_json(root / ".book-forge" / "state.json")
     machine_state["source_locked"] = True
     machine_state["source_language"] = _read_json(root / "book-forge.yaml")["source_language"]

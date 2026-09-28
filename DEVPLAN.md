@@ -5281,9 +5281,11 @@ sintetizzatore effettivo, cioè lo stesso modello che rilegge il proprio parere,
 
 ## Phase L — Ground Truth adoption: reader isolation, evidence and bounded production
 
-**Status (2026-09-27): planned, not implemented.** The author explicitly requested
-this documentation and its commits for a Claude handoff. No engine changes,
-deployment, migration or new prose were performed in this phase. The source
+**Status (2026-09-28): partially implemented on branch `fix/phase-l-pilot-defects`.**
+M52, M53 and M54 are done; M55 is pending approval; M44–M51 are planned and not
+implemented. The phase was first written (2026-09-27) as
+documentation for a Claude handoff, with no engine changes, deployment,
+migration or new prose. The source
 inspected was `c41a7e755949d7a2225e2c9b45e40b47dcbdcf74`. Existing pending work
 above remains pending; this phase does not retroactively close it.
 
@@ -5548,20 +5550,20 @@ book's bounded pilot (Noah, Lena, one explanation scene and a climax causal
 outline), with all-in receipts and an explicit author verdict before full rewrite.
 Do not promise a cost saving until measured on comparable output and quality.
 
-### M52 — Honor project chorus and synthesizer pins and write only configured agents
+### M52 — Honor project chorus and synthesizer pins and write only configured agents ✅
 
 **Why:** A project's `book-forge.yaml` must decide which models its runtime can
 call; today the engine adds models and ignores the synthesizer the project names.
 
-- [ ] Generate `opencode.json` and `.opencode/agents/` from the project's
+- [x] Generate `opencode.json` and `.opencode/agents/` from the project's
   configured models only: chorus, role pins, rewriter chain and style-review
   models the project declares or its rules name. Remove the unconditional grok
   appends in `_opencode_config` (~597–600) and `_write_agents` (~874–875), and
   the bake-off candidate agents written for every catalogue model (~942–958).
-- [ ] Resolve `chorus.synthesizer` from the project config in `_role_pin`
+- [x] Resolve `chorus.synthesizer` from the project config in `_role_pin`
   (~270–273), `_write_agents` (~927–934) and the synthesis dispatch
   (~6182–6194); keep `CHORUS_SYNTHESIZER` as the default only.
-- [ ] Make qwen3.8-flash runnable as a style reviewer on OpenCode 1.18.32, or
+- [x] Make qwen3.8-flash runnable as a style reviewer on OpenCode 1.18.32, or
   refuse it at `runtime sync` with the reason. The generated entry sets only
   `reasoning.effort` (~618–625); OpenRouter received `reasoning.max_tokens`
   as well. Cause not located in the engine; reproduce with
@@ -5572,28 +5574,135 @@ project naming a synthesizer gets it in the agent file, `status` and the
 dispatch receipt; the qwen case either receives a response or is refused before
 dispatch. Extend the runtime-sync tests; no new role.
 
-### M53 — Release claims on failed verification and re-ask on empty output
+**Done (2026-09-28):** `_runtime_models` is the one list of what a project can
+call — chorus, role pins, rewriter chain, the style reviewers while the pass is
+on (declared or default) plus any reviewer a tag rule names, and the
+synthesizer — and `_opencode_config` and `_write_agents` write that list and
+nothing else; advisors and bake-off candidates follow it. The bake-offs extend
+the same list with the models they compare, instead of the chorus alone.
+`_chorus_synthesizer` resolves `chorus.synthesizer` (a full path or a short
+catalogue name; an unknown short name is refused) and feeds `_role_pin`, the
+agent file, `runtime sync`, `status` and the synthesis output
+(`chorus-synthesis.json` now records `synthesizer`). qwen3.8-flash: cause
+located in OpenCode, not the engine — models.dev lists `budget_tokens` for it,
+so OpenCode 1.18.32 builds its `high` variant as `reasoning: {max_tokens}` and
+merges the engine's `reasoning: {effort}` beside it. Reproduced on a fixture
+project (HTTP 400, no charge); the catalogue entry now declares
+`reasoning_control: budget`, the generated entry carries no effort, and the same
+agent answered (`OK`, 14 reasoning tokens, $0.00005). Tests:
+`tests/test_runtime_sync.py` `TheProjectDecidesWhichModelsItsRuntimeCanCallTests`.
+
+### M53 — Release claims on failed verification and re-ask on empty output ✅
 
 **Why:** One empty verifier answer left a staged revision that no command
 except a chapter reset can reach.
 
-- [ ] Settle both claims when verification raises. The verify dispatch
+- [x] Settle both claims when verification raises. The verify dispatch
   (~9693–9697) calls `runner` and `_parse_contract_json` outside any handler,
   so VERIFY stays `running` and the reviser attempt stays `promotion_pending`
   (set by `record_execution`, ~2026); `claim_task` then refuses REVISE (~1945).
   The handled rejection (~9701–9703) fails VERIFY and also leaves the reviser
   pending. Both paths must fail or release the reviser attempt.
-- [ ] Re-ask the verifier when it spends its ceiling with nothing written,
+- [x] Re-ask the verifier when it spends its ceiling with nothing written,
   reusing `_refuse_empty_answer` (~10540) and the `ask` loop
   (~8992–9013, `REVIEW_CEILING_REASKS` ~9296). The runner already returns
   `finish: "length"` with empty text (~7585–7597).
-- [ ] Settle each review as it returns. The batch promotes nothing until all
+- [x] Settle each review as it returns. The batch promotes nothing until all
   three futures finish (~9030–9037, ~9051), so a killed process loses answers
   already paid for.
+- [x] Hand a rejected verification's findings to the retried reviser. VERIFY's
+  declared output stays as it is: the rejection is written to the undeclared
+  `books/<book>/work/<chapter>/verification-rejected.json` (attempt, findings),
+  the reviser's capsule carries it as `rejected_verification` when present, and
+  it is removed when a later verification passes or the chapter is promoted.
+- [x] Settle a reviser attempt left `promotion_pending` by a process that died
+  without an exception during verification. `recover_run` settles a stale
+  VERIFY claim as a failed attempt (its answer is only read by the process that
+  asked, so a retry cannot pay for a result anyone would use) and releases a
+  REVISE attempt in `promotion_pending` whose owner is dead and which no
+  promotion transaction references.
 
 **Tests/done:** A mocked empty verifier answer is re-asked; three empty answers
 leave REVISE retryable by `run --next` without `reset`; a kill after one review
 returns keeps that review. Extend the review-and-close tests.
+
+**Done (2026-09-28):** `_verify_revision` owns the verifier call. Every exit that
+is not a promotion — a raise, an empty answer after `REVIEW_CEILING_REASKS`,
+an unreadable one after `MALFORMED_ANSWER_ASKS`, a rejection — sets VERIFY's
+attempt `validation_failed` with the task `pending`, and the reviser's
+`promotion_pending` attempt `validation_failed` with REVISE `pending`, so the
+next `run --next` redrafts the revision without `reset`. The review batch
+settles each future through `as_completed`, and one unusable review no longer
+discards its siblings. `_ask_past_empty` is the shared re-ask loop. Tests:
+`tests/test_review.py` `AVerificationThatFailsReleasesTheRevisionTests`,
+`AKilledReviewBatchKeepsWhatWasPaidForTests`. The two follow-up bullets: a
+rejection writes `work/<chapter>/verification-rejected.json` (the verifier's
+attempt, the reviser attempt it refused, its findings), the retried reviser's
+capsule carries it as `rejected_verification`, and a passing verification or
+the chapter's promotion removes it. `recover_run` settles a stale
+`VERIFY-BOOK-*-CH-*` claim as `validation_failed` (task `pending`) whether or
+not the provider accepted it, and `_release_dead_revisions` returns a
+`REVISE-BOOK-*-CH-*` attempt in `promotion_pending` whose owner pid is dead and
+which no transaction journal names to `pending`; `recover_run` reports it under
+`released`. Tests: `ARejectedVerificationTeachesTheRetryTests`,
+`AProcessKilledDuringVerificationIsRecoveredTests`. Left to M46: a failed ask
+has no receipt and shows as `accepted_call_unattributed`.
+
+### M54 — Re-ask a malformed answer before blocking the task ✅
+
+**Why:** In the pilot the reviser (ATT-0027, glm-5.3-flash high, 403 s, 8,160
+output tokens) returned a revision whose `beat_map` carried `"evidence ":'> LOOK'
+through '…'` — a single-quoted value, so `_parse_contract_json` raised at char
+22,955. `review_and_close_chapter` (~9660–9665) failed the attempt with
+`block=True`, the run went `blocked` and the invocation exited 2. The next
+`run --next` would have re-queued it through `recover_before_dispatch`, but
+nothing said so, and the chapter proceeded only after a manual
+`resume --resolve-blocked REVISE-BOOK-0001-CH-0001:retry`. The same identical
+envelope answered on the next ask (ATT-0028). A malformed answer is variance of
+the same class as a spent ceiling, and the writer already gets one repair ask
+(`draft_chapter` ~7711–7747); the reviser and the verifier get none.
+
+- [x] Re-ask the reviser inside the same invocation when its answer is not
+  contract JSON, on a fresh claim per ask so every paid call keeps its own
+  attempt and provider events, up to `MALFORMED_ANSWER_ASKS`; the failed ask
+  settles as `validation_failed` without blocking.
+- [x] Apply the same bound to the changed-span verifier's answer.
+- [x] After the bound, block as today: blocking stays the terminal state, and
+  `recover_before_dispatch` keeps its `MAX_AUTO_RETRIES` across invocations.
+
+**Tests/done:** A mocked reviser returning the ATT-0027 shape once and a valid
+revision next closes the chapter in one call of `review_and_close_chapter`, with
+two REVISE attempts (`validation_failed`, `succeeded`); a reviser malformed on
+every ask costs exactly `MALFORMED_ANSWER_ASKS` calls and leaves REVISE blocked.
+
+**Done (2026-09-28):** `_parse_contract_json` raises `MalformedAnswer` (a
+`BookForgeError`, same messages). The reviser is asked up to
+`MALFORMED_ANSWER_ASKS = 2` times, each on its own claim, the second carrying a
+`repair` note with the parse error as the writer's does; an answer that parses
+and fails `_validate_revision` is not re-asked. The verifier takes the same
+bound, and after it releases both claims as M53 specifies rather than blocking.
+Tests: `tests/test_review.py` `AMalformedAnswerIsAskedAgainBeforeBlockingTests`.
+
+### M55 — Reopen a promoted book design and add chapters without a rebuild — pending, awaiting approval
+
+**Why:** `apply_book_design` only runs on a pending design task, and the universe
+cannot be redesigned once a book exists (~6349). Extending a book, or adding canon
+the universe needs, therefore means regenerating the whole engine state and
+redrafting every promoted chapter, although most of those chapters' contracts
+would not change.
+
+- [ ] A `design --reopen` path (or equivalent) that versions the book design,
+  keeps every promoted chapter whose contract is unchanged, and marks changed
+  and new chapters pending.
+- [ ] Universe canon additions that do not invalidate existing books: each
+  addition carries an `earliest_safe_book`, and books before it keep their
+  promoted state.
+
+**Tests/done (sketch):** Reopening a three-chapter book to add a fourth keeps the
+three manuscripts and their receipts and queues only CH-0004; changing CH-0002's
+contract queues CH-0002 and whatever its consequences reach, and nothing else;
+a universe block added with `earliest_safe_book` after BOOK-0001 leaves
+BOOK-0001's closed chapters closed.
 
 ### Observations from the Ground Truth pilot (2026-09-27)
 
@@ -5612,7 +5721,8 @@ sha256 `42f26a0c…`, OpenCode 1.18.32. Line numbers refer to that commit.
 - The qwen3.8-flash style review (ATT-0007) failed with HTTP 400, "Only one of
   `reasoning.effort` and `reasoning.max_tokens` can be specified". The engine
   sets only `reasoning.effort` (~618–625) and no `max_tokens` anywhere; cause
-  not located in the engine. The chapter closed on the two remaining reviewers
+  not located in the engine (located 2026-09-28: OpenCode's own `high`
+  variant for this model; see M52). The chapter closed on the two remaining reviewers
   and the call was not retried. Owner: M52 (provider compatibility). Done when
   the reviewer answers or is refused before dispatch.
 - `status` reported 8 calls for CH-0001 against 8 receipts and flagged

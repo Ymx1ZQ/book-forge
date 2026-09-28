@@ -49,7 +49,9 @@ never bypass a block by editing canonical files.
 - Pin primary OpenCode roles to `openrouter/deepseek/deepseek-v4.1-flash` on a reasoning
   effort that model declares: `low`, `medium`, `high`, or `max`; chorus advisors use the configured
   ensemble (`deepseek-v4.1-flash`, `glm-5.3-flash`, `qwen3.8-flash`, `gemini-3.8-flash`, `grok-4.6`) and the
-  synthesizer uses `openrouter/google/gemini-3.8-flash` on `high`; `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
+  synthesizer is `chorus.synthesizer` (default `openrouter/google/gemini-3.8-flash` on `high`); `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
+  `opencode.json` and `.opencode/agents/` hold only the models the project's config names (chorus, role pins,
+  rewriter chain, style reviewers and their tag rules, synthesizer).
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
 - Let one orchestrator decide work while a deterministic control plane performs every state and canonical write.
 - Persist task receipts, hashes, leases, and staged outputs so pause and resume survive process loss.
