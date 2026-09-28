@@ -5610,6 +5610,17 @@ except a chapter reset can reach.
 - [x] Settle each review as it returns. The batch promotes nothing until all
   three futures finish (~9030–9037, ~9051), so a killed process loses answers
   already paid for.
+- [x] Hand a rejected verification's findings to the retried reviser. VERIFY's
+  declared output stays as it is: the rejection is written to the undeclared
+  `books/<book>/work/<chapter>/verification-rejected.json` (attempt, findings),
+  the reviser's capsule carries it as `rejected_verification` when present, and
+  it is removed when a later verification passes or the chapter is promoted.
+- [x] Settle a reviser attempt left `promotion_pending` by a process that died
+  without an exception during verification. `recover_run` settles a stale
+  VERIFY claim as a failed attempt (its answer is only read by the process that
+  asked, so a retry cannot pay for a result anyone would use) and releases a
+  REVISE attempt in `promotion_pending` whose owner is dead and which no
+  promotion transaction references.
 
 **Tests/done:** A mocked empty verifier answer is re-asked; three empty answers
 leave REVISE retryable by `run --next` without `reset`; a kill after one review
@@ -5624,12 +5635,18 @@ next `run --next` redrafts the revision without `reset`. The review batch
 settles each future through `as_completed`, and one unusable review no longer
 discards its siblings. `_ask_past_empty` is the shared re-ask loop. Tests:
 `tests/test_review.py` `AVerificationThatFailsReleasesTheRevisionTests`,
-`AKilledReviewBatchKeepsWhatWasPaidForTests`. Open: a rejected verification's
-findings are not handed to the retried reviser — `verification.json` is written
-only on success, so the feedback loop in `review_and_close_chapter` that reads
-it never fires; and a process killed during verification (no exception) still
-leaves the reviser `promotion_pending`, because `recover_run` settles only
-`running` attempts.
+`AKilledReviewBatchKeepsWhatWasPaidForTests`. The two follow-up bullets: a
+rejection writes `work/<chapter>/verification-rejected.json` (the verifier's
+attempt, the reviser attempt it refused, its findings), the retried reviser's
+capsule carries it as `rejected_verification`, and a passing verification or
+the chapter's promotion removes it. `recover_run` settles a stale
+`VERIFY-BOOK-*-CH-*` claim as `validation_failed` (task `pending`) whether or
+not the provider accepted it, and `_release_dead_revisions` returns a
+`REVISE-BOOK-*-CH-*` attempt in `promotion_pending` whose owner pid is dead and
+which no transaction journal names to `pending`; `recover_run` reports it under
+`released`. Tests: `ARejectedVerificationTeachesTheRetryTests`,
+`AProcessKilledDuringVerificationIsRecoveredTests`. Left to M46: a failed ask
+has no receipt and shows as `accepted_call_unattributed`.
 
 ### M54 — Re-ask a malformed answer before blocking the task ✅
 

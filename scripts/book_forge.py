@@ -3007,7 +3007,17 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
         orphaned_owner = isinstance(owner, int) and owner != os.getpid() and not _pid_alive(owner)
         if expired or orphaned_owner:
             task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
-            if attempt.get("provider_accepted"):
+            if _is_chapter_verification(str(attempt["task"])):
+                # A verifier's answer is read only by the process that asked it, to
+                # decide whether that process promotes its revision. With the process
+                # gone nobody will read a late answer, so a retry cannot pay twice for
+                # a result anyone uses: settled as failed, not outcome_unknown.
+                attempt["state"] = "validation_failed"
+                attempt["failure"] = "Verification owner died before the answer was read"
+                task["state"] = "pending"
+                task.pop("attempt", None)
+                orphaned.append(str(attempt["id"]))
+            elif attempt.get("provider_accepted"):
                 attempt["state"] = "outcome_unknown"
                 task["state"] = "outcome_unknown"
                 unknown.append(str(attempt["id"]))
@@ -3016,6 +3026,7 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
                 task["state"] = "pending"
                 task.pop("attempt", None)
                 orphaned.append(str(attempt["id"]))
+    released = _release_dead_revisions(root, plan)
     _save_plan(root, plan)
     render_plan(root)
     if unknown:
@@ -3025,7 +3036,51 @@ def recover_run(project: Path | str, *, now: float | None = None) -> dict[str, o
             run = _read_json(run_path)
             run["state"] = "blocked"
             _write_json(run_path, run)
-    return {"orphaned": orphaned, "outcome_unknown": unknown}
+    return {"orphaned": orphaned, "outcome_unknown": unknown, "released": released}
+
+
+def _is_chapter_verification(task_id: str) -> bool:
+    return re.fullmatch(r"VERIFY-BOOK-\d{4}-CH-\d{4}", task_id) is not None
+
+
+def _release_dead_revisions(root: Path, plan: dict[str, object]) -> list[str]:
+    """Release a chapter revision staged by a process that died before promoting it.
+
+    `review_and_close_chapter` records the revision (`promotion_pending`) and then
+    asks the verifier in the same process. The exception path settles both claims;
+    a SIGKILL raises nothing, and the revision stayed `promotion_pending` under a
+    dead pid, which `claim_task` refuses — only a chapter reset reached it. A
+    revision is released only when its owner is dead and no promotion transaction
+    names it: a transaction in flight is `recover_transactions`' to finish.
+    """
+    in_transaction: set[str] = set()
+    transactions = root / ".book-forge" / "transactions"
+    if transactions.is_dir():
+        for journal in transactions.glob("TXN-*/journal.json"):
+            try:
+                in_transaction.add(str(_read_json(journal).get("attempt")))
+            except (OSError, ValueError):
+                continue
+    released = []
+    for attempt in plan["attempts"]:
+        if attempt["state"] != "promotion_pending":
+            continue
+        if re.fullmatch(r"REVISE-BOOK-\d{4}-CH-\d{4}", str(attempt["task"])) is None:
+            continue
+        owner = attempt.get("owner_pid")
+        if not isinstance(owner, int) or owner == os.getpid() or _pid_alive(owner):
+            continue
+        if str(attempt["id"]) in in_transaction:
+            continue
+        attempt["state"] = "validation_failed"
+        attempt["failure"] = "Revision not verified: its process died before promotion"
+        task = next(row for row in plan["tasks"] if row["id"] == attempt["task"])
+        task["state"] = "pending"
+        task.pop("attempt", None)
+        released.append(str(attempt["id"]))
+    if released:
+        print(f"[recover] released revisions whose process died before promotion: {', '.join(released)}", file=sys.stderr)
+    return released
 
 
 def record_late_result(project: Path | str, attempt_id: str, output_hash: str) -> dict[str, object]:
@@ -9650,6 +9705,7 @@ def _verify_revision(
     runner,
     *,
     reviser_attempt: str,
+    rejected_path: Path | None = None,
 ) -> dict[str, object]:
     """Ask the changed-span verifier, and settle both claims whatever happens.
 
@@ -9699,9 +9755,23 @@ def _verify_revision(
         # Gate: only blocking findings fail promotion; warning/note are advisory.
         blocking_findings = [f for f in (verification.get("findings") or []) if isinstance(f, dict) and f.get("severity") == "blocking"]
         if verification.get("verified") is not True or blocking_findings:
+            if rejected_path is not None:
+                # Not VERIFY's declared output, which is written only on a pass: an
+                # undeclared working file the retried reviser is handed, so it is not
+                # asked for the same revision the verifier just refused.
+                _write_json(rejected_path, {
+                    "schema": 1,
+                    "attempt": str(verify_claim["attempt"]),
+                    "revision_attempt": reviser_attempt,
+                    "verified": verification.get("verified"),
+                    "findings": [f for f in (verification.get("findings") or []) if isinstance(f, dict)],
+                })
             raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
         # Materialized on success too, for traceability.
-        return _materialize_review_result(root, verify_id, verify_claim, envelope, result, verification)
+        receipt = _materialize_review_result(root, verify_id, verify_claim, envelope, result, verification)
+        if rejected_path is not None and rejected_path.is_file():
+            rejected_path.unlink()
+        return receipt
     except BaseException as failure:
         try:
             release_both(str(failure) or type(failure).__name__)
@@ -9747,9 +9817,15 @@ def review_and_close_chapter(
     except Exception:
         pass
     reviser_id = f"REVISE-{book_id}-{chapter_id}"
+    rejected_path = root / "books" / book_id / "work" / chapter_id / "verification-rejected.json"
+    rejected = _read_json(rejected_path) if rejected_path.is_file() else None
     malformed = ""
     for ask_number in range(1, MALFORMED_ANSWER_ASKS + 1):
         capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]}
+        if rejected:
+            # What the last verifier refused, beside the findings rather than among
+            # them: it is context for the repair, not a finding owed a disposition.
+            capsule["rejected_verification"] = {"attempt": rejected.get("attempt"), "findings": rejected.get("findings", [])}
         if malformed:
             capsule["repair"] = {"attempt": ask_number, "validation_error": malformed}
         envelope = build_envelope(
@@ -9846,9 +9922,14 @@ def review_and_close_chapter(
             tools=[],
             max_output_tokens=1500,
         )
-        receipts.append(_verify_revision(root, verify_id, verification_envelope, runner, reviser_attempt=str(claim["attempt"])))
+        receipts.append(_verify_revision(
+            root, verify_id, verification_envelope, runner,
+            reviser_attempt=str(claim["attempt"]), rejected_path=rejected_path,
+        ))
         calls += 1
     promote_task(root, claim["attempt"], claim["fence"])
+    if rejected_path.is_file():
+        rejected_path.unlink()
     machine_state = _read_json(root / ".book-forge" / "state.json")
     machine_state["source_locked"] = True
     machine_state["source_language"] = _read_json(root / "book-forge.yaml")["source_language"]

@@ -36,7 +36,7 @@ class FaultMatrixTests(unittest.TestCase):
     def test_dispatch_faults_have_one_explicit_recovery_state(self):
         claim = self.add_claim(accepted=False)
         recovered = self.bf.recover_run(self.project, now=16)
-        self.assertEqual(recovered, {"orphaned": [claim["attempt"]], "outcome_unknown": []})
+        self.assertEqual(recovered, {"orphaned": [claim["attempt"]], "outcome_unknown": [], "released": []})
         self.assertEqual(self.bf.ready_frontier(self.project)[0]["id"], "TASK-A")
 
         second = Path(self.temp.name) / "accepted"
@@ -47,7 +47,7 @@ class FaultMatrixTests(unittest.TestCase):
         # Answering renews the lease by the window the claim asked for, so the attempt
         # is stale only once it has been silent for that long.
         recovered = self.bf.recover_run(second, now=17)
-        self.assertEqual(recovered, {"orphaned": [], "outcome_unknown": [accepted["attempt"]]})
+        self.assertEqual(recovered, {"orphaned": [], "outcome_unknown": [accepted["attempt"]], "released": []})
         late = self.bf.record_late_result(second, accepted["attempt"], "9" * 64)
         self.assertEqual(late["state"], "orphaned")
         with self.assertRaises(self.bf.BookForgeError):

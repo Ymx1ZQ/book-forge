@@ -1029,3 +1029,111 @@ class AMalformedAnswerIsAskedAgainBeforeBlockingTests(SettlementHelpers, ReviewT
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
         self.assertEqual(result["state"], "closed")
         self.assertEqual(provider.calls.count("technical-editor"), 2 + 2)
+
+
+class ARejectedVerificationTeachesTheRetryTests(SettlementHelpers, ReviewTests):
+    """A rejected verification used to be dropped: `verification.json` is VERIFY's
+    declared output and is written only on success, so the retried reviser was
+    handed the identical envelope and asked to make the same revision again."""
+
+    REJECTION = {"id": "V-1", "severity": "blocking", "issue": "Mara still does not know the signal in the last scene"}
+
+    def rejected_path(self):
+        return self.project / f"books/{self.book}/work/CH-0001/verification-rejected.json"
+
+    def reject_once(self):
+        provider = ScriptedProvider({
+            **self.verifying_reviews({"verified": False, "findings": [self.REJECTION]}),
+            "reviser": [self.good_revision()],
+        })
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+
+    def test_the_retried_reviser_is_given_the_rejected_findings(self):
+        self.reject_once()
+        self.assertTrue(self.rejected_path().is_file())
+        self.assertFalse((self.project / f"books/{self.book}/reviews/CH-0001/verification.json").exists(),
+                         "VERIFY's declared output is not written by a rejection")
+        seen = []
+
+        class Watching(ScriptedProvider):
+            def __call__(inner, role, envelope, attempt_dir):
+                if role == "reviser":
+                    seen.append(envelope["payload"]["task"])
+                return super().__call__(role, envelope, attempt_dir)
+
+        again = Watching({"reviser": [self.good_revision()], "technical-editor": [{"verified": True, "findings": []}]})
+        self.assertEqual(self.bf.run_next(self.project, book_id=self.book, provider=again)["state"], "closed")
+        rejected = seen[0]["rejected_verification"]
+        self.assertEqual([row["issue"] for row in rejected["findings"]], [self.REJECTION["issue"]])
+        self.assertTrue(str(rejected["attempt"]).startswith("ATT-"))
+        self.assertFalse(self.rejected_path().exists(), "a passing verification supersedes the rejection")
+
+    def test_a_first_revision_carries_no_rejection(self):
+        seen = []
+
+        class Watching(ScriptedProvider):
+            def __call__(inner, role, envelope, attempt_dir):
+                if role == "reviser":
+                    seen.append(envelope["payload"]["task"])
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = Watching({**self.verifying_reviews({"verified": True, "findings": []}), "reviser": [self.good_revision()]})
+        self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertNotIn("rejected_verification", seen[0])
+
+
+class AProcessKilledDuringVerificationIsRecoveredTests(SettlementHelpers, ReviewTests):
+    """A process killed by SIGKILL mid-verification raises nothing: VERIFY stays
+    `running` under a dead pid and the revision stays `promotion_pending`, which
+    `claim_task` refuses. Recovery has to settle both without a reset."""
+
+    DEAD_PID = 2 ** 22 + 12345
+
+    def kill_during_verification(self):
+        test = self
+
+        class Killed(ScriptedProvider):
+            def __call__(inner, role, envelope, attempt_dir):
+                if role == "technical-editor" and envelope["payload"]["task"].get("mode") == "changed-span-verification":
+                    # Leave exactly what a dead process leaves: an accepted
+                    # verification claim and a staged revision, owned by nobody.
+                    plan = test.bf._load_plan(test.project)
+                    for row in plan["attempts"]:
+                        if row["state"] in {"running", "promotion_pending"}:
+                            row["owner_pid"] = test.DEAD_PID
+                    test.bf._save_plan(test.project, plan)
+                    raise KeyboardInterrupt  # stands in for the kill; nothing may settle on the way out
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = Killed({**self.verifying_reviews(), "reviser": [self.good_revision()]})
+        with self.assertRaises(KeyboardInterrupt):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+
+    def test_the_next_run_closes_the_chapter_without_a_reset(self):
+        # The kill is simulated by rewriting ownership, so the exception path's
+        # own settlement must be bypassed to leave the state a SIGKILL leaves.
+        original = self.bf._verify_revision
+
+        def unguarded(root, verify_id, envelope, runner, *, reviser_attempt, rejected_path=None):
+            claim = self.bf.claim_task(root, verify_id, request_hash=str(envelope["hash"]))
+            self.bf.mark_provider_accepted(root, claim["attempt"], "ses-killed")
+            runner("technical-editor", envelope, Path(claim["capsule"]).parent)
+
+        self.bf._verify_revision = unguarded
+        try:
+            self.kill_during_verification()
+        finally:
+            self.bf._verify_revision = original
+        states = {row["task"]: row["state"] for row in self.plan()["attempts"]}
+        self.assertEqual(states[f"REVISE-{self.book}-CH-0001"], "promotion_pending")
+        self.assertEqual(states[f"VERIFY-{self.book}-CH-0001"], "running")
+        again = ScriptedProvider({"reviser": [self.good_revision()], "technical-editor": [{"verified": True, "findings": []}]})
+        self.assertEqual(self.bf.run_next(self.project, book_id=self.book, provider=again)["state"], "closed")
+        self.assertTrue(self.manuscript().is_file())
+        self.assertEqual(self.held(), [])
+        self.assertNotIn("outcome_unknown", [row["state"] for row in self.plan()["attempts"]])
+
+    def test_a_live_owner_s_staged_revision_is_left_alone(self):
+        recovered = self.bf.recover_run(self.project)
+        self.assertEqual(recovered.get("released", []), [])
