@@ -5281,9 +5281,11 @@ sintetizzatore effettivo, cioè lo stesso modello che rilegge il proprio parere,
 
 ## Phase L — Ground Truth adoption: reader isolation, evidence and bounded production
 
-**Status (2026-09-27): planned, not implemented.** The author explicitly requested
-this documentation and its commits for a Claude handoff. No engine changes,
-deployment, migration or new prose were performed in this phase. The source
+**Status (2026-09-28): partially implemented on branch `fix/phase-l-pilot-defects`.**
+M53 and M54 are done; M52 is in progress; M55 is pending approval; M44–M51 are
+planned and not implemented. The phase was first written (2026-09-27) as
+documentation for a Claude handoff, with no engine changes, deployment,
+migration or new prose. The source
 inspected was `c41a7e755949d7a2225e2c9b45e40b47dcbdcf74`. Existing pending work
 above remains pending; this phase does not retroactively close it.
 
@@ -5572,28 +5574,100 @@ project naming a synthesizer gets it in the agent file, `status` and the
 dispatch receipt; the qwen case either receives a response or is refused before
 dispatch. Extend the runtime-sync tests; no new role.
 
-### M53 — Release claims on failed verification and re-ask on empty output
+### M53 — Release claims on failed verification and re-ask on empty output ✅
 
 **Why:** One empty verifier answer left a staged revision that no command
 except a chapter reset can reach.
 
-- [ ] Settle both claims when verification raises. The verify dispatch
+- [x] Settle both claims when verification raises. The verify dispatch
   (~9693–9697) calls `runner` and `_parse_contract_json` outside any handler,
   so VERIFY stays `running` and the reviser attempt stays `promotion_pending`
   (set by `record_execution`, ~2026); `claim_task` then refuses REVISE (~1945).
   The handled rejection (~9701–9703) fails VERIFY and also leaves the reviser
   pending. Both paths must fail or release the reviser attempt.
-- [ ] Re-ask the verifier when it spends its ceiling with nothing written,
+- [x] Re-ask the verifier when it spends its ceiling with nothing written,
   reusing `_refuse_empty_answer` (~10540) and the `ask` loop
   (~8992–9013, `REVIEW_CEILING_REASKS` ~9296). The runner already returns
   `finish: "length"` with empty text (~7585–7597).
-- [ ] Settle each review as it returns. The batch promotes nothing until all
+- [x] Settle each review as it returns. The batch promotes nothing until all
   three futures finish (~9030–9037, ~9051), so a killed process loses answers
   already paid for.
 
 **Tests/done:** A mocked empty verifier answer is re-asked; three empty answers
 leave REVISE retryable by `run --next` without `reset`; a kill after one review
 returns keeps that review. Extend the review-and-close tests.
+
+**Done (2026-09-28):** `_verify_revision` owns the verifier call. Every exit that
+is not a promotion — a raise, an empty answer after `REVIEW_CEILING_REASKS`,
+an unreadable one after `MALFORMED_ANSWER_ASKS`, a rejection — sets VERIFY's
+attempt `validation_failed` with the task `pending`, and the reviser's
+`promotion_pending` attempt `validation_failed` with REVISE `pending`, so the
+next `run --next` redrafts the revision without `reset`. The review batch
+settles each future through `as_completed`, and one unusable review no longer
+discards its siblings. `_ask_past_empty` is the shared re-ask loop. Tests:
+`tests/test_review.py` `AVerificationThatFailsReleasesTheRevisionTests`,
+`AKilledReviewBatchKeepsWhatWasPaidForTests`. Open: a rejected verification's
+findings are not handed to the retried reviser — `verification.json` is written
+only on success, so the feedback loop in `review_and_close_chapter` that reads
+it never fires; and a process killed during verification (no exception) still
+leaves the reviser `promotion_pending`, because `recover_run` settles only
+`running` attempts.
+
+### M54 — Re-ask a malformed answer before blocking the task ✅
+
+**Why:** In the pilot the reviser (ATT-0027, glm-5.3-flash high, 403 s, 8,160
+output tokens) returned a revision whose `beat_map` carried `"evidence ":'> LOOK'
+through '…'` — a single-quoted value, so `_parse_contract_json` raised at char
+22,955. `review_and_close_chapter` (~9660–9665) failed the attempt with
+`block=True`, the run went `blocked` and the invocation exited 2. The next
+`run --next` would have re-queued it through `recover_before_dispatch`, but
+nothing said so, and the chapter proceeded only after a manual
+`resume --resolve-blocked REVISE-BOOK-0001-CH-0001:retry`. The same identical
+envelope answered on the next ask (ATT-0028). A malformed answer is variance of
+the same class as a spent ceiling, and the writer already gets one repair ask
+(`draft_chapter` ~7711–7747); the reviser and the verifier get none.
+
+- [x] Re-ask the reviser inside the same invocation when its answer is not
+  contract JSON, on a fresh claim per ask so every paid call keeps its own
+  attempt and provider events, up to `MALFORMED_ANSWER_ASKS`; the failed ask
+  settles as `validation_failed` without blocking.
+- [x] Apply the same bound to the changed-span verifier's answer.
+- [x] After the bound, block as today: blocking stays the terminal state, and
+  `recover_before_dispatch` keeps its `MAX_AUTO_RETRIES` across invocations.
+
+**Tests/done:** A mocked reviser returning the ATT-0027 shape once and a valid
+revision next closes the chapter in one call of `review_and_close_chapter`, with
+two REVISE attempts (`validation_failed`, `succeeded`); a reviser malformed on
+every ask costs exactly `MALFORMED_ANSWER_ASKS` calls and leaves REVISE blocked.
+
+**Done (2026-09-28):** `_parse_contract_json` raises `MalformedAnswer` (a
+`BookForgeError`, same messages). The reviser is asked up to
+`MALFORMED_ANSWER_ASKS = 2` times, each on its own claim, the second carrying a
+`repair` note with the parse error as the writer's does; an answer that parses
+and fails `_validate_revision` is not re-asked. The verifier takes the same
+bound, and after it releases both claims as M53 specifies rather than blocking.
+Tests: `tests/test_review.py` `AMalformedAnswerIsAskedAgainBeforeBlockingTests`.
+
+### M55 — Reopen a promoted book design and add chapters without a rebuild — pending, awaiting approval
+
+**Why:** `apply_book_design` only runs on a pending design task, and the universe
+cannot be redesigned once a book exists (~6349). Extending a book, or adding canon
+the universe needs, therefore means regenerating the whole engine state and
+redrafting every promoted chapter, although most of those chapters' contracts
+would not change.
+
+- [ ] A `design --reopen` path (or equivalent) that versions the book design,
+  keeps every promoted chapter whose contract is unchanged, and marks changed
+  and new chapters pending.
+- [ ] Universe canon additions that do not invalidate existing books: each
+  addition carries an `earliest_safe_book`, and books before it keep their
+  promoted state.
+
+**Tests/done (sketch):** Reopening a three-chapter book to add a fourth keeps the
+three manuscripts and their receipts and queues only CH-0004; changing CH-0002's
+contract queues CH-0002 and whatever its consequences reach, and nothing else;
+a universe block added with `earliest_safe_book` after BOOK-0001 leaves
+BOOK-0001's closed chapters closed.
 
 ### Observations from the Ground Truth pilot (2026-09-27)
 

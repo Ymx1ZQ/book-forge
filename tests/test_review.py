@@ -3,6 +3,7 @@ import importlib.util
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -803,3 +804,228 @@ class TheChapterReviewersInputDoesNotGrowTests(ReviewTests):
         reviews = self.project / f"books/{self.book}/reviews/CH-0001"
         self.assertTrue((reviews / "technical-editor.json").is_file())
         self.assertTrue((reviews / "technical-editor-contract.json").is_file())
+
+
+class Raw:
+    """A scripted answer given verbatim: malformed text, or nothing at all."""
+
+    def __init__(self, text, tokens=None):
+        self.text = text
+        self.tokens = tokens or {"input": 1000, "output": 200}
+
+
+SPENT = Raw("", {"input": 15000, "output": 0, "reasoning": 32000})
+# The shape ATT-0027 returned on the pilot: a key with a trailing space and a
+# single-quoted value, 22,955 characters into an otherwise well-formed revision.
+MALFORMED_REVISION = (
+    '{"prose_markdown":"# Chapter\\n\\nmemory","beat_map":[{"beat":"Find signal",'
+    '"evidence ":\'> LOOK\' through \'He left it sitting on the screen.\'"}]}'
+)
+
+
+class ScriptedProvider(RoleProvider):
+    """RoleProvider that can also return raw text, and raise in place of answering."""
+
+    def __call__(self, role, envelope, attempt_dir):
+        key = self._key(role, envelope)
+        with self.lock:
+            scripted = self.responses.get(key)
+            head = scripted[0] if scripted else None
+            if isinstance(head, BaseException):
+                scripted.pop(0)
+                self.calls.append(role)
+                raise head
+            if not isinstance(head, Raw):
+                pass
+            else:
+                scripted.pop(0)
+                self.calls.append(role)
+                number = len(self.calls)
+                variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "low"}
+                return {
+                    "text": head.text, "provider": "openrouter", "model": MODEL,
+                    "variant": variants[role], "session_id": f"ses-{number}",
+                    "tokens": head.tokens, "cost": 0.001, "latency_ms": 10, "finish": "stop",
+                }
+        return super().__call__(role, envelope, attempt_dir)
+
+
+class SettlementHelpers:
+    FINDING = {"id": "F-STATE-1", "dimension": "state", "severity": "blocking", "objective": True,
+               "evidence": "final paragraph", "issue": "Signal knowledge omitted", "fix_required": True}
+    CONSEQUENCE = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
+    DISPOSITION = {"finding": "T-0001", "action": "repaired", "evidence": "final paragraph", "loss": "none", "supersedes": []}
+
+    def plan(self):
+        return json.loads((self.project / ".book-forge" / "plan.json").read_text())
+
+    def task_state(self, task_id):
+        return next(row["state"] for row in self.plan()["tasks"] if row["id"] == task_id)
+
+    def attempts_of(self, task_id):
+        return [row["state"] for row in self.plan()["attempts"] if row["task"] == task_id]
+
+    def held(self):
+        return [(row["id"], row["task"], row["state"]) for row in self.plan()["attempts"]
+                if row["state"] in {"running", "promotion_pending"}]
+
+    def verifying_reviews(self, *verifier_answers):
+        """The canon half raises an objective blocker, so a verifier is asked."""
+        return {
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"findings": [self.FINDING], "consequences": [self.CONSEQUENCE]}, *verifier_answers],
+        }
+
+    def good_revision(self):
+        return self.reviser([self.CONSEQUENCE], [self.DISPOSITION])
+
+    def manuscript(self):
+        return self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md"
+
+
+class AVerificationThatFailsReleasesTheRevisionTests(SettlementHelpers, ReviewTests):
+    """ATT-0019 on the pilot: the verifier spent 33,499 reasoning tokens and wrote
+    nothing, `_parse_contract_json` raised outside any handler, VERIFY stayed
+    `running` and the reviser's attempt stayed `promotion_pending`. `claim_task`
+    refused REVISE from then on, and only a chapter reset reached it."""
+
+    def assert_settled_and_retryable(self):
+        self.assertEqual(self.held(), [], "no claim may outlive the call that raised")
+        self.assertNotIn(self.task_state(f"REVISE-{self.book}-CH-0001"), {"running", "promotion_pending"})
+        self.assertNotIn(self.task_state(f"VERIFY-{self.book}-CH-0001"), {"running", "promotion_pending"})
+        again = ScriptedProvider({
+            "reviser": [self.good_revision()],
+            "technical-editor": [{"verified": True, "findings": []}],
+        })
+        result = self.bf.run_next(self.project, book_id=self.book, provider=again)
+        self.assertEqual(result["state"], "closed", "run --next retries without a reset")
+        self.assertTrue(self.manuscript().is_file())
+
+    def test_an_empty_verifier_answer_is_asked_again_in_the_same_pass(self):
+        provider = ScriptedProvider({
+            **self.verifying_reviews(SPENT, {"verified": True, "findings": []}),
+            "reviser": [self.good_revision()],
+        })
+        result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(result["state"], "closed")
+        self.assertEqual(provider.calls.count("technical-editor"), 1 + 1 + 2, "canon, contract, and the verifier twice")
+
+    def test_a_verifier_empty_on_every_ask_leaves_revise_retryable(self):
+        asks = self.bf.REVIEW_CEILING_REASKS
+        provider = ScriptedProvider({
+            **self.verifying_reviews(*([SPENT] * asks)),
+            "reviser": [self.good_revision()],
+        })
+        with self.assertRaises(self.bf.ReasoningCeilingSpent):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(provider.calls.count("technical-editor"), 2 + asks, "bounded: the verifier costs a constant")
+        self.assertFalse(self.manuscript().exists())
+        self.assert_settled_and_retryable()
+
+    def test_a_verifier_that_raises_settles_both_claims(self):
+        provider = ScriptedProvider({
+            **self.verifying_reviews(self.bf.ProviderProducedNothing("technical-editor produced no result")),
+            "reviser": [self.good_revision()],
+        })
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assert_settled_and_retryable()
+
+    def test_a_rejected_verification_leaves_revise_retryable(self):
+        rejected = {"verified": False, "findings": [{"id": "V-1", "severity": "blocking", "issue": "still omitted"}]}
+        provider = ScriptedProvider({
+            **self.verifying_reviews(rejected),
+            "reviser": [self.good_revision()],
+        })
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertIn("verification failed", str(caught.exception))
+        self.assertIn("validation_failed", self.attempts_of(f"REVISE-{self.book}-CH-0001"))
+        self.assert_settled_and_retryable()
+
+
+class AKilledReviewBatchKeepsWhatWasPaidForTests(SettlementHelpers, ReviewTests):
+    """A `run --next` killed during the review batch lost the cold reader's and the
+    contract review's answers: nothing was promoted until every future returned."""
+
+    def test_a_review_that_returned_is_promoted_before_its_siblings_finish(self):
+        cold_path = self.project / f"books/{self.book}/reviews/CH-0001/cold-reader.json"
+        test = self
+
+        class KilledAfterTheColdReader(ScriptedProvider):
+            def __call__(self, role, envelope, attempt_dir):
+                if self._key(role, envelope) == "technical-editor":
+                    deadline = time.monotonic() + 10
+                    while not cold_path.is_file() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    raise SystemExit("killed by the wrapper's timeout")
+                return super().__call__(role, envelope, attempt_dir)
+
+        provider = KilledAfterTheColdReader({"cold-reader": [{"findings": []}]})
+        with self.assertRaises(SystemExit):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        test.assertTrue(cold_path.is_file(), "the cold reader's paid answer is on disk")
+        test.assertEqual(test.task_state(f"REVIEW-COLD-{self.book}-CH-0001"), "succeeded")
+
+    def test_one_unusable_review_does_not_discard_the_others(self):
+        provider = ScriptedProvider({
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [Raw("I could not settle on an answer.")],
+        })
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(self.task_state(f"REVIEW-COLD-{self.book}-CH-0001"), "succeeded")
+        self.assertEqual(self.task_state(f"REVIEW-TECHC-{self.book}-CH-0001"), "succeeded")
+        self.assertIn(self.task_state(f"REVIEW-TECH-{self.book}-CH-0001"), {"pending", "failed"})
+        self.assertEqual(self.held(), [])
+
+
+class AMalformedAnswerIsAskedAgainBeforeBlockingTests(SettlementHelpers, ReviewTests):
+    """ATT-0027 on the pilot: the reviser's revision broke on a single-quoted value,
+    REVISE was blocked, and the chapter went on only after a manual
+    `resume --resolve-blocked`. The identical envelope answered on the next ask."""
+
+    def test_a_malformed_revision_is_asked_again_in_the_same_pass(self):
+        provider = ScriptedProvider({
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"findings": [], "consequences": []}],
+            "reviser": [Raw(MALFORMED_REVISION), self.reviser()],
+        })
+        result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(result["state"], "closed")
+        self.assertEqual(provider.calls.count("reviser"), 2)
+        self.assertEqual(self.attempts_of(f"REVISE-{self.book}-CH-0001"), ["validation_failed", "succeeded"])
+
+    def test_a_reviser_malformed_on_every_ask_is_bounded_and_blocks(self):
+        asks = self.bf.MALFORMED_ANSWER_ASKS
+        provider = ScriptedProvider({
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"findings": [], "consequences": []}],
+            "reviser": [Raw(MALFORMED_REVISION)] * asks,
+        })
+        with self.assertRaises(self.bf.BookForgeError) as caught:
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertIn("not contract JSON", str(caught.exception))
+        self.assertEqual(provider.calls.count("reviser"), asks)
+        self.assertEqual(self.task_state(f"REVISE-{self.book}-CH-0001"), "blocked")
+        self.assertEqual(self.held(), [])
+
+    def test_a_revision_that_parses_but_fails_validation_is_not_asked_again(self):
+        """Only the unreadable answer is variance; a wrong one is a finding."""
+        provider = ScriptedProvider({
+            "cold-reader": [{"findings": []}],
+            "technical-editor": [{"findings": [], "consequences": []}],
+            "reviser": [{**self.reviser(), "reader_state": ""}],
+        })
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(provider.calls.count("reviser"), 1)
+
+    def test_a_malformed_verifier_answer_is_asked_again(self):
+        provider = ScriptedProvider({
+            **self.verifying_reviews(Raw('{"verified": tru'), {"verified": True, "findings": []}),
+            "reviser": [self.good_revision()],
+        })
+        result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(result["state"], "closed")
+        self.assertEqual(provider.calls.count("technical-editor"), 2 + 2)

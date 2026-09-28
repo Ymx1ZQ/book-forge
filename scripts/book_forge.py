@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import html
 import hashlib
 import io
@@ -401,6 +401,16 @@ class ReasoningCeilingSpent(BookForgeError):
     for a provider that went quiet and wrong here, because the provider replied and
     billed. The remedy is to change the question — which is what the designer, the
     audit and `_audit_proposal` each concluded before this.
+    """
+
+
+class MalformedAnswer(BookForgeError):
+    """The model answered with text that is not the JSON object the contract asks for.
+
+    Variance, not a verdict: on the pilot the reviser's answer broke on one
+    single-quoted value 22,955 characters in (ATT-0027) and the identical envelope
+    answered cleanly on the next ask. Told apart from an answer that parses and is
+    wrong, which is a finding about the work and is not re-asked.
     """
 
 
@@ -7049,13 +7059,13 @@ def _parse_contract_json(text_value: str) -> dict[str, object]:
                 stripped = stripped.lstrip()[5:]
     start = stripped.find("{")
     if start < 0:
-        raise BookForgeError("Model output contains no JSON object")
+        raise MalformedAnswer("Model output contains no JSON object")
     try:
         value, _ = json.JSONDecoder(strict=False).raw_decode(stripped[start:])
     except json.JSONDecodeError as exc:
-        raise BookForgeError(f"Model output is not contract JSON: {exc}") from exc
+        raise MalformedAnswer(f"Model output is not contract JSON: {exc}") from exc
     if not isinstance(value, dict):
-        raise BookForgeError("Model output contract must be an object")
+        raise MalformedAnswer("Model output contract must be an object")
     return value
 
 
@@ -8989,30 +8999,6 @@ def _call_parallel_reviews(
         attempt_dir = Path(claim["capsule"]).parent
         _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
         jobs.append((key, role, task_id, envelope, claim, attempt_dir))
-    def ask(role, envelope, attempt_dir):
-        """One reviewer's answer, re-asked while it spends its ceiling and says nothing.
-
-        Bounded, and only for this failure: a malformed answer has its own remedy
-        upstream, and silence has the backoff. This is the third class — the model
-        answered, was charged, and left no room to write — and for this role it is
-        variance, so the same question asked again is a question that gets answered.
-        """
-        last = None
-        for attempt in range(1, REVIEW_CEILING_REASKS + 1):
-            result = runner(role, envelope, attempt_dir)
-            try:
-                _refuse_empty_answer(role, role, result)
-                return result
-            except ReasoningCeilingSpent as spent:
-                last = spent
-                if attempt < REVIEW_CEILING_REASKS:
-                    print(
-                        f"[{role}] spent its ceiling with nothing written; asking again "
-                        f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
-                        file=sys.stderr,
-                    )
-        raise last  # type: ignore[misc]
-
     # Held from the moment they are claimed, and dropped as each is promoted. The
     # calls themselves can raise — a reviewer that spends its ceiling on every
     # re-ask does — and a claim left behind by that becomes `outcome_unknown` and
@@ -9026,57 +9012,66 @@ def _call_parallel_reviews(
             except BookForgeError:
                 pass
 
-    try:
-        with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
-            futures = {
-                executor.submit(ask, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
-                for key, role, task_id, envelope, claim, attempt_dir in jobs
-            }
-            results = []
-            for future, metadata in futures.items():
-                results.append((*metadata, future.result()))
-    except BookForgeError as unanswered:
-        abandon(str(unanswered))
-        raise
     parsed: dict[str, dict[str, object]] = dict(materialized)
-    receipts = []
+    receipts_by_key: dict[str, dict[str, object]] = {}
+
+    def settle(key, role, task_id, envelope, claim, result) -> None:
+        """Validate and promote one review the moment it returns.
+
+        The batch used to promote nothing until all three futures had finished, so a
+        `run --next` killed by a wrapper's timeout during the review batch lost the
+        cold reader's and the contract review's answers although both had come back
+        and been paid for. Settled one at a time on this thread, a kill costs only
+        the calls still in flight.
+        """
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        _refuse_empty_answer(role, task_id, result)
+        value = _parse_contract_json(str(result["text"]))
+        usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
+        if set_aside:
+            print(
+                f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
+                f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
+                file=sys.stderr,
+            )
+        # The review is acted on through what survived, and what did not is
+        # carried beside it rather than dropped on the floor.
+        value["findings"] = usable
+        value["set_aside"] = set_aside
+        # Asked of the half that is given the material to answer it. The canon
+        # half reads blocks and reports what contradicts them; the consequences a
+        # chapter creates are read off the prose and the contract, which is the
+        # other half's question.
+        if key == "technical-contract" and not isinstance(value.get("consequences"), list):
+            raise BookForgeError("Technical review has no independent consequence extraction")
+        parsed[key] = value
+        receipts_by_key[key] = _materialize_review_result(root, task_id, claim, envelope, result, value)
+        unsettled.pop(task_id, None)
+
     # Every claim this pass holds, dropped as each one is promoted. Whatever is left
     # when the pass raises is settled before the exception leaves: an answer that
-    # came back and could not be used is a *failed* attempt, and the sibling role's
-    # claim — accepted and never looked at, because the loop raised before reaching
-    # it — is not an unknown outcome either. Left unsettled, both become
+    # came back and could not be used is a *failed* attempt, and a sibling's claim
+    # whose call raised is not an unknown outcome either. Left unsettled, both become
     # `outcome_unknown` and halt the run for a person, which is right only when the
-    # engine does not know what happened. Here it does.
-    try:
-        for key, role, task_id, envelope, claim, result in results:
-            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-            _refuse_empty_answer(role, task_id, result)
-            value = _parse_contract_json(str(result["text"]))
-            usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
-            if set_aside:
-                print(
-                    f"[{role}] {len(set_aside)} finding(s) set aside as unreadable, "
-                    f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
-                    file=sys.stderr,
-                )
-            # The review is acted on through what survived, and what did not is
-            # carried beside it rather than dropped on the floor.
-            value["findings"] = usable
-            value["set_aside"] = set_aside
-            # Asked of the half that is given the material to answer it. The canon
-            # half reads blocks and reports what contradicts them; the consequences a
-            # chapter creates are read off the prose and the contract, which is the
-            # other half's question.
-            if key == "technical-contract" and not isinstance(value.get("consequences"), list):
-                raise BookForgeError("Technical review has no independent consequence extraction")
-            parsed[key] = value
-            receipts.append(_materialize_review_result(root, task_id, claim, envelope, result, value))
-            unsettled.pop(task_id, None)
-    except BookForgeError as unusable:
+    # engine does not know what happened. Here it does. One unusable review does not
+    # discard the others: they are promoted as they return and reused on the retry.
+    failures: list[BookForgeError] = []
+    with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
+        futures = {
+            executor.submit(_ask_past_empty, runner, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
+            for key, role, task_id, envelope, claim, attempt_dir in jobs
+        }
+        for future in as_completed(futures):
+            try:
+                settle(*futures[future], future.result())
+            except BookForgeError as unusable:
+                failures.append(unusable)
+    if failures:
         # Nothing here may raise on the way out: the caller must see the failure
         # that actually happened, not one invented by the cleanup.
-        abandon(str(unusable))
-        raise
+        abandon(str(failures[0]))
+        raise failures[0]
+    receipts = [receipts_by_key[key] for key, *_ in REVIEW_CALLS if key in receipts_by_key]
     return (
         parsed["cold-reader"],
         _merge_technical_halves(parsed["technical-editor"], parsed["technical-contract"]),
@@ -9294,6 +9289,38 @@ STYLE_MAX_FINDINGS = 4
 # The stage above also retries, but each of its attempts costs a fresh call of
 # every unfinished role. Re-asking here costs one call.
 REVIEW_CEILING_REASKS = 3
+# How many times one claim of the reviser or the changed-span verifier is asked
+# before an answer that is not contract JSON blocks its task. Two: the pilot's
+# malformed revision (ATT-0027) answered on the second ask of the identical
+# envelope, and the reviser is the most expensive call of a chapter, so a model
+# that cannot write the contract twice in a row is left to recovery and a person.
+MALFORMED_ANSWER_ASKS = 2
+
+
+def _ask_past_empty(runner, role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
+    """One answer, re-asked while it spends its ceiling and says nothing.
+
+    Bounded, and only for this failure: a malformed answer has its own remedy in
+    the caller, and silence has the backoff. This is the third class — the model
+    answered, was charged, and left no room to write — and for the reviewers and
+    the verifier it is variance, so the same question asked again is a question
+    that gets answered.
+    """
+    last = None
+    for attempt in range(1, REVIEW_CEILING_REASKS + 1):
+        result = runner(role, envelope, attempt_dir)
+        try:
+            _refuse_empty_answer(role, role, result)
+            return result
+        except ReasoningCeilingSpent as spent:
+            last = spent
+            if attempt < REVIEW_CEILING_REASKS:
+                print(
+                    f"[{role}] spent its ceiling with nothing written; asking again "
+                    f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
+                    file=sys.stderr,
+                )
+    raise last  # type: ignore[misc]
 
 
 # What one disposition costs the reviser: the finding id, the action taken, the
@@ -9576,6 +9603,73 @@ def _validate_revision(
     return validated
 
 
+def _verify_revision(
+    root: Path,
+    verify_id: str,
+    envelope: dict[str, object],
+    runner,
+    *,
+    reviser_attempt: str,
+) -> dict[str, object]:
+    """Ask the changed-span verifier, and settle both claims whatever happens.
+
+    The revision it reads is staged under the reviser's attempt, which sits in
+    `promotion_pending` until this returns. On the pilot the verifier spent 33,499
+    reasoning tokens and wrote nothing (ATT-0019); the parse raised outside any
+    handler, VERIFY stayed `running`, the reviser's attempt stayed
+    `promotion_pending`, and `claim_task` refused REVISE from then on — only a
+    chapter reset reached it. Every way out of here now releases both: VERIFY to
+    `pending`, the revision to a failed attempt whose task `run --next` claims
+    again. An empty answer is re-asked on the same claim, as the reviewers' are;
+    an unreadable one on a fresh claim, up to MALFORMED_ANSWER_ASKS.
+    """
+    verify_claim: dict[str, object] | None = None
+
+    def release_both(reason: str) -> None:
+        # Nothing here may raise on the way out: the caller must see the failure
+        # that actually happened, not one invented by the cleanup.
+        plan = _load_plan(root)
+        states = {str(row["id"]): str(row["state"]) for row in plan["attempts"]}
+        if verify_claim is not None and states.get(str(verify_claim["attempt"])) in {"running", "promotion_pending"}:
+            _set_attempt_failure(root, str(verify_claim["attempt"]), block=False, reason=reason)
+        if states.get(reviser_attempt) in {"running", "promotion_pending"}:
+            _set_attempt_failure(root, reviser_attempt, block=False, reason=f"Revision not verified: {reason}")
+
+    try:
+        for ask_number in range(1, MALFORMED_ANSWER_ASKS + 1):
+            verify_claim = claim_task(root, verify_id, request_hash=str(envelope["hash"]))
+            verify_dir = Path(verify_claim["capsule"]).parent
+            _write_bytes_atomic(verify_dir / "envelope.json", envelope["bytes"])
+            result = _ask_past_empty(runner, "technical-editor", envelope, verify_dir)
+            mark_provider_accepted(root, verify_claim["attempt"], str(result["session_id"]))
+            try:
+                verification = _parse_contract_json(str(result["text"]))
+            except MalformedAnswer as exc:
+                if ask_number == MALFORMED_ANSWER_ASKS:
+                    raise
+                _set_attempt_failure(root, str(verify_claim["attempt"]), block=False, reason=str(exc))
+                verify_claim = None
+                print(
+                    f"[technical-editor] {verify_id}: the verification was not contract JSON ({exc}); asking again "
+                    f"{ask_number + 1}/{MALFORMED_ANSWER_ASKS}",
+                    file=sys.stderr,
+                )
+                continue
+            break
+        # Gate: only blocking findings fail promotion; warning/note are advisory.
+        blocking_findings = [f for f in (verification.get("findings") or []) if isinstance(f, dict) and f.get("severity") == "blocking"]
+        if verification.get("verified") is not True or blocking_findings:
+            raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
+        # Materialized on success too, for traceability.
+        return _materialize_review_result(root, verify_id, verify_claim, envelope, result, verification)
+    except BaseException as failure:
+        try:
+            release_both(str(failure) or type(failure).__name__)
+        except Exception:  # noqa: BLE001 - the original failure is the one to report
+            pass
+        raise
+
+
 def review_and_close_chapter(
     project: Path | str,
     book_id: str,
@@ -9613,26 +9707,48 @@ def review_and_close_chapter(
     except Exception:
         pass
     reviser_id = f"REVISE-{book_id}-{chapter_id}"
-    envelope = build_envelope(
-        root,
-        role="reviser",
-        task_capsule={"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]},
-        imports=list(contract.get("imports", [])),
-        state=_read_json(root / "books" / book_id / "state.yaml"),
-        tools=[],
-        max_output_tokens=_reviser_budget(contract, findings),
-    )
-    claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
-    attempt_dir = Path(claim["capsule"]).parent
-    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
-    result = runner("reviser", envelope, attempt_dir)
-    mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-    try:
-        value = _parse_contract_json(str(result["text"]))
-        validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
-    except BookForgeError as exc:
-        _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
-        raise
+    malformed = ""
+    for ask_number in range(1, MALFORMED_ANSWER_ASKS + 1):
+        capsule = {"book": book_id, "chapter": chapter_id, "contract": contract, "draft": draft, "findings": findings, "technical_consequences": technical["consequences"]}
+        if malformed:
+            capsule["repair"] = {"attempt": ask_number, "validation_error": malformed}
+        envelope = build_envelope(
+            root,
+            role="reviser",
+            task_capsule=capsule,
+            imports=list(contract.get("imports", [])),
+            state=_read_json(root / "books" / book_id / "state.yaml"),
+            tools=[],
+            max_output_tokens=_reviser_budget(contract, findings),
+        )
+        claim = claim_task(root, reviser_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+        result = runner("reviser", envelope, attempt_dir)
+        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+        try:
+            value = _parse_contract_json(str(result["text"]))
+        except MalformedAnswer as exc:
+            # Each ask on its own claim, so the unreadable answer keeps its attempt,
+            # its provider events and its cost, and the one that answers is the one
+            # promoted. Blocking stays the terminal state, after the bound.
+            last_ask = ask_number == MALFORMED_ANSWER_ASKS
+            _set_attempt_failure(root, claim["attempt"], block=last_ask, reason=str(exc))
+            if last_ask:
+                raise
+            malformed = str(exc)
+            print(
+                f"[reviser] {chapter_id}: the answer was not contract JSON ({exc}); asking again "
+                f"{ask_number + 1}/{MALFORMED_ANSWER_ASKS}",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
+        except BookForgeError as exc:
+            _set_attempt_failure(root, claim["attempt"], block=True, reason=str(exc))
+            raise
+        break
     state_path = root / "books" / book_id / "state.yaml"
     state = _read_json(state_path)
     if chapter_id in state.get("closed_chapters", []):
@@ -9690,20 +9806,7 @@ def review_and_close_chapter(
             tools=[],
             max_output_tokens=1500,
         )
-        verify_claim = claim_task(root, verify_id, request_hash=str(verification_envelope["hash"]))
-        verify_dir = Path(verify_claim["capsule"]).parent
-        verification_result = runner("technical-editor", verification_envelope, verify_dir)
-        mark_provider_accepted(root, verify_claim["attempt"], str(verification_result["session_id"]))
-        verification = _parse_contract_json(str(verification_result["text"]))
-        verification_findings = verification.get("findings") or []
-        # Gate: only blocking findings fail promotion; warning/note are advisory (verifier is stochastic/pignolo)
-        blocking_findings = [f for f in verification_findings if f.get("severity") == "blocking"]
-        if verification.get("verified") is not True or blocking_findings:
-            _set_attempt_failure(root, verify_claim["attempt"], block=True, reason="Independent semantic verification failed")
-            raise BookForgeError("Independent semantic verification failed; chapter remains unpromoted")
-        # Always materialize verification even on success (for traceability)
-        
-        receipts.append(_materialize_review_result(root, verify_id, verify_claim, verification_envelope, verification_result, verification))
+        receipts.append(_verify_revision(root, verify_id, verification_envelope, runner, reviser_attempt=str(claim["attempt"])))
         calls += 1
     promote_task(root, claim["attempt"], claim["fence"])
     machine_state = _read_json(root / ".book-forge" / "state.json")
