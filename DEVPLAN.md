@@ -5653,6 +5653,32 @@ sha256 `42f26a0c…`, OpenCode 1.18.32. Line numbers refer to that commit.
   future returns (~9030–9037). Owner: M53. Done when a kill keeps finished
   reviews.
 
+### M54 — Make translation refusals actionable for the translator
+
+**Why:** On the Ground Truth pilot (CH-0003 into Italian, engine sha256
+`42f26a0c…`) three translator asks returned the same text and the chapter was
+set aside twice, because the repair reason carried no location.
+
+- [ ] Name what differs in "numbers differ from source" (`_translation_validation`
+  ~10340–10344): the first source number missing or out of order, with its
+  sentence. The source wrote "Seven-F had taken the same cut"; the translator
+  wrote "Il Settore 7-F" on every ask (ATT-0124..0129) and, told only that
+  numbers differed, could not find it. The project added a glossary row to get
+  past it.
+- [ ] Quote the matching text in the forbidden-form repair reason as well as the
+  match (`_forbidden_form_problems` ~9989–10003), and document that locale
+  `checks.yaml` patterns run with `re.IGNORECASE`: the Italian rule
+  `\b(in|a|da|di)\s+(il|lo|…)\b` matched "Settore 7-A lo accolse" ("A lo"), a
+  correct sentence, and refused the chapter. The project narrowed its pattern.
+- [ ] After a pin change, refuse the stale `.opencode/agents` check (~7478)
+  before claiming: the translator recorded three `validation_failed` attempts
+  (ATT-0046..0048, not provider-accepted) that only told the operator to run
+  `runtime sync`.
+
+**Tests/done:** a refused number names the source number and sentence; a
+forbidden-form refusal quotes its context; a stale agent is refused with no
+attempt row.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
