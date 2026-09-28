@@ -5282,8 +5282,8 @@ sintetizzatore effettivo, cioè lo stesso modello che rilegge il proprio parere,
 ## Phase L — Ground Truth adoption: reader isolation, evidence and bounded production
 
 **Status (2026-09-28): partially implemented on branch `fix/phase-l-pilot-defects`.**
-M53 and M54 are done; M52 is in progress; M55 is pending approval; M44–M51 are
-planned and not implemented. The phase was first written (2026-09-27) as
+M52, M53 and M54 are done; M55 is pending approval; M44–M51 are planned and not
+implemented. The phase was first written (2026-09-27) as
 documentation for a Claude handoff, with no engine changes, deployment,
 migration or new prose. The source
 inspected was `c41a7e755949d7a2225e2c9b45e40b47dcbdcf74`. Existing pending work
@@ -5550,20 +5550,20 @@ book's bounded pilot (Noah, Lena, one explanation scene and a climax causal
 outline), with all-in receipts and an explicit author verdict before full rewrite.
 Do not promise a cost saving until measured on comparable output and quality.
 
-### M52 — Honor project chorus and synthesizer pins and write only configured agents
+### M52 — Honor project chorus and synthesizer pins and write only configured agents ✅
 
 **Why:** A project's `book-forge.yaml` must decide which models its runtime can
 call; today the engine adds models and ignores the synthesizer the project names.
 
-- [ ] Generate `opencode.json` and `.opencode/agents/` from the project's
+- [x] Generate `opencode.json` and `.opencode/agents/` from the project's
   configured models only: chorus, role pins, rewriter chain and style-review
   models the project declares or its rules name. Remove the unconditional grok
   appends in `_opencode_config` (~597–600) and `_write_agents` (~874–875), and
   the bake-off candidate agents written for every catalogue model (~942–958).
-- [ ] Resolve `chorus.synthesizer` from the project config in `_role_pin`
+- [x] Resolve `chorus.synthesizer` from the project config in `_role_pin`
   (~270–273), `_write_agents` (~927–934) and the synthesis dispatch
   (~6182–6194); keep `CHORUS_SYNTHESIZER` as the default only.
-- [ ] Make qwen3.8-flash runnable as a style reviewer on OpenCode 1.18.32, or
+- [x] Make qwen3.8-flash runnable as a style reviewer on OpenCode 1.18.32, or
   refuse it at `runtime sync` with the reason. The generated entry sets only
   `reasoning.effort` (~618–625); OpenRouter received `reasoning.max_tokens`
   as well. Cause not located in the engine; reproduce with
@@ -5573,6 +5573,24 @@ call; today the engine adds models and ignores the synthesizer the project names
 project naming a synthesizer gets it in the agent file, `status` and the
 dispatch receipt; the qwen case either receives a response or is refused before
 dispatch. Extend the runtime-sync tests; no new role.
+
+**Done (2026-09-28):** `_runtime_models` is the one list of what a project can
+call — chorus, role pins, rewriter chain, the style reviewers while the pass is
+on (declared or default) plus any reviewer a tag rule names, and the
+synthesizer — and `_opencode_config` and `_write_agents` write that list and
+nothing else; advisors and bake-off candidates follow it. The bake-offs extend
+the same list with the models they compare, instead of the chorus alone.
+`_chorus_synthesizer` resolves `chorus.synthesizer` (a full path or a short
+catalogue name; an unknown short name is refused) and feeds `_role_pin`, the
+agent file, `runtime sync`, `status` and the synthesis output
+(`chorus-synthesis.json` now records `synthesizer`). qwen3.8-flash: cause
+located in OpenCode, not the engine — models.dev lists `budget_tokens` for it,
+so OpenCode 1.18.32 builds its `high` variant as `reasoning: {max_tokens}` and
+merges the engine's `reasoning: {effort}` beside it. Reproduced on a fixture
+project (HTTP 400, no charge); the catalogue entry now declares
+`reasoning_control: budget`, the generated entry carries no effort, and the same
+agent answered (`OK`, 14 reasoning tokens, $0.00005). Tests:
+`tests/test_runtime_sync.py` `TheProjectDecidesWhichModelsItsRuntimeCanCallTests`.
 
 ### M53 — Release claims on failed verification and re-ask on empty output ✅
 
@@ -5686,7 +5704,8 @@ sha256 `42f26a0c…`, OpenCode 1.18.32. Line numbers refer to that commit.
 - The qwen3.8-flash style review (ATT-0007) failed with HTTP 400, "Only one of
   `reasoning.effort` and `reasoning.max_tokens` can be specified". The engine
   sets only `reasoning.effort` (~618–625) and no `max_tokens` anywhere; cause
-  not located in the engine. The chapter closed on the two remaining reviewers
+  not located in the engine (located 2026-09-28: OpenCode's own `high`
+  variant for this model; see M52). The chapter closed on the two remaining reviewers
   and the call was not retried. Owner: M52 (provider compatibility). Done when
   the reviewer answers or is refused before dispatch.
 - `status` reported 8 calls for CH-0001 against 8 receipts and flagged

@@ -8,15 +8,14 @@ from pathlib import Path
 
 
 def _project_catalogue(bf):
-    """What a generated project carries, which is not the default fleet alone.
+    """What a generated project carries: the models its own config names, no more.
 
-    `_opencode_config` and `_write_agents` both append the style review models and the
-    spicy rewriter to whatever chorus a project chose, so a runtime built from the
-    defaults holds those too. Deriving the expectation from CHORUS_DEFAULT_MODELS alone
-    was true only while grok sat in the fleet.
+    A default project names the default chorus, the default style reviewers, the
+    default synthesizer and the default role pins, and every one of them is in the
+    default fleet. grok is not: it used to be appended to every project (M52).
     """
     models = list(bf.CHORUS_DEFAULT_MODELS)
-    for extra in list(bf.STYLE_REVIEW_MODELS) + ["openrouter/x-ai/grok-4.6"]:
+    for extra in list(bf.STYLE_REVIEW_MODELS) + [bf.CHORUS_SYNTHESIZER]:
         if extra not in models:
             models.append(extra)
     return models
@@ -177,3 +176,112 @@ class ChorusCatalogTests(unittest.TestCase):
                 self.assertNotIn(model, self.bf.CHORUS_DEFAULT_MODELS)
                 self.assertIn(advisor, self.bf.ROLE_BUDGETS)
                 self.assertEqual(self.bf._expected_pin(advisor)[0], model.split("/", 1)[1])
+
+
+class TheProjectDecidesWhichModelsItsRuntimeCanCallTests(unittest.TestCase):
+    """M52. The Ground Truth pilot's `runtime sync` wrote grok-4.6 into opencode.json
+    and four grok agents although the project declared no grok model, and left
+    `chorus-synthesizer.md` on gemini-3.8-flash although the project named
+    deepseek-v4.1-flash as its synthesizer."""
+
+    GROK = "openrouter/x-ai/grok-4.6"
+    DEEPSEEK = "openrouter/deepseek/deepseek-v4.1-flash"
+    GLM = "openrouter/z-ai/glm-5.3-flash"
+    QWEN = "openrouter/qwen/qwen3.8-flash"
+    GEMINI = "openrouter/google/gemini-3.8-flash"
+
+    def setUp(self):
+        self.bf = load_module()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name) / "world"
+        self.bf.init_project(self.project, "World")
+
+    def configure(self, **chorus):
+        path = self.project / "book-forge.yaml"
+        config = json.loads(path.read_text())
+        config["chorus"] = {"enabled": True, "post_enabled": True, **chorus}
+        path.write_text(json.dumps(config))
+        return self.bf.sync_runtime(self.project)
+
+    def catalogue(self):
+        return set(json.loads((self.project / "opencode.json").read_text())["provider"]["openrouter"]["models"])
+
+    def agents(self):
+        return {path.stem: path.read_text() for path in (self.project / ".opencode" / "agents").glob("*.md")}
+
+    def test_the_pilot_config_writes_no_grok_file(self):
+        self.configure(
+            models=[self.DEEPSEEK, self.GLM, self.QWEN],
+            style_review={"default_models": [self.GLM, self.QWEN, self.GEMINI]},
+            synthesizer=self.DEEPSEEK,
+        )
+        self.assertNotIn("x-ai/grok-4.6", self.catalogue())
+        grok = [name for name, body in self.agents().items() if "grok" in name or "grok" in body]
+        self.assertEqual(grok, [])
+
+    def test_a_project_naming_grok_still_gets_it(self):
+        self.configure(models=[self.DEEPSEEK, self.GROK])
+        self.assertIn("x-ai/grok-4.6", self.catalogue())
+        self.assertIn(self.bf._chorus_advisor_name(self.GROK), self.agents())
+
+    def test_a_style_rule_naming_grok_is_a_declaration(self):
+        self.configure(models=[self.DEEPSEEK], style_review={"rules": [{"tags": ["spicy"], "reviewer": self.GROK}]})
+        self.assertIn("x-ai/grok-4.6", self.catalogue())
+        self.assertIn(self.bf._chorus_advisor_name(self.GROK), self.agents())
+
+    def test_candidate_agents_exist_only_for_configured_models(self):
+        self.configure(models=[self.DEEPSEEK], style_review={"enabled": False})
+        runtime = set(self.bf._runtime_models(json.loads((self.project / "book-forge.yaml").read_text())))
+        self.assertNotIn(self.GLM, runtime)
+        self.assertNotIn(self.QWEN, runtime)
+        agents = self.agents()
+        for model in (self.GLM, self.QWEN, self.GROK):
+            for namer in (self.bf._writer_candidate_name, self.bf._translator_candidate_name,
+                          self.bf._reviser_candidate_name, self.bf._chorus_advisor_name):
+                self.assertNotIn(namer(model), agents)
+        self.assertEqual({model.split("/", 1)[1] for model in runtime}, self.catalogue())
+
+    def test_style_review_models_are_written_while_style_review_is_on(self):
+        self.configure(models=[self.DEEPSEEK])
+        for model in self.bf.STYLE_REVIEW_MODELS:
+            self.assertIn(self.bf._chorus_advisor_name(model), self.agents())
+
+    def test_the_configured_synthesizer_is_written_reported_and_dispatched(self):
+        report = self.configure(models=[self.DEEPSEEK, self.GLM], synthesizer=self.DEEPSEEK)
+        synthesizer = self.agents()[self.bf.CHORUS_SYNTHESIZER_AGENT]
+        self.assertIn(f"model: {self.DEEPSEEK}\n", synthesizer)
+        self.assertEqual(report["chorus_synthesizer"], self.DEEPSEEK)
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        self.assertEqual(self.bf._role_pin(config, self.bf.CHORUS_SYNTHESIZER_AGENT)[0], self.DEEPSEEK)
+        seen = []
+
+        def runner(role, envelope, attempt_dir):
+            seen.append((role, envelope["payload"]["model"]))
+            return {"text": json.dumps({"patches": []}), "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
+                    "variant": "high", "session_id": "s", "tokens": {}, "cost": 0, "latency_ms": 1, "finish": "stop"}
+
+        chorus = self.project / ".book-forge" / "chorus" / "universe" / "RUN-1"
+        chorus.mkdir(parents=True)
+        (chorus / "advisor-a.json").write_text(json.dumps({"findings": [{"id": "F-1", "severity": "note", "issue": "x"}]}))
+        synthesis = self.bf.chorus_synthesize(self.project, provider=runner)
+        self.assertEqual(seen and seen[0][0], self.bf.CHORUS_SYNTHESIZER_AGENT)
+        self.assertIn(self.DEEPSEEK.split("/", 1)[1], seen[0][1])
+        self.assertEqual(synthesis["synthesizer"], self.DEEPSEEK)
+
+    def test_an_unset_synthesizer_is_the_default(self):
+        self.configure(models=[self.DEEPSEEK])
+        self.assertIn(f"model: {self.bf.CHORUS_SYNTHESIZER}\n", self.agents()[self.bf.CHORUS_SYNTHESIZER_AGENT])
+
+    def test_qwen_sends_opencode_s_reasoning_budget_and_no_effort(self):
+        """OpenCode 1.18.32 gives qwen3.8-flash a `high` variant of its own,
+        `reasoning: {max_tokens}`, because the model offers a budget and no effort.
+        An effort beside it made OpenRouter answer HTTP 400, "Only one of
+        reasoning.effort and reasoning.max_tokens can be specified"."""
+        self.configure(models=[self.DEEPSEEK, self.QWEN])
+        entry = json.loads((self.project / "opencode.json").read_text())["provider"]["openrouter"]["models"]["qwen/qwen3.8-flash"]
+        self.assertNotIn("reasoning", entry["options"])
+        self.assertEqual(entry["variants"], {"high": {}})
+        self.assertIn("variant: high", self.agents()[self.bf._chorus_advisor_name(self.QWEN)])
+        other = json.loads((self.project / "opencode.json").read_text())["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
+        self.assertEqual(other["options"]["reasoning"], {"effort": "high"})

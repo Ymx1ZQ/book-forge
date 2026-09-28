@@ -147,10 +147,20 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     # The only model of the catalog whose OpenRouter parameters omit reasoning_effort:
     # it reasons, but the effort is not steerable, so it declares the one operating
     # point it has rather than a ladder whose steps would all behave the same.
+    #
+    # `reasoning_control: budget` — its reasoning is steered by a token budget, and
+    # OpenCode supplies that budget itself: models.dev lists `budget_tokens` for it,
+    # so OpenCode 1.18.32 builds its `high` variant as `reasoning: {max_tokens}`. The
+    # generated entry used to add `reasoning: {effort}` beside it, OpenRouter
+    # received both, and every style review on this model died on HTTP 400, "Only
+    # one of reasoning.effort and reasoning.max_tokens can be specified" (Ground
+    # Truth pilot, ATT-0007/0022/0032). Reproduced and fixed on a fixture project
+    # 2026-09-28: without the effort the same agent answers.
     "openrouter/qwen/qwen3.8-flash": {
         "provider": {"order": ["alibaba"], "only": ["alibaba"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"high": "high"},
+        "reasoning_control": "budget",
         "limit": {"context": 1000000, "output": 131072},
     },
     # Kept when the whitelist was cut to five on 2026-09-19, for the `spicy` rewrite
@@ -257,6 +267,26 @@ def _role_overrides(config: dict[str, object] | None) -> dict[str, dict[str, obj
     return {str(name): value for name, value in roles.items() if isinstance(value, dict)}
 
 
+def _chorus_synthesizer(config: dict[str, object] | None) -> str:
+    """The model the project names under `chorus.synthesizer`, or the default.
+
+    `status` reported the configured synthesizer while the agent file and the
+    dispatch used the constant, so the pilot's deepseek-v4.1-flash synthesizer ran
+    on gemini-3.8-flash. A short catalogue name is accepted as the chorus is.
+    """
+    chorus = (config or {}).get("chorus")
+    named = chorus.get("synthesizer") if isinstance(chorus, dict) else None
+    if not isinstance(named, str) or not named.strip():
+        return CHORUS_SYNTHESIZER
+    named = named.strip()
+    if named.startswith("openrouter/") and named.count("/") >= 2:
+        return named
+    try:
+        return _resolve_catalogue_model(named)
+    except BookForgeError as exc:
+        raise BookForgeError(f"chorus.synthesizer names a model the catalogue does not configure: {named}") from exc
+
+
 def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     """The (model, variant) a role runs under, as a full `openrouter/...` path.
 
@@ -268,9 +298,10 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
     if role in CANDIDATE_MODELS:
         return CANDIDATE_MODELS[role][0], BAKEOFF_VARIANT
     if role == CHORUS_SYNTHESIZER_AGENT:
-        cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
+        synthesizer = _chorus_synthesizer(config)
+        cfg = CHORUS_MODEL_CONFIGS.get(synthesizer, {})
         variant = str(cfg.get("default_effort", "max")) if isinstance(cfg, dict) else "max"
-        return CHORUS_SYNTHESIZER, variant
+        return synthesizer, variant
     if role in CHORUS_ADVISOR_MODELS:
         return CHORUS_ADVISOR_MODELS[role], CHORUS_ADVISOR_SPECS[role][1]
     if role.startswith("advisor-"):
@@ -588,11 +619,15 @@ def _block_record(block: str) -> dict[str, str]:
 
 
 def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> dict[str, object]:
-    """Build opencode.json with primary model + chorus catalog + style review models (even if not in chorus.models)."""
-    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    """Build opencode.json from the models the project's config names, and no others.
+
+    `chorus_models` is that list (`_runtime_models`), or it is derived from `config`.
+    The style reviewers and grok used to be appended to every project, so the pilot's
+    runtime carried a grok-4.6 entry it had never declared.
+    """
+    models = list(chorus_models) if chorus_models is not None else _runtime_models(config or {})
     # A role pinned to a model outside the chorus would resolve against a catalogue
     # that never heard of it, and the agent would die on its first call.
-    models = list(models)
     for role_name in ROLE_SPECS:
         pinned = _role_pin(config, role_name)[0]
         if pinned not in models:
@@ -600,14 +635,6 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
     # Ensure primary MODEL is included even if caller filters.
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
-    # Always include style review models (used for chapter style, may not be in chorus.models, e.g., grok for spicy)
-    for sm in STYLE_REVIEW_MODELS:
-        if sm not in models:
-            models.append(sm)
-    # Also include grok for spicy rewrite if not already (used via per-tag rule)
-    spicy_grok = "openrouter/x-ai/grok-4.6"
-    if spicy_grok not in models:
-        models.append(spicy_grok)
     models_dict: dict[str, object] = {}
     for mid in models:
         cfg = CHORUS_MODEL_CONFIGS.get(mid)
@@ -627,11 +654,18 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
         # in the plan as a mystery for two days before the key was read out of the
         # provider bundled in the binary.
         options: dict[str, object] = {"reasoning": {"effort": cfg["default_effort"]}}
+        variant_options = {name: {"reasoning": {"effort": effort}} for name, effort in variants.items()}  # type: ignore[union-attr]
+        if cfg.get("reasoning_control") == "budget":
+            # OpenCode's own variant carries `reasoning.max_tokens` for this model;
+            # the effort beside it is refused by OpenRouter with HTTP 400. The
+            # variant names stay, so agents and receipts keep their pin.
+            options = {}
+            variant_options = {name: {} for name in variants}  # type: ignore[union-attr]
         if "provider" in cfg:
             options["provider"] = cfg["provider"]
         entry: dict[str, object] = {
             "options": options,
-            "variants": {name: {"reasoning": {"effort": effort}} for name, effort in variants.items()},  # type: ignore[union-attr]
+            "variants": variant_options,
         }
         if "limit" in cfg:
             entry["limit"] = cfg["limit"]  # type: ignore[index]
@@ -661,6 +695,13 @@ def _runtime_models(config: dict[str, object]) -> list[str]:
     declared = config.get("translation")
     chain = (declared or {}).get("rewriters") if isinstance(declared, dict) else None
     named = list(chain) if isinstance(chain, list) else []
+    # The style reviewers the project runs — declared, or the default set while the
+    # pass is on — and any reviewer a tag rule names (the `spicy` rule's grok).
+    # Nothing is added that the config does not name: M52.
+    if _style_review_enabled(config):
+        named.extend(_style_review_models(config))
+        named.extend(str(rule["reviewer"]) for rule in _style_review_rules(config) if rule.get("reviewer"))
+    named.append(_chorus_synthesizer(config))
     for role_name in ROLE_SPECS:
         try:
             named.append(_role_pin(config, role_name)[0])
@@ -875,15 +916,14 @@ def _parse_chorus_csv(csv: str | None) -> list[str] | None:
 
 
 def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> None:
-    # Ensure style review models have advisors even if not in chorus.models
-    if chorus_models is not None:
-        extended = list(chorus_models)
-        for sm in STYLE_REVIEW_MODELS:
-            if sm not in extended:
-                extended.append(sm)
-        if "openrouter/x-ai/grok-4.6" not in extended:
-            extended.append("openrouter/x-ai/grok-4.6")
-        chorus_models = extended
+    """Write one agent per role, and one advisor and one candidate per configured model.
+
+    `chorus_models` is the project's runtime list (`_runtime_models`), or it is
+    derived from `config`. The style reviewers and grok used to be appended here too,
+    so the pilot got four grok agents it never declared.
+    """
+    if chorus_models is None:
+        chorus_models = _runtime_models(config or {})
     agents = stage / ".opencode" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
     for name, (mode, _variant, steps) in ROLE_SPECS.items():
@@ -914,7 +954,7 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
     # Chorus advisors — one per model in the catalog, plus synthesizer.
-    models = chorus_models if chorus_models is not None else CHORUS_DEFAULT_MODELS
+    models = list(chorus_models)
     if MODEL not in models:
         models = [MODEL] + [m for m in models if m != MODEL]
     for mid in models:
@@ -934,14 +974,13 @@ def _write_agents(stage: Path, chorus_models: list[str] | None = None, config: d
         )
         _write_bytes_atomic(agents / f"{name}.md", body.encode("utf-8"))
     # Synthesizer
-    synth_cfg = CHORUS_MODEL_CONFIGS.get(CHORUS_SYNTHESIZER, {})
-    synth_variant = str(synth_cfg.get("default_effort", "max")) if isinstance(synth_cfg, dict) else "max"
+    synthesizer, synth_variant = _role_pin(config, CHORUS_SYNTHESIZER_AGENT)
     _write_bytes_atomic(
         agents / f"{CHORUS_SYNTHESIZER_AGENT}.md",
         (
             "---\n"
             f"description: Book Forge {CHORUS_SYNTHESIZER_AGENT} role.\n"
-            f"mode: all\nmodel: {CHORUS_SYNTHESIZER}\nvariant: {synth_variant}\nsteps: 8\n"
+            f"mode: all\nmodel: {synthesizer}\nvariant: {synth_variant}\nsteps: 8\n"
             'permission:\n  "*": deny\n'
             "---\n\n"
             "You are the Book Forge chorus synthesizer. Deduplicate and rank chorus findings. "
@@ -1207,7 +1246,7 @@ def sync_runtime(project: Path | str) -> dict[str, object]:
         "variants": VARIANT_EFFORTS,
         "roles": {name: dict(zip(("model", "variant"), _role_pin(config, name))) for name in ROLE_SPECS},
         "chorus_models": chorus_models,
-        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "chorus_synthesizer": _chorus_synthesizer(config),
         "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
@@ -1715,7 +1754,7 @@ def verify_runtime(project: Path | str) -> dict[str, object]:
         "session_resume": "--session" in help_text,
         "chorus_models": chorus_models,
         "chorus_enabled": _chorus_enabled(config),
-        "chorus_synthesizer": config.get("chorus", {}).get("synthesizer", CHORUS_SYNTHESIZER) if isinstance(config.get("chorus"), dict) else CHORUS_SYNTHESIZER,
+        "chorus_synthesizer": _chorus_synthesizer(config),
         "roles_without_an_agent": _agents_behind_the_engine(root),
     }
 
@@ -6183,7 +6222,8 @@ def chorus_synthesize(project: Path | str, book_id: str | None = None, chorus_mo
     rank = {"blocking": 0, "warning": 1, "note": 2}
     deduped = sorted(seen.values(), key=lambda r: (rank.get(str(r.get("severity")), 9), str(r.get("id"))))
     # Call synthesizer to rank/propose patches if provider available, else just dedup.
-    synthesis = {"schema": 1, "scope": scope_id, "run": latest, "findings": deduped, "patches": []}
+    synthesis = {"schema": 1, "scope": scope_id, "run": latest, "findings": deduped, "patches": [],
+                 "synthesizer": _chorus_synthesizer(_project_config(root))}
     if provider or True:
         runner = provider or run_opencode_role
         try:
@@ -7889,7 +7929,7 @@ def rewrite_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, lo
     if not resolved:
         raise BookForgeError("A bake-off needs at least one model")
     config = _project_config(root)
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
@@ -8097,7 +8137,7 @@ def translate_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, 
     if len(resolved) < 2:
         raise BookForgeError("A bake-off compares at least two models")
     config = _project_config(root)
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
@@ -8172,7 +8212,7 @@ def draft_bakeoff(
     # project's chorus has no agent and no catalogue entry, and would die at the probe
     # with a claim already taken. Regenerating the runtime over the union is the same
     # operation `runtime sync` performs, so the state stays reproducible from config.
-    catalogue = list(_chorus_models_from_config(config))
+    catalogue = _runtime_models(config)
     union = catalogue + [model for model in resolved if model not in catalogue]
     _write_json(root / "opencode.json", _opencode_config(union, config))
     _write_agents(root, union, config)
