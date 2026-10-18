@@ -70,7 +70,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 SCHEMA_VERSION = 1
 MODEL_ID = MODEL.split("/", 1)[1]
 VARIANT_EFFORTS = {"low": "low", "medium": "medium", "high": "high", "max": "max"}
@@ -111,7 +111,7 @@ STYLE_REVIEW_MODELS: list[str] = [
 # the model the `spicy` rewrite rule names, and `_opencode_config` appends it to every
 # project regardless. A project that wants it advising says so in chorus.models.
 CHORUS_DEFAULT_MODELS: list[str] = [
-    "openrouter/deepseek/deepseek-v4.1-flash",
+    "openrouter/deepseek/deepseek-v4.1-flash-1017",
     "openrouter/z-ai/glm-5.3-flash",
     "openrouter/qwen/qwen3.8-flash",
     "openrouter/google/gemini-3.8-flash",
@@ -133,7 +133,7 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     # replaced on 2026-09-19, so every role's envelope lost about 65k tokens that day.
     # The ladder keeps `medium` because designer, locale-reader and locale-reviser pin
     # it, and a step absent from `variants` has nothing to resolve against.
-    "openrouter/deepseek/deepseek-v4.1-flash": {
+    "openrouter/deepseek/deepseek-v4.1-flash-1017": {
         "provider": {"order": ["deepseek"], "only": ["deepseek"], "allow_fallbacks": False},
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},

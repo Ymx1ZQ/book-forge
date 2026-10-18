@@ -51,7 +51,7 @@ class ReleaseSurfaceTests(unittest.TestCase):
             for name in ("init.md", "design.md", "run.md", "translate.md", "export.md")
         )
         for required in (
-            "openrouter/deepseek/deepseek-v4.1-flash",
+            "openrouter/deepseek/deepseek-v4.1-flash-1017",
             "init",
             "design universe",
             "run",

@@ -1,7 +1,7 @@
 ---
 description: Orchestrates Book Forge workflows and loads the installed book-forge skill.
 mode: primary
-model: openrouter/deepseek/deepseek-v4.1-flash
+model: openrouter/deepseek/deepseek-v4.1-flash-1017
 variant: max
 steps: 30
 permission:

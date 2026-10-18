@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 GLM = "openrouter/z-ai/glm-5.3-flash"
 QWEN = "openrouter/qwen/qwen3.8-flash"
 
@@ -225,7 +225,7 @@ class TheSameChapterAskedOfSeveralModelsTests(WriterPinFixture):
             self.bf.draft_bakeoff(self.project, self.book, "CH-0001", [MODEL], provider=EnvelopePinnedProvider())
 
     def test_a_model_can_be_named_the_short_way(self):
-        index, _ = self.bakeoff(models=("deepseek-v4.1-flash", "glm-5.3-flash"))
+        index, _ = self.bakeoff(models=("deepseek-v4.1-flash-1017", "glm-5.3-flash"))
         self.assertEqual({row["model"] for row in index["candidates"]}, {MODEL, GLM})
 
     def test_a_candidate_gets_the_writer_prompt_and_the_writer_budget(self):

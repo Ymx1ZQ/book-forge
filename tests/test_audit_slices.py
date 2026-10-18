@@ -7,7 +7,7 @@ from pathlib import Path
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 PROMPTS = MODULE_PATH.parents[1] / "assets" / "prompts"
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 CHAPTER_COUNT = 40
 
 

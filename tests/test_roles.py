@@ -20,7 +20,7 @@ def _project_catalogue(bf):
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 
 
 def load_module():
@@ -45,7 +45,7 @@ class RoleTopologyTests(unittest.TestCase):
         # Neither the opening agent nor the catalogue is narrowed: the roles carry their own pins.
         self.assertNotIn("default_agent", config)
         self.assertNotIn("whitelist", config["provider"]["openrouter"])
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash-1017"]
         self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
         self.assertEqual(model["variants"], {
@@ -157,8 +157,8 @@ class ChorusPinResolutionTests(unittest.TestCase):
             self.bf._project_root_from(orphan)
 
     def test_expected_pin_matches_written_agents(self):
-        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4.1-flash", "medium"))
-        self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4.1-flash", "low"))
+        self.assertEqual(self.bf._expected_pin("designer"), ("deepseek/deepseek-v4.1-flash-1017", "medium"))
+        self.assertEqual(self.bf._expected_pin("writer"), ("deepseek/deepseek-v4.1-flash-1017", "low"))
         self.assertEqual(self.bf._expected_pin("advisor-qwen-qwen3-8-flash"), ("qwen/qwen3.8-flash", "high"))
         self.assertEqual(self.bf._expected_pin("advisor-grok-4-6"), ("x-ai/grok-4.6", "high"))
         pro_id = self.bf.CHORUS_SYNTHESIZER.split("/", 1)[1]

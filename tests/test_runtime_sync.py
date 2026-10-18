@@ -22,7 +22,7 @@ def _project_catalogue(bf):
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
+MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 
 
 def load_module():
@@ -43,7 +43,7 @@ class RuntimeSyncTests(unittest.TestCase):
     def _decay(self):
         """Reproduce a project generated before the effort ladder was corrected."""
         config = json.loads((self.project / "opencode.json").read_text())
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash-1017"]
         model["options"]["reasoning"]["effort"] = "medium"
         model["variants"] = {
             "low": {"reasoning": {"effort": "low"}},
@@ -69,7 +69,7 @@ class RuntimeSyncTests(unittest.TestCase):
 
         config = json.loads((self.project / "opencode.json").read_text())
         self.assertEqual(config, self.bf._opencode_config())
-        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
+        model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash-1017"]
         self.assertEqual(model["options"]["reasoning"]["effort"], "high")
         self.assertEqual(set(model["variants"]), {"low", "medium", "high", "max"})
         # Chorus catalog is restored as well (7 models by default).
@@ -218,10 +218,10 @@ class TheProjectDecidesWhichModelsItsRuntimeCanCallTests(unittest.TestCase):
     """M52. The Ground Truth pilot's `runtime sync` wrote grok-4.6 into opencode.json
     and four grok agents although the project declared no grok model, and left
     `chorus-synthesizer.md` on gemini-3.8-flash although the project named
-    deepseek-v4.1-flash as its synthesizer."""
+    deepseek-v4.1-flash-1017 as its synthesizer."""
 
     GROK = "openrouter/x-ai/grok-4.6"
-    DEEPSEEK = "openrouter/deepseek/deepseek-v4.1-flash"
+    DEEPSEEK = "openrouter/deepseek/deepseek-v4.1-flash-1017"
     GLM = "openrouter/z-ai/glm-5.3-flash"
     QWEN = "openrouter/qwen/qwen3.8-flash"
     GEMINI = "openrouter/google/gemini-3.8-flash"
@@ -294,7 +294,7 @@ class TheProjectDecidesWhichModelsItsRuntimeCanCallTests(unittest.TestCase):
 
         def runner(role, envelope, attempt_dir):
             seen.append((role, envelope["payload"]["model"]))
-            return {"text": json.dumps({"patches": []}), "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
+            return {"text": json.dumps({"patches": []}), "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash-1017",
                     "variant": "high", "session_id": "s", "tokens": {}, "cost": 0, "latency_ms": 1, "finish": "stop"}
 
         chorus = self.project / ".book-forge" / "chorus" / "universe" / "RUN-1"
@@ -319,5 +319,5 @@ class TheProjectDecidesWhichModelsItsRuntimeCanCallTests(unittest.TestCase):
         self.assertNotIn("reasoning", entry["options"])
         self.assertEqual(entry["variants"], {"high": {}})
         self.assertIn("variant: high", self.agents()[self.bf._chorus_advisor_name(self.QWEN)])
-        other = json.loads((self.project / "opencode.json").read_text())["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash"]
+        other = json.loads((self.project / "opencode.json").read_text())["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash-1017"]
         self.assertEqual(other["options"]["reasoning"], {"effort": "high"})

@@ -5796,6 +5796,42 @@ be reading them, and a pin change is a cost decision the operator confirms by
 running `runtime sync`. The refusal is `StaleRuntime`, a `ProviderLimitReached`,
 so no retry loop asks again.
 
+### M57 — Name DeepSeek V4.1 Flash 1017 as the primary model ✅
+
+**Why:** DeepSeek published a snapshot of V4.1 Flash on 2026-10-17. OpenRouter
+already serves `deepseek/deepseek-v4.1-flash` pinned to DeepSeek with that
+snapshot, at $0.15/M input and $0.60/M output, and the id is now named
+explicitly as `deepseek/deepseek-v4.1-flash-1017`.
+
+- [x] Move the tests to `openrouter/deepseek/deepseek-v4.1-flash-1017`, including
+  the derived advisor agent slug.
+- [x] `scripts/book_forge.py`: `MODEL`, `CHORUS_DEFAULT_MODELS` and the
+  `CHORUS_MODEL_CONFIGS` key take the new id; the `deepseek` endpoint pin, the
+  variants low/medium/high/max and the `limit` stay as they are.
+- [x] `assets/opencode/book-forge-orchestrator.md`: `model:` takes the new id.
+- [x] `SKILL.md` and `references/init.md`: name the new id.
+- [x] The three book projects on this disk (`landfall`, `margherita`,
+  `ground-truth-forge`): every `deepseek-v4.1-flash` and `deepseek-v4-flash-0731`
+  id in `book-forge.yaml` takes the new id, because that file is the source of
+  the chorus and rewriter pins and `runtime sync` rebuilds the runtime from it.
+  A chorus entry left on the old id would get no provider pin and run beside
+  the pinned primary as a second DeepSeek advisor. Then `runtime sync`, and a
+  commit and push in each project.
+- [x] Commit & push; `./install.sh --force`.
+
+**Tests/done:** `pytest -q` is green and no live reference to the old id remains
+outside the milestones that record the earlier migration and pilot.
+
+Done 2026-10-18. `pytest -q`: 971 passed, 404 subtests. The three projects
+answer `synced: true` with no role left without an agent, and their generated
+catalogue keeps the `deepseek` pin on the new id. `landfall` and `margherita`
+still named `deepseek-v4-flash-0731` in their top-level `model`, a field no code
+reads; it takes the new id as well. In `ground-truth-forge` the sync also
+removed the `grok-4.6` agents left from its 2026-09-27 initialization: its
+config names no grok model, and `_runtime_models` at the previous HEAD returns
+the same set apart from the DeepSeek id. Project commits: landfall `32f2d852`,
+margherita `2324e65`, ground-truth-forge `20c6a78`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
