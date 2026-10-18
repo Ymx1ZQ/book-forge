@@ -4378,6 +4378,8 @@ The batch variant is the same model at half price, and this role already takes s
 
 **What would make it available:** `opencode upgrade`. Not done here — another harness runs `opencode serve` on this machine and the binary is not this project's to replace.
 
+**Re-checked 2026-10-18: an upgrade does not make it available.** OpenCode 1.18.32 resolves `openrouter/google/gemini-3.8-flash` (the Ground Truth critic ran on it on 2026-09-28) but lists no `:batch` id, and `opencode run -m openrouter/google/gemini-3.8-flash:batch` fails with `UnknownError`. A direct call to OpenRouter's `/chat/completions` with `google/gemini-3.8-flash:batch` returns 404: "cannot be used with the chat/completions endpoint (adapter VertexGeminiBatchAdapter)". Batch variants are served only through OpenRouter's batch API (submitted jobs, results within a 24-hour window), which OpenCode does not call. Using one would need a dispatch path outside OpenCode for the critic, with its own submission, polling, recovery and receipts. Against a saving of about half the critic's cost (≈ $0.16 a chapter on Ground Truth, ≈ $5 over a 30-chapter book), the author decided on 2026-10-18 not to build that path.
+
 
 ## A draft is published in the book's order, not in the order it was translated ✅
 
