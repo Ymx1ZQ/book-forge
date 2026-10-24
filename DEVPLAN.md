@@ -5834,7 +5834,7 @@ config names no grok model, and `_runtime_models` at the previous HEAD returns
 the same set apart from the DeepSeek id. Project commits: landfall `32f2d852`,
 margherita `2324e65`, ground-truth-forge `20c6a78`.
 
-### M58 — Revise one passage of a promoted chapter from an author note — pending, awaiting approval
+### M58 — Revise one passage of a promoted chapter from an author note — done except the beat amendment, which waits for M55
 
 **Why:** An author note on a promoted chapter, such as "show the HDMI-to-VGA
 converter when he plugs in", can be applied today only by
@@ -5843,15 +5843,43 @@ translations and editions (`_reset_paths` ~13696), and a beat cannot change afte
 design except through `reset --scope design`, which wipes every chapter of the book.
 A one-sentence fix costs a new chapter, and the author may prefer the promoted text.
 
-- [ ] `revise --book <id> --chapter <ch> --note <text> [--anchor <quote>]`: the
+- [x] `revise --book <id> --chapter <ch> --note <text> [--anchor <quote>]`: the
   reviser rewrites only the passages the note touches; the technical editor checks
   that the note is met and that nothing outside those passages changed; promotion
   with a receipt, as for an ordinary revision.
 - [ ] When the note changes what a beat shows, the chapter contract's beat is
   amended in the same transaction and versioned, as in M55's reopen.
-- [ ] Translations of that chapter: only paragraphs whose source changed are
+- [x] Translations of that chapter: only paragraphs whose source changed are
   re-translated and re-checked; the others are kept; paragraph counts stay equal.
-- [ ] The note is stored as an M45 feedback record (accepted, scope: that chapter).
+- [x] The note is stored as an M45 feedback record (accepted, scope: that chapter).
+  Done 2026-10-24 as `books/<book>/feedback/<ch>.json`, each note with its
+  status and the paragraphs it changed; M45 will define how it is read back.
+  Translations: `passage-translator` re-translates the changed paragraphs with
+  their neighbours as context; `passage-translation-check` (translation critic)
+  checks each against the new source and one it finds wrong is asked once more
+  with the note. The locale state and the registry's dependency hash then name
+  the revised source, so the chapter is current. Tests: `tests/test_passages.py`,
+  on one promoted chapter; other chapters are not written by construction.
+
+**Design (2026-10-24, approved with "procedere su tutto"):**
+- A paragraph is a block between blank lines, the unit the translation already
+  pairs by position. The heading is paragraph 1 and does not change.
+- `revise_passages` takes notes `{id, note, anchor?, paragraphs?}`. An anchor or
+  a paragraph list fixes which paragraphs may change; a note with neither lets
+  the reviser name them.
+- The reviser (`reviser` role, `passage-reviser` prompt) returns replacements
+  by paragraph number, one paragraph each. The engine splices them in, so every
+  other paragraph is byte-identical by construction rather than by checking.
+- The technical editor (`passage-check` prompt) rules each changed paragraph:
+  the note is met, no fact, beat, POV or tense moved. A paragraph it rejects
+  reverts. Its ask steps down on a spent ceiling (M59).
+- Promotion through the `REVISE-PASSAGE-<book>-<chapter>` task, with a record
+  of notes, before/after paragraphs and verdicts beside the chapter.
+- Each translation of the chapter re-translates only the changed paragraphs,
+  with the neighbouring paragraphs as context, and is promoted as current
+  against the new source. Paragraph counts stay equal.
+- The beat amendment waits for M55's versioned contract; until then a note that
+  would change a beat is declined by the verifier and recorded as such.
 
 **Tests/done:** On a fixture with three promoted chapters, a note on CH-0001 changes
 only the anchored paragraphs of CH-0001 and of its translation; CH-0002 and CH-0003
@@ -6008,6 +6036,33 @@ book-forge from Codex ran that engine. The projects run through OpenCode, and
 
 **Tests/done:** the directory is gone; `~/.config/opencode/skills/book-forge`
 is untouched and carries M61.
+
+### M63 — Humanize a promoted chapter: find the shapes of generated prose and revise only those passages 🔄
+
+**Why:** M61 keeps new chapters from carrying the shapes of generated prose.
+Chapters already promoted keep theirs, and the only way to change them was a
+full redraft. The user asked on 2026-10-24 for the pass to run on Ground
+Truth's three chapters, in English and Italian.
+
+- [x] `humanize --book <id> [--chapter <ch>]`: a reader that did not write the
+  chapter (`cold-reader` role, `humanize-reader` prompt) reads it with the
+  scanner's hits and the fiction catalogue from the M61 research: negated
+  contrast and negated rows; a closer that explains what the scene showed;
+  aphorisms and sentences built for effect; rotating epithets for one
+  character; an object doing what a person did, hiding who acted; forced
+  triads; stacked hedges; a paragraph that restates the one before. Guard
+  rails from the sources: dialogue in a character's voice is exempt, a single
+  weak signal is not a finding, no forced variation, no new facts, and a
+  chapter with nothing justified returns no notes.
+- [x] Its notes, one per paragraph, go to M58's `revise_passages`; the report
+  lists each changed paragraph before and after. A note whose paragraph number
+  disagrees with its quote is placed by the quote.
+- [x] Tests: a scripted reader and reviser change only the flagged paragraphs;
+  a chapter with no notes is left byte-identical and costs one call.
+
+**Tests/done:** `pytest -q` green, install; Ground Truth CH-0001 to CH-0003
+humanized in English, their Italian re-translated where the source changed,
+the reading package rebuilt and uploaded to the book's Drive folder.
 
 ### Dependencies and exclusions
 

@@ -33,6 +33,7 @@ reference before acting:
 | `translate` | `references/translate.md` |
 | `chorus` | `references/chorus.md` |
 | `export` | `references/export.md` |
+| `revise`, `humanize` | `references/revise.md` |
 | `bakeoff` | `references/bakeoff.md` |
 
 For a multi-command request, finish and checkpoint one command before loading
@@ -85,6 +86,8 @@ book-forge reset --book <id> [--scope <prose|design>] --yes
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
 book-forge translate <add|next|run|status> <book> <locale>
 book-forge export <book> --lang <tag> --format <epub|pdf|all>
+book-forge revise --book <id> --chapter <ch> --note <text> [--anchor <words>]
+book-forge humanize --book <id> [--chapter <ch>]
 ```
 
 ## Operational invariants

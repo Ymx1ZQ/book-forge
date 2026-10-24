@@ -122,7 +122,7 @@ CHORUS_DEFAULT_MODELS: list[str] = [
 # prose, so the register is part of the envelope hash and a change to it makes
 # unwritten work stale rather than silently mixing two registers in one book.
 DEFAULT_STYLE_PRESET = "plain-concrete"
-STYLE_PROMPT_ROLES = frozenset({"writer", "reviser", "style-review"})
+STYLE_PROMPT_ROLES = frozenset({"writer", "reviser", "style-review", "passage-reviser"})
 
 
 # Per-model provider pin and reasoning ladder — taken from the global config.
@@ -14137,6 +14137,515 @@ def repair_plan_view(project: Path | str, *, restore_canonical: bool = False) ->
     return render_plan(root)
 
 
+# Passage revision of a promoted chapter (M58) and the humanize pass (M63).
+#
+# A paragraph is a block between blank lines, the unit the translation already
+# pairs by position. The model returns replacements by paragraph number and the
+# engine splices them in, so a paragraph nobody named is byte-identical by
+# construction, not by a check that could be wrong.
+
+PASSAGE_TOKENS_PER_PARAGRAPH = 450
+PASSAGE_MAX_PARAGRAPHS = 14
+HUMANIZE_MAX_NOTES = 12
+# The reader gets the whole chapter, numbered. The cold reader's own ceiling is
+# sized for a synopsis and one chapter's findings, and Ground Truth's first
+# chapter alone is about 5,000 tokens.
+HUMANIZE_INPUT_BUDGET = 14000
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Blocks between blank lines. Joining them with a blank line is the text again."""
+    return text.split("\n\n")
+
+
+def _replace_paragraph(old: str, new: str) -> str:
+    """`new` in the place of `old`, keeping the newlines that surrounded it."""
+    lead = old[: len(old) - len(old.lstrip("\n"))]
+    trail = old[len(old.rstrip("\n")):]
+    return lead + new.strip() + trail
+
+
+def _numbered(parts: list[str]) -> list[dict[str, object]]:
+    return [{"n": number, "text": part.strip()} for number, part in enumerate(parts, 1)]
+
+
+def _body_paragraphs(parts: list[str]) -> list[int]:
+    """Every paragraph that may change: not the heading, not an empty block."""
+    return [
+        number for number, part in enumerate(parts, 1)
+        if part.strip() and not (number == 1 and part.lstrip().startswith("#"))
+    ]
+
+
+def _ensure_open_task(root: Path, task_id: str, role: str, **kwargs) -> None:
+    plan = _load_plan(root)
+    if any(task["id"] == task_id for task in plan["tasks"]):
+        _reopen_task(root, task_id)
+    else:
+        add_task(root, task_id, role, **kwargs)
+
+
+def _resolve_passage_notes(
+    notes: list[dict[str, object]], parts: list[str]
+) -> tuple[list[dict[str, object]], list[int]]:
+    """Each note with the paragraphs it may change, and the union the reviser may touch.
+
+    An anchor is found by its words, whitespace aside; a note with neither an
+    anchor nor paragraphs leaves the reviser to name them, among all of the body.
+    """
+    body = _body_paragraphs(parts)
+    rows: list[dict[str, object]] = []
+    for index, note in enumerate(notes, 1):
+        text = str(note.get("note") or "").strip()
+        if not text:
+            raise BookForgeError(f"Note {index} is empty")
+        paragraphs = sorted({int(n) for n in (note.get("paragraphs") or [])})
+        anchor = str(note.get("anchor") or "").strip()
+        if anchor and not paragraphs:
+            needle = " ".join(anchor.split())
+            paragraphs = [n for n in body if needle in " ".join(parts[n - 1].split())]
+            if not paragraphs:
+                raise BookForgeError(f"The anchor is not in the chapter: {anchor[:80]}")
+        outside = [n for n in paragraphs if n not in body]
+        if outside:
+            raise BookForgeError(f"Note {index} names paragraphs that cannot change: {outside}")
+        rows.append({"id": str(note.get("id") or f"N-{index}"), "note": text, "anchor": anchor, "paragraphs": paragraphs})
+    if not rows:
+        raise BookForgeError("A passage revision needs at least one note")
+    if all(row["paragraphs"] for row in rows):
+        allowed = sorted({n for row in rows for n in row["paragraphs"]})
+    else:
+        allowed = body
+    return rows, allowed
+
+
+def _passage_changes(
+    answer: dict[str, object], parts: list[str], allowed: list[int]
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """The replacements the engine will consider, and the ones it refused, with why."""
+    changes: list[dict[str, object]] = []
+    refused: list[dict[str, object]] = []
+    seen: set[int] = set()
+    for row in answer.get("paragraphs") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            number = int(row.get("n"))
+        except (TypeError, ValueError):
+            refused.append({"n": None, "why": "no paragraph number"})
+            continue
+        text = str(row.get("text") or "").strip()
+        if number not in allowed:
+            refused.append({"n": number, "why": "outside the paragraphs the notes allow"})
+            continue
+        if number in seen:
+            refused.append({"n": number, "why": "answered twice"})
+            continue
+        if not text or "\n\n" in text:
+            refused.append({"n": number, "why": "empty, or more than one paragraph"})
+            continue
+        before = parts[number - 1].strip()
+        if " ".join(text.split()) == " ".join(before.split()):
+            continue
+        seen.add(number)
+        changes.append({
+            "n": number,
+            "before": before,
+            "after": text,
+            "context_before": parts[number - 2].strip() if number >= 2 else "",
+            "context_after": parts[number].strip() if number < len(parts) else "",
+        })
+    return changes, refused
+
+
+def _check_passages(
+    root: Path, book_id: str, chapter_id: str, contract: dict[str, object],
+    rows: list[dict[str, object]], changes: list[dict[str, object]], runner,
+) -> dict[int, tuple[bool, str]]:
+    """A verdict per rewritten paragraph. A paragraph with no verdict is not kept."""
+    task_id = f"CHECK-PASSAGE-{book_id}-{chapter_id}"
+    _ensure_open_task(root, task_id, "technical-editor", priority=71, chapter_order=int(contract.get("order", 0)))
+    claim = None
+    try:
+        envelope = build_envelope(
+            root,
+            role="technical-editor",
+            prompt_role="passage-check",
+            task_capsule={
+                "book": book_id, "chapter": chapter_id, "contract": contract, "notes": rows,
+                "changes": [
+                    {key: change[key] for key in ("n", "before", "after", "context_before", "context_after")}
+                    for change in changes
+                ],
+            },
+            imports=[],
+            state={},
+            tools=[],
+            max_output_tokens=min(ROLE_BUDGETS["technical-editor"][1], 400 + 150 * len(changes)),
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = _ask_past_empty(runner, "technical-editor", envelope, attempt_dir, *_role_ladder(root, "technical-editor"))
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        value = _parse_contract_json(str(result["text"]))
+        _release_claim(root, claim["attempt"], note="passages ruled")
+    except BookForgeError as exc:
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc)[:200])
+            except BookForgeError:
+                pass
+        print(f"[technical-editor] {chapter_id}: the passages were not checked, none is kept: {str(exc)[:160]}", file=sys.stderr)
+        return {}
+    verdicts: dict[int, tuple[bool, str]] = {}
+    for row in value.get("verdicts") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            verdicts[int(row.get("n"))] = (row.get("ok") is True, str(row.get("why") or "")[:300])
+        except (TypeError, ValueError):
+            continue
+    return verdicts
+
+
+def _ask_for_paragraphs(
+    root: Path, task_id: str, role: str, prompt_role: str, capsule: dict[str, object],
+    max_output_tokens: int, runner, *, chapter_order: int,
+) -> dict[str, object]:
+    """One advisory call under its own task, answered as contract JSON or raised."""
+    _ensure_open_task(root, task_id, role, priority=84, chapter_order=chapter_order)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root, role=role, prompt_role=prompt_role, task_capsule=capsule,
+            imports=[], state={}, tools=[], max_output_tokens=max_output_tokens,
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = _ask_past_empty(runner, role, envelope, attempt_dir, *_role_ladder(root, role), asks=2, only_lower=True)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        value = _parse_contract_json(str(result["text"]))
+        _release_claim(root, claim["attempt"], note=f"{prompt_role} answered")
+        return value
+    except BookForgeError as exc:
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc)[:200])
+            except BookForgeError:
+                pass
+        raise
+
+
+def _paragraph_answers(value: dict[str, object], wanted: list[int]) -> dict[int, str]:
+    answers: dict[int, str] = {}
+    for row in value.get("paragraphs") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            number = int(row.get("n"))
+        except (TypeError, ValueError):
+            continue
+        text = str(row.get("text") or "").strip()
+        if number in wanted and text and "\n\n" not in text:
+            answers[number] = text
+    return answers
+
+
+def _retranslate_passages(
+    root: Path, book_id: str, locale: str, chapter_id: str, contract: dict[str, object],
+    source_text: str, changed: list[int], runner,
+) -> dict[str, object]:
+    """Translate again only the paragraphs whose source changed, and keep the rest.
+
+    The new paragraphs are checked against the new source by the translation
+    critic, and a paragraph it finds wrong is translated once more with its note.
+    The chapter is then promoted as current against the new source: the locale
+    state and the artifact registry both record the source hash it was made from.
+    """
+    locale_root = root / "books" / book_id / "translations" / locale
+    target_rel = f"books/{book_id}/translations/{locale}/chapters/{chapter_id}.md"
+    state_rel = f"books/{book_id}/translations/{locale}/state.yaml"
+    translated = (root / target_rel).read_text(encoding="utf-8")
+    source_parts, target_parts = _split_paragraphs(source_text), _split_paragraphs(translated)
+    if len(source_parts) != len(target_parts):
+        return {
+            "locale": locale, "state": "skipped",
+            "why": f"{len(target_parts)} paragraphs against {len(source_parts)} in the source; the pairing does not hold",
+        }
+    order = int(contract.get("order", 0))
+    neighbours = sorted({m for n in changed for m in (n - 1, n + 1)} - set(changed))
+    capsule = {
+        "book": book_id, "chapter": chapter_id,
+        "source_language": _read_json(root / "book-forge.yaml").get("source_language", "en"),
+        "target_locale": locale,
+        "locale_style": (locale_root / "style.md").read_text(encoding="utf-8") if (locale_root / "style.md").is_file() else "",
+        "glossary": (locale_root / "glossary.md").read_text(encoding="utf-8") if (locale_root / "glossary.md").is_file() else "",
+        "paragraphs": [
+            {"n": n, "source": source_parts[n - 1].strip(), "previous_translation": target_parts[n - 1].strip()}
+            for n in changed
+        ],
+        "context": [{"n": m, "translation": target_parts[m - 1].strip()} for m in neighbours if 1 <= m <= len(target_parts)],
+    }
+    budget = min(ROLE_BUDGETS["translator"][1], 600 + 500 * len(changed))
+    value = _ask_for_paragraphs(
+        root, f"PASSAGE-TRANSLATE-{book_id}-{chapter_id}-{locale}", "translator", "passage-translator",
+        capsule, budget, runner, chapter_order=order,
+    )
+    answers = _paragraph_answers(value, changed)
+    flagged: dict[int, str] = {}
+    if answers:
+        check = _ask_for_paragraphs(
+            root, f"PASSAGE-TRANSLATE-CHECK-{book_id}-{chapter_id}-{locale}", "translation-critic",
+            "passage-translation-check",
+            {
+                "book": book_id, "chapter": chapter_id, "target_locale": locale, "glossary": capsule["glossary"],
+                "pairs": [{"n": n, "source": source_parts[n - 1].strip(), "translation": text} for n, text in sorted(answers.items())],
+            },
+            min(ROLE_BUDGETS["translation-critic"][1], 400 + 120 * len(answers)), runner, chapter_order=order,
+        )
+        for row in check.get("wrong") or []:
+            try:
+                number = int(row.get("n"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if number in answers:
+                flagged[number] = str(row.get("what") or "")[:300]
+    if flagged:
+        repair = _ask_for_paragraphs(
+            root, f"PASSAGE-TRANSLATE-{book_id}-{chapter_id}-{locale}", "translator", "passage-translator",
+            {**capsule, "paragraphs": [row for row in capsule["paragraphs"] if row["n"] in flagged],
+             "repair": [{"n": n, "what": what} for n, what in sorted(flagged.items())]},
+            min(ROLE_BUDGETS["translator"][1], 600 + 500 * len(flagged)), runner, chapter_order=order,
+        )
+        answers.update(_paragraph_answers(repair, sorted(flagged)))
+    missing = [n for n in changed if n not in answers]
+    new_parts = list(target_parts)
+    for number, text in answers.items():
+        new_parts[number - 1] = _replace_paragraph(target_parts[number - 1], text)
+    state = _read_json(root / state_rel) if (root / state_rel).is_file() else {"schema": 1}
+    source_hash = _file_hash(root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md")
+    if not missing:
+        state.setdefault("input_hashes", {}).setdefault("source", {})[chapter_id] = source_hash
+    apply_id = f"PASSAGE-APPLY-{book_id}-{chapter_id}-{locale}"
+    _ensure_open_task(root, apply_id, "translator", priority=85, chapter_order=order)
+    _execute_materialized_task(root, apply_id, {target_rel: "\n\n".join(new_parts), state_rel: _json_bytes(state)})
+    if not missing:
+        _mark_translation_current(root, book_id, chapter_id, locale)
+    return {
+        "locale": locale,
+        "state": "partial" if missing else "retranslated",
+        "retranslated": sorted(answers),
+        "checked_wrong_then_repaired": sorted(flagged),
+        "not_retranslated": missing,
+    }
+
+
+def _mark_translation_current(root: Path, book_id: str, chapter_id: str, locale: str) -> None:
+    """Record that the translation was made from the source as it is now."""
+    registry = _artifact_registry(root)
+    artifacts = registry.get("artifacts") or {}
+    source_id = f"SOURCE-{book_id}-{chapter_id}"
+    translation_id = f"TRANSLATION-{book_id}-{chapter_id}-{locale}"
+    row = artifacts.get(translation_id)
+    if not isinstance(row, dict) or source_id not in artifacts:
+        return
+    row.setdefault("dependency_hashes", {})[source_id] = artifacts[source_id]["hash"]
+    _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+    reconcile_artifacts(root)
+    _write_derived_dependency_views(root)
+    paths = [
+        str(path.relative_to(root)) for path in (root / ".book-forge").glob("*.json")
+        if path.name in {"artifact-deps.json", "currentness.json", "revdeps.json"}
+    ]
+    _scoped_git_commit(root, paths, f"current-{chapter_id}-{locale}",
+                       message=f"book-forge: {locale} {chapter_id} current against its revised source")
+
+
+def revise_passages(
+    project: Path | str, book_id: str, chapter_id: str, notes: list[dict[str, object]],
+    provider=None, *, origin: str = "author",
+) -> dict[str, object]:
+    """Rewrite only the paragraphs the notes point at, in a promoted chapter (M58).
+
+    The reviser answers by paragraph number and the engine splices, so the rest
+    of the chapter is byte-identical. The technical editor rules each rewritten
+    paragraph and a paragraph it does not pass reverts. Each translation of the
+    chapter then translates again only the paragraphs whose source changed.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    source_rel = f"books/{book_id}/manuscript/chapters/{chapter_id}.md"
+    source_path = root / source_rel
+    if not source_path.is_file():
+        raise BookForgeError(f"{chapter_id} has no promoted prose to revise")
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    before_text = source_path.read_text(encoding="utf-8")
+    parts = _split_paragraphs(before_text)
+    rows, allowed = _resolve_passage_notes(notes, parts)
+    order = int(contract.get("order", 0))
+    task_id = f"REVISE-PASSAGE-{book_id}-{chapter_id}"
+    _ensure_open_task(root, task_id, "reviser", priority=70, chapter_order=order)
+    envelope = build_envelope(
+        root,
+        role="reviser",
+        prompt_role="passage-reviser",
+        task_capsule={
+            "book": book_id, "chapter": chapter_id, "contract": contract,
+            "paragraphs": _numbered(parts), "notes": rows, "allowed": allowed,
+        },
+        imports=[],
+        state={},
+        tools=[],
+        max_output_tokens=min(
+            ROLE_BUDGETS["reviser"][1],
+            800 + PASSAGE_TOKENS_PER_PARAGRAPH * min(len(allowed), PASSAGE_MAX_PARAGRAPHS),
+        ),
+    )
+    claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+    attempt_dir = Path(claim["capsule"]).parent
+    _write_bytes_atomic(attempt_dir / "envelope.json", envelope["bytes"])
+    try:
+        result = _ask_past_empty(runner, "reviser", envelope, attempt_dir, *_role_ladder(root, "reviser"), asks=2, only_lower=True)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        answer = _parse_contract_json(str(result["text"]))
+    except BookForgeError as exc:
+        _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc)[:200])
+        raise
+    changes, refused = _passage_changes(answer, parts, allowed)
+    verdicts = _check_passages(root, book_id, chapter_id, contract, rows, changes, runner) if changes else {}
+    for change in changes:
+        change["ok"], change["why"] = verdicts.get(int(change["n"]), (False, "no verdict"))
+    kept = [change for change in changes if change["ok"]]
+    new_parts = list(parts)
+    for change in kept:
+        new_parts[int(change["n"]) - 1] = _replace_paragraph(parts[int(change["n"]) - 1], str(change["after"]))
+    record_rel = f"books/{book_id}/reviews/{chapter_id}/passages.json"
+    record = _read_json(root / record_rel) if (root / record_rel).is_file() else {"schema": 1, "chapter": chapter_id, "revisions": []}
+    dispositions = [row for row in answer.get("dispositions") or [] if isinstance(row, dict)]
+    record["revisions"].append({
+        "origin": origin, "attempt": claim["attempt"], "notes": rows,
+        "changes": changes, "refused": refused, "dispositions": dispositions,
+    })
+    # The notes themselves, kept per chapter so that a later pass can read what
+    # the author asked and what became of it.
+    feedback_rel = f"books/{book_id}/feedback/{chapter_id}.json"
+    feedback = _read_json(root / feedback_rel) if (root / feedback_rel).is_file() else {"schema": 1, "chapter": chapter_id, "notes": []}
+    changed_numbers = {int(change["n"]) for change in kept}
+    for row in rows:
+        touched = sorted(changed_numbers & set(row["paragraphs"])) if row["paragraphs"] else sorted(changed_numbers)
+        feedback["notes"].append({
+            **row, "origin": origin, "scope": "chapter", "attempt": claim["attempt"],
+            "status": "applied" if touched else "not applied", "changed": touched,
+        })
+    receipt = _complete_model_task(
+        root, task_id, claim,
+        {source_rel: "\n\n".join(new_parts), record_rel: _json_bytes(record), feedback_rel: _json_bytes(feedback)},
+        result, envelope,
+    )
+    locales: list[dict[str, object]] = []
+    if kept:
+        after_text = source_path.read_text(encoding="utf-8")
+        for locale_root in sorted((root / "books" / book_id / "translations").glob("*")):
+            if (locale_root / "chapters" / f"{chapter_id}.md").is_file():
+                try:
+                    locales.append(_retranslate_passages(
+                        root, book_id, locale_root.name, chapter_id, contract, after_text, sorted(changed_numbers), runner,
+                    ))
+                except BookForgeError as exc:
+                    locales.append({"locale": locale_root.name, "state": "failed", "why": str(exc)[:300]})
+    return {
+        "state": "revised" if kept else "unchanged",
+        "book": book_id,
+        "chapter": chapter_id,
+        "changed": sorted(changed_numbers),
+        "reverted": [{"n": change["n"], "why": change["why"]} for change in changes if not change["ok"]],
+        "refused": refused,
+        "locales": locales,
+        "receipt": receipt["attempt"],
+    }
+
+
+def humanize_chapter(project: Path | str, book_id: str, chapter_id: str, provider=None) -> dict[str, object]:
+    """Find the shapes of generated prose in a promoted chapter and revise those passages (M63).
+
+    The reader is the cold reader, which did not write the chapter, given the
+    scanner's hits and the catalogue in its prompt. Its notes name one paragraph
+    each and go to `revise_passages`; a chapter with none is left as it is.
+    """
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    source_path = root / "books" / book_id / "manuscript" / "chapters" / f"{chapter_id}.md"
+    if not source_path.is_file():
+        raise BookForgeError(f"{chapter_id} has no promoted prose to humanize")
+    contract = _read_json(root / "books" / book_id / "chapters" / f"{chapter_id}.json")
+    text = source_path.read_text(encoding="utf-8")
+    parts = _split_paragraphs(text)
+    body = _body_paragraphs(parts)
+    capsule: dict[str, object] = {
+        "book": book_id, "chapter": chapter_id, "pov": contract.get("pov"), "title": contract.get("title"),
+        "paragraphs": _numbered(parts),
+        "answer_bound": f"Report at most {HUMANIZE_MAX_NOTES} notes, worst first.",
+    }
+    tells = prose_tells(text)["hits"]
+    if tells:
+        capsule["prose_tells"] = tells
+    task_id = f"HUMANIZE-READ-{book_id}-{chapter_id}"
+    _ensure_open_task(root, task_id, "cold-reader", priority=69, chapter_order=int(contract.get("order", 0)))
+    claim = None
+    try:
+        envelope = build_envelope(
+            root, role="cold-reader", prompt_role="humanize-reader", task_capsule=capsule,
+            imports=[], state={}, tools=[], max_output_tokens=ROLE_BUDGETS["cold-reader"][1],
+            input_budget=HUMANIZE_INPUT_BUDGET,
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = _ask_past_empty(runner, "cold-reader", envelope, attempt_dir, *_role_ladder(root, "cold-reader"), asks=2, only_lower=True)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        value = _parse_contract_json(str(result["text"]))
+        _release_claim(root, claim["attempt"], note="humanize read")
+    except BookForgeError as exc:
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc)[:200])
+            except BookForgeError:
+                pass
+        raise
+    notes: list[dict[str, object]] = []
+    by_paragraph: dict[int, dict[str, object]] = {}
+    for row in (value.get("notes") or [])[:HUMANIZE_MAX_NOTES]:
+        if not isinstance(row, dict):
+            continue
+        quote = str(row.get("quote") or "").strip()
+        try:
+            number = int(row.get("n"))
+        except (TypeError, ValueError):
+            number = 0
+        if quote and (number not in body or " ".join(quote.split()) not in " ".join(parts[number - 1].split())):
+            # The number is the model's and the quote is the text's: the quote wins.
+            found = [n for n in body if " ".join(quote.split()) in " ".join(parts[n - 1].split())]
+            number = found[0] if found else 0
+        if number not in body:
+            continue
+        line = f"Shape {row.get('shape', '?')}: {str(row.get('note') or '').strip()} (\"{quote}\")"
+        if number in by_paragraph:
+            by_paragraph[number]["note"] = f"{by_paragraph[number]['note']} {line}"
+            continue
+        by_paragraph[number] = {"id": f"H-{len(notes) + 1}", "note": line, "paragraphs": [number]}
+        notes.append(by_paragraph[number])
+    if not notes:
+        return {"state": "clean", "book": book_id, "chapter": chapter_id, "notes": 0, "changed": []}
+    report = revise_passages(root, book_id, chapter_id, notes, runner, origin="humanize")
+    return {**report, "notes": len(notes)}
+
+
+def humanize_book(project: Path | str, book_id: str, chapter_id: str | None = None, provider=None) -> dict[str, object]:
+    root = _project_root(project)
+    chapters_dir = root / "books" / book_id / "manuscript" / "chapters"
+    chapters = [chapter_id] if chapter_id else [path.stem for path in sorted(chapters_dir.glob("CH-*.md"))]
+    return {"book": book_id, "chapters": [humanize_chapter(root, book_id, chapter, provider) for chapter in chapters]}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="book-forge")
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -14152,6 +14661,14 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--locale", help="Required with --scope translation: the locale to redo")
     reset.add_argument("--chapter", help="Narrow prose or translation to one chapter, e.g. CH-0001")
     reset.add_argument("--yes", action="store_true", help="Required: reset removes written work")
+    revise = commands.add_parser("revise", help="Rewrite only the passages a note points at, in a promoted chapter")
+    revise.add_argument("--book", required=True)
+    revise.add_argument("--chapter", required=True)
+    revise.add_argument("--note", required=True)
+    revise.add_argument("--anchor", help="Words of the passage the note is about")
+    humanize = commands.add_parser("humanize", help="Revise the passages of promoted chapters that read as generated prose")
+    humanize.add_argument("--book", required=True)
+    humanize.add_argument("--chapter", help="One chapter, e.g. CH-0001; every promoted chapter when omitted")
     continuity = commands.add_parser("continuity")
     continuity_commands = continuity.add_subparsers(dest="continuity_command", required=True)
     continuity_add = continuity_commands.add_parser("add")
@@ -14278,6 +14795,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "reset":
             print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale, chapter=args.chapter), sort_keys=True))
+        elif args.command == "revise":
+            note = {"note": args.note, **({"anchor": args.anchor} if args.anchor else {})}
+            print(json.dumps(revise_passages(args.project, args.book, args.chapter, [note]), sort_keys=True))
+        elif args.command == "humanize":
+            print(json.dumps(humanize_book(args.project, args.book, args.chapter), sort_keys=True))
         elif args.command == "add-book":
             print(json.dumps(add_book(args.project, args.title, continuity=args.continuity, author=args.author), sort_keys=True))
         elif args.command == "relate":
