@@ -29,6 +29,13 @@ class ProseTellScannerTests(unittest.TestCase):
         self.assertEqual(hits[0]["paragraph"], 2)
         self.assertIn("It was an invitation", hits[0]["quote"])
 
+    def test_the_split_contrast_is_found_whatever_the_subject(self):
+        self.assertEqual(self.kinds("The water was not cold. It was the heat of the day before."), ["negated-contrast"])
+        self.assertEqual(self.kinds("The remembering was not his alone. It was the whole street."), ["negated-contrast"])
+
+    def test_a_negation_followed_by_an_unrelated_sentence_is_not_the_contrast(self):
+        self.assertEqual(self.kinds("The door was not locked. She went in."), [])
+
     def test_the_one_sentence_contrast_is_found_when_both_halves_match(self):
         self.assertEqual(self.kinds("He stayed, not for the money but for the silence after."), ["negated-contrast"])
         self.assertEqual(self.kinds("She came not because of him, but because of the boat."), ["negated-contrast"])

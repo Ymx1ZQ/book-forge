@@ -834,8 +834,10 @@ _NEGATED_CONTRAST = re.compile(
     r"\bnot\s+(?:just\s+|only\s+|merely\s+)?(?P<head>\w+)[^.!?;:,\"]{0,40},?\s+but\s+(?P<turn>\w+)[^.!?\"]{0,40}",
     re.IGNORECASE,
 )
+# The negated sentence may have any subject ("The water was not cold. It was the
+# heat of the day before"); the turn is carried by the "It was" that follows.
 _SPLIT_CONTRAST = re.compile(
-    r"\b(?:[Ii]t|[Tt]his|[Tt]hat)(?:\s+(?:was|is)\s+not|\s+wasn't|\s+isn't|'s\s+not)\b[^.!?\"]{1,80}[.!?]\s+"
+    r"\b[^.!?\"]{0,60}?(?:\s(?:was|is|were|are)\s+not|\s(?:wasn't|isn't|weren't|aren't)|'s\s+not)\b[^.!?\"]{1,80}[.!?]\s+"
     r"(?:It|This|That)(?:\s+(?:was|is)|'s)\b[^.!?\"]{0,60}"
 )
 _NEGATED_ROW = re.compile(

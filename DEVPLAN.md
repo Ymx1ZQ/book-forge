@@ -5977,6 +5977,11 @@ new uniformity; text with no justified finding is returned unchanged.
   a separate rewrite pass after revision; forced sentence-length variation;
   synonym substitution. English source prose only; a locale catalogue for
   translations is its own item.
+- [x] The split contrast takes any subject in its negated sentence. Found
+  2026-10-24 by reading the Italian editions against the source: "The water was
+  not cold. It was the heat of the day before" and "the remembering was not his
+  alone. It was the counter" were missed because the pattern required It, This
+  or That before the negation.
 
 **Tests/done:** scanner fixtures with each pattern in narration and in
 dialogue, and a chapter with none that yields no finding; the style reviewer
