@@ -824,6 +824,72 @@ def _style_block(config: dict[str, object]) -> str:
     return "## Prose style\n\n" + "\n".join(lines)
 
 
+# Sentence shapes that mark generated prose, found by pattern so that the style
+# reviewer judges located hits instead of searching a chapter for them. Only the
+# shapes measured in promoted chapters are here: the negated contrast and the row
+# of negated fragments (blader/humanizer, MIT, from Wikipedia:Signs of AI writing).
+# Marked vocabulary, short paragraphs and triads were measured too and left out:
+# no marked word appeared, and the other two matched ordinary narration.
+_NEGATED_CONTRAST = re.compile(
+    r"\bnot\s+(?:just\s+|only\s+|merely\s+)?(?P<head>\w+)[^.!?;:,\"]{0,40},?\s+but\s+(?P<turn>\w+)[^.!?\"]{0,40}",
+    re.IGNORECASE,
+)
+_SPLIT_CONTRAST = re.compile(
+    r"\b(?:[Ii]t|[Tt]his|[Tt]hat)(?:\s+(?:was|is)\s+not|\s+wasn't|\s+isn't|'s\s+not)\b[^.!?\"]{1,80}[.!?]\s+"
+    r"(?:It|This|That)(?:\s+(?:was|is)|'s)\b[^.!?\"]{0,60}"
+)
+_NEGATED_ROW = re.compile(
+    r"(?:(?<=^)|(?<=[.!?]\s))(?:No|Not|Nor)\b[^.!?\"]{1,40}[.!?]\s+(?:No|Not|Nor)\b[^.!?\"]{1,40}[.!?]"
+)
+# "not X but Y" is the contrast only when Y is built like X. "The coffee was not
+# food, but her feet had turned" is a conjunction opening a new clause.
+_CONTRAST_TURNS = frozenset(
+    "a an the for to in of with by from because at on about as what who how why when where".split()
+)
+
+
+def _narration_spans(paragraph: str) -> list[tuple[str, bool]]:
+    """A paragraph cut at its straight double quotes: (text, is_dialogue) pieces.
+
+    A line of dialogue is a character's voice, and the sources leave quoted speech
+    alone; the scanner counts it apart rather than as the narrator's habit.
+    """
+    pieces = paragraph.split('"')
+    return [(piece, index % 2 == 1) for index, piece in enumerate(pieces) if piece.strip()]
+
+
+def _shape_hits(text: str) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for match in _NEGATED_CONTRAST.finditer(text):
+        head, turn = match.group("head").lower(), match.group("turn").lower()
+        if turn == head or turn in _CONTRAST_TURNS:
+            found.append(("negated-contrast", match.group(0)))
+    found.extend(("negated-contrast", match.group(0)) for match in _SPLIT_CONTRAST.finditer(text))
+    found.extend(("negated-row", match.group(0)) for match in _NEGATED_ROW.finditer(text))
+    return found
+
+
+def prose_tells(markdown: str) -> dict[str, object]:
+    """Located sentence shapes of generated prose in one chapter's narration.
+
+    Deterministic and free: no model call. Each hit is a candidate for the style
+    reviewer, not a verdict. Dialogue matches are counted, not listed.
+    """
+    hits: list[dict[str, object]] = []
+    dialogue = 0
+    paragraphs = [block.strip() for block in markdown.split("\n\n") if block.strip()]
+    for number, paragraph in enumerate(paragraphs, 1):
+        if paragraph.startswith("#"):
+            continue
+        for text, spoken in _narration_spans(paragraph):
+            for kind, quote in _shape_hits(text):
+                if spoken:
+                    dialogue += 1
+                else:
+                    hits.append({"kind": kind, "paragraph": number, "quote": quote.strip()})
+    return {"hits": hits, "dialogue_hits": dialogue}
+
+
 def _style_review_rules(config: dict[str, object]) -> list[dict[str, object]]:
     chorus = config.get("chorus")
     if isinstance(chorus, dict):
@@ -9632,6 +9698,9 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
         # one that was overflowing the reviser downstream of it.
         "answer_bound": f"Report at most {STYLE_MAX_FINDINGS} findings, most severe first.",
     }
+    tells = prose_tells(draft)["hits"]
+    if tells:
+        capsule["prose_tells"] = tells
     findings = []
 
     def _normalize(f, slug):

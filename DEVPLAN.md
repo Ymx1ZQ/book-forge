@@ -5926,7 +5926,7 @@ design attempts before it ships.
 **Tests/done:** `grep -rnE '\bM[0-9]{1,3}\b'` over shipped `.md` outside the
 devplans finds nothing; `pytest -q` green; `./install.sh --force`.
 
-### M61 — Catch the sentence shapes of generated prose before and during review — pending, awaiting approval
+### M61 — Catch the sentence shapes of generated prose before and during review ✅
 
 **Why:** `writer.md` and `style-review.md` carry rules on desire, obstacle and
 dialogue, and no catalogue of the shapes that mark generated prose. The
@@ -5945,20 +5945,35 @@ Their own guard rails: one tell is a signal and a cluster is the finding;
 quoted speech is left alone; forced variation of rhythm or wording produces a
 new uniformity; text with no justified finding is returned unchanged.
 
-- [ ] Measure first. A deterministic scanner, with no model call, counts per
+- [x] Measure first. A deterministic scanner, with no model call, counts per
   promoted chapter of the existing projects: negative parallelism, negative
   listing, closing fragments, and the sources' marked vocabulary, in narration
   and in dialogue separately. A pattern with no hits in narration is not added.
-- [ ] `writer.md`: one rule naming the shapes the measurement found, so the
-  drafter avoids them under every style preset. Rotating epithets and triads
-  go here too, since a scanner cannot find them reliably.
-- [ ] `style-review.md`: one finding category for those shapes, raised when two
-  or more occur in one passage or one shape repeats across the chapter. A line
-  of dialogue in a character's voice is exempt. The suggestion may be a rewrite
-  and need not be shorter (with M50).
-- [ ] The scanner's hits go into the style reviewer's capsule as located
-  evidence, so the model judges hits instead of searching for them.
-- [ ] Not adopted: absolute bans on adverbs, passive voice and em dashes;
+  Measured 2026-10-24 on nine promoted chapters, three per project, about 20,700
+  words:
+
+  | Pattern | Hits in narration | Read as the tell |
+  |---|---|---|
+  | Negated contrast, one sentence or split | 6, one project | 5; the sixth was a `but` opening a new clause, now filtered |
+  | Row of negated fragments | 2, same project | 2 |
+  | Marked vocabulary (blader §12) | 0, not one word | not added |
+  | Paragraphs of five words or fewer | 28 in one chapter | none: a text-adventure transcript |
+  | Triads by pattern | 2 to 13 per chapter | none: sequences of actions |
+
+  All eight hits are in the project on the `erotic-romance` preset, whose
+  register has no rule against them; the project on `neutral` has none at all.
+- [x] `writer.md` rule 8 names the negated contrast and the row of negated
+  fragments, under every style preset. Rotating epithets and triads are not in
+  it: neither was found, and no pattern finds them reliably.
+- [x] `style-review.md`: one finding category for those shapes. A hit is reported
+  when the negated half names something nobody in the scene believed; three or
+  more are one finding; a line of dialogue is exempt. The replacement keeps the
+  positive half, so it is shorter and the shorter-replacement rule stands until
+  M50.
+- [x] `prose_tells` (`scripts/book_forge.py`) returns located hits, and
+  `_call_style_review` puts them in the capsule only when there are any, so the
+  model judges hits instead of searching for them.
+- [x] Not adopted: absolute bans on adverbs, passive voice and em dashes;
   a separate rewrite pass after revision; forced sentence-length variation;
   synonym substitution. English source prose only; a locale catalogue for
   translations is its own item.

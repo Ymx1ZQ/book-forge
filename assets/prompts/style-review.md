@@ -25,4 +25,6 @@ Read the dialogue separately, and against these five:
 
 Report each as its own finding, quoting the line. These are not sentence-level defects and no amount of trimming clauses will reach them.
 
+Read the narration for the negated contrast: "It was not X. It was Y.", "not X but Y", or a row of negated fragments ("Not X. Not Y."). The capsule may carry `prose_tells`, the sentences a pattern matched, each with its paragraph number; read each one in place, and look for the shape where the pattern missed it. Report it when the negated half names something nobody in the scene believed, so the sentence gains weight and no fact; the suggestion keeps the positive half. Let it go when a character holds the belief being corrected, or when both halves carry information. Three or more in one chapter are one finding that quotes them all. A line of dialogue is the character's voice and is not a finding.
+
 The capsule carries `answer_bound`, and it is a hard limit: report **at most that many findings**, most severe first. Everything you report has to be dispositioned one by one by the reviser downstream, in a single answer that also rewrites the chapter — a chapter arrived there with forty-five findings and the reviser missed three of the twenty-one it had to cover, three times running. Report the ones that matter most and let the rest go.
