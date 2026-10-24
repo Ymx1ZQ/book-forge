@@ -6,6 +6,7 @@ byte-identical, in the source and in every translation.
 
 ```text
 book-forge revise --book <id> --chapter <ch> --note "<what to change>" [--anchor "<words of the passage>"]
+book-forge revise --book <id> --chapter <ch> --notes <notes.json>   # [{"note": "...", "anchor": "..."}, ...]
 book-forge humanize --book <id> [--chapter <ch>]
 ```
 

@@ -14639,6 +14639,18 @@ def humanize_chapter(project: Path | str, book_id: str, chapter_id: str, provide
     return {**report, "notes": len(notes)}
 
 
+def _cli_notes(args) -> list[dict[str, object]]:
+    """The notes of `revise`: one from --note/--anchor, or a list from --notes."""
+    if args.notes:
+        notes = json.loads(Path(args.notes).read_text(encoding="utf-8"))
+        if not isinstance(notes, list) or not all(isinstance(row, dict) for row in notes):
+            raise BookForgeError("--notes must name a JSON list of {note, anchor} objects")
+        return notes
+    if not args.note:
+        raise BookForgeError("revise needs --note or --notes")
+    return [{"note": args.note, **({"anchor": args.anchor} if args.anchor else {})}]
+
+
 def humanize_book(project: Path | str, book_id: str, chapter_id: str | None = None, provider=None) -> dict[str, object]:
     root = _project_root(project)
     chapters_dir = root / "books" / book_id / "manuscript" / "chapters"
@@ -14664,8 +14676,9 @@ def build_parser() -> argparse.ArgumentParser:
     revise = commands.add_parser("revise", help="Rewrite only the passages a note points at, in a promoted chapter")
     revise.add_argument("--book", required=True)
     revise.add_argument("--chapter", required=True)
-    revise.add_argument("--note", required=True)
+    revise.add_argument("--note", help="What to change; or use --notes")
     revise.add_argument("--anchor", help="Words of the passage the note is about")
+    revise.add_argument("--notes", type=Path, help="JSON list of {note, anchor?} for several notes in one call")
     humanize = commands.add_parser("humanize", help="Revise the passages of promoted chapters that read as generated prose")
     humanize.add_argument("--book", required=True)
     humanize.add_argument("--chapter", help="One chapter, e.g. CH-0001; every promoted chapter when omitted")
@@ -14796,8 +14809,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "reset":
             print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale, chapter=args.chapter), sort_keys=True))
         elif args.command == "revise":
-            note = {"note": args.note, **({"anchor": args.anchor} if args.anchor else {})}
-            print(json.dumps(revise_passages(args.project, args.book, args.chapter, [note]), sort_keys=True))
+            print(json.dumps(revise_passages(args.project, args.book, args.chapter, _cli_notes(args)), sort_keys=True))
         elif args.command == "humanize":
             print(json.dumps(humanize_book(args.project, args.book, args.chapter), sort_keys=True))
         elif args.command == "add-book":

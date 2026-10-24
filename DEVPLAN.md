@@ -6059,6 +6059,16 @@ Truth's three chapters, in English and Italian.
   disagrees with its quote is placed by the quote.
 - [x] Tests: a scripted reader and reviser change only the flagged paragraphs;
   a chapter with no notes is left byte-identical and costs one call.
+- [x] A cut for effect keeps the facts. The first run on Ground Truth
+  (2026-10-25, 23 paragraphs) lost five: a passer-by who looked beside Noah
+  now looked at him, the father's game left the list of what Noah had, the
+  perfume left the hall, the reason for the local agent went, and "not him"
+  left the last line of CH-0003. The verifier passed them because each note
+  asked for a cut. The reader now says which words go and which stay; the
+  reviser rebuilds the facts into plain words; the verifier fails a change
+  that drops a fact the note did not name. A figure of speech that hides no
+  actor is not shape 5. `revise --notes <file>` takes several notes for one
+  chapter in one call, for repairs like these.
 
 **Tests/done:** `pytest -q` green, install; Ground Truth CH-0001 to CH-0003
 humanized in English, their Italian re-translated where the source changed,

@@ -181,6 +181,24 @@ class ReviseOnePassageTests(PassageFixture):
         self.assertEqual(feedback["notes"][0]["changed"], [3])
 
 
+class RevisePromptAndCliTests(PassageFixture):
+    def test_a_cut_for_effect_keeps_the_facts_in_every_prompt(self):
+        prompts = Path(__file__).parents[1] / "assets" / "prompts"
+        self.assertIn("never a fact it carries", (prompts / "humanize-reader.md").read_text())
+        self.assertIn("cuts the effect", (prompts / "passage-reviser.md").read_text())
+        self.assertIn("does not license dropping a fact", (prompts / "passage-check.md").read_text())
+
+    def test_the_cli_reads_several_notes_from_a_file(self):
+        path = Path(self.temp.name) / "notes.json"
+        path.write_text(json.dumps([{"note": "a", "anchor": "x"}, {"note": "b"}]))
+        args = self.bf.build_parser().parse_args(["revise", "--book", "B", "--chapter", "CH-0001", "--notes", str(path)])
+        self.assertEqual(self.bf._cli_notes(args), [{"note": "a", "anchor": "x"}, {"note": "b"}])
+
+    def test_the_cli_still_takes_one_note(self):
+        args = self.bf.build_parser().parse_args(["revise", "--book", "B", "--chapter", "CH-0001", "--note", "a", "--anchor", "x"])
+        self.assertEqual(self.bf._cli_notes(args), [{"note": "a", "anchor": "x"}])
+
+
 class HumanizeTests(PassageFixture):
     def test_the_readers_notes_revise_only_their_paragraphs(self):
         notes = [{"n": 3, "shape": 1, "quote": "It was not a warning. It was an invitation.", "note": "Say what it is."}]
