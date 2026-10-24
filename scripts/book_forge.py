@@ -8,6 +8,7 @@ import hashlib
 import io
 import contextlib
 import difflib
+import inspect
 import json
 import os
 import re
@@ -2188,7 +2189,8 @@ def record_execution(
         observed_model = str(telemetry.get("model"))
         if telemetry.get("provider") != "openrouter" or observed_model not in expected_models:
             raise BookForgeError("Provider receipt does not match the pinned OpenRouter model")
-        if telemetry.get("variant") != expected_variant:
+        if telemetry.get("variant") != expected_variant and telemetry.get("stepped_from") != expected_variant:
+            # A re-ask one rung lower (M59) carries the pin it stepped from.
             raise BookForgeError(f"Provider variant {telemetry.get('variant')} does not match {role} pin {expected_variant}")
         receipt.update(telemetry)
     receipt_path = _attempt_dir(root, attempt) / "execution-receipt.json"
@@ -7650,7 +7652,7 @@ def _wire_bytes(payload: object) -> bytes:
     return rendered.encode()
 
 
-def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
+def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path, variant: str | None = None) -> dict[str, object]:
     # Chorus advisors are allowed despite not being in ROLE_SPECS.
     if (
         role not in ROLE_SPECS
@@ -7747,6 +7749,11 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
             "--file",
             *[str(path) for path in wire_paths],
     ]
+    if variant:
+        # A re-ask one rung lower (M59). The agent file keeps its own effort; the
+        # flag goes after the role so that `--agent` keeps its value.
+        after_role = argv.index("--agent") + 2
+        argv[after_role:after_role] = ["--variant", variant]
     try:
         result = _run_opencode_process(
             argv, cwd=root, env=environment, timeout=OPENCODE_CALL_TIMEOUT, what=f"call for {role}"
@@ -7817,7 +7824,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
                 "text": "",
                 "provider": "openrouter",
                 "model": expected_model_id,
-                "variant": resolved["variant"],
+                "variant": variant or resolved["variant"],
                 "session_id": session_id,
                 "tokens": raw_finish.get("tokens", {}),
                 "cost": raw_finish.get("cost", 0),
@@ -7838,7 +7845,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path)
         "text": texts[-1],
         "provider": "openrouter",
         "model": expected_model_id,
-        "variant": resolved["variant"],
+        "variant": variant or resolved["variant"],
         "session_id": session_id,
         "tokens": tokens,
         "cost": cost,
@@ -9025,6 +9032,8 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
 
 def _provider_telemetry(result: dict[str, object], envelope: dict[str, object], call_number: int = 1) -> dict[str, object]:
     telemetry = {key: result[key] for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
+    if result.get("stepped_from"):
+        telemetry["stepped_from"] = result["stepped_from"]
     telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
     if "chunk_telemetry" in result:
         telemetry["chunk_telemetry"] = result["chunk_telemetry"]
@@ -9515,7 +9524,72 @@ REVIEW_CEILING_REASKS = 3
 MALFORMED_ANSWER_ASKS = 2
 
 
-def _ask_past_empty(runner, role: str, envelope: dict[str, object], attempt_dir: Path) -> dict[str, object]:
+# Every effort any catalogue model offers, lowest first. A model's own ladder is a
+# subset of it, and a step down is taken on that subset.
+EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+
+
+def _one_rung_lower(variant: str | None, ladder: list[str] | None = None) -> str | None:
+    """The effort one step below `variant` on the model's ladder, or None at its bottom."""
+    rungs = [step for step in EFFORT_ORDER if ladder is None or step in ladder]
+    if variant not in rungs or rungs.index(variant) == 0:
+        return None
+    return rungs[rungs.index(variant) - 1]
+
+
+def _role_ladder(root: Path, role: str) -> tuple[str | None, list[str] | None]:
+    """The effort a role's agent is pinned at, and the steps its model offers.
+
+    (None, None) when the engine cannot read the pin, which leaves every re-ask at
+    the agent's own effort, as before.
+    """
+    try:
+        model, variant = _role_pin(_project_config(root), role)
+    except Exception:
+        return None, None
+    ladder = (CHORUS_MODEL_CONFIGS.get(model) or {}).get("variants")
+    return variant, (list(ladder) if ladder else None)
+
+
+def _lower_effort(runner, current: str | None, ladder: list[str] | None) -> str | None:
+    """One rung below `current` when the runner can be asked at it, else None.
+
+    A runner that cannot take an effort would be asked the same question at the
+    same effort, which spends the same reasoning to the same empty answer.
+    """
+    if not _accepts_variant(runner):
+        return None
+    return _one_rung_lower(current, ladder)
+
+
+def _call_at(runner, role: str, envelope: dict[str, object], attempt_dir: Path,
+             variant: str | None, pinned: str | None) -> dict[str, object]:
+    """One call at `variant`: the pinned effort, unless an empty answer stepped it down.
+
+    The receipt carries the pin it stepped from, so the pin check accepts the
+    answer and a reader of the receipt can tell the step from a stale agent.
+    """
+    if variant and pinned and variant != pinned and _accepts_variant(runner):
+        result = runner(role, envelope, attempt_dir, variant=variant)
+        result["variant"] = variant
+        result["stepped_from"] = pinned
+        return result
+    return runner(role, envelope, attempt_dir)
+
+
+def _accepts_variant(runner) -> bool:
+    try:
+        params = inspect.signature(runner).parameters
+    except (TypeError, ValueError):
+        return False
+    return "variant" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _ask_past_empty(
+    runner, role: str, envelope: dict[str, object], attempt_dir: Path,
+    variant: str | None = None, ladder: list[str] | None = None, asks: int = REVIEW_CEILING_REASKS,
+    only_lower: bool = False,
+) -> dict[str, object]:
     """One answer, re-asked while it spends its ceiling and says nothing.
 
     Bounded, and only for this failure: a malformed answer has its own remedy in
@@ -9525,17 +9599,26 @@ def _ask_past_empty(runner, role: str, envelope: dict[str, object], attempt_dir:
     that gets answered.
     """
     last = None
-    for attempt in range(1, REVIEW_CEILING_REASKS + 1):
-        result = runner(role, envelope, attempt_dir)
+    current = variant
+    for attempt in range(1, asks + 1):
+        result = _call_at(runner, role, envelope, attempt_dir, current, variant)
         try:
             _refuse_empty_answer(role, role, result)
             return result
         except ReasoningCeilingSpent as spent:
             last = spent
-            if attempt < REVIEW_CEILING_REASKS:
+            if attempt < asks:
+                # The same ask at the same effort spends the same reasoning to the
+                # same ceiling (M59, DeepSeek V4.1 Flash 1017). One rung lower leaves
+                # room to write. With no rung left, a role that was never re-asked
+                # stops, and the verifier is asked again as it was (M53).
+                lower = _lower_effort(runner, current, ladder)
+                if lower is None and only_lower:
+                    break
+                current = lower or current
                 print(
                     f"[{role}] spent its ceiling with nothing written; asking again "
-                    f"{attempt + 1}/{REVIEW_CEILING_REASKS}",
+                    f"{attempt + 1}/{asks}" + (f" at {current}" if current != variant else ""),
                     file=sys.stderr,
                 )
     raise last  # type: ignore[misc]
@@ -9862,7 +9945,8 @@ def _verify_revision(
             verify_claim = claim_task(root, verify_id, request_hash=str(envelope["hash"]))
             verify_dir = Path(verify_claim["capsule"]).parent
             _write_bytes_atomic(verify_dir / "envelope.json", envelope["bytes"])
-            result = _ask_past_empty(runner, "technical-editor", envelope, verify_dir)
+            result = _ask_past_empty(runner, "technical-editor", envelope, verify_dir,
+                                     *_role_ladder(root, "technical-editor"))
             mark_provider_accepted(root, verify_claim["attempt"], str(result["session_id"]))
             try:
                 verification = _parse_contract_json(str(result["text"]))
@@ -11255,9 +11339,11 @@ def _read_one_slice(  # noqa: PLR0913 - one call over one run of paragraphs
         )
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
         attempt_dir = Path(claim["capsule"]).parent
-        result = runner("locale-reader", envelope, attempt_dir)
+        # One re-ask, one rung lower, on an answer that spent its ceiling and wrote
+        # nothing: three of four reads of Ground Truth CH-0001 ended that way (M59).
+        result = _ask_past_empty(runner, "locale-reader", envelope, attempt_dir,
+                                 *_role_ladder(root, "locale-reader"), asks=2, only_lower=True)
         mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-        _refuse_empty_answer("locale-reader", chapter_id, result)
         value = _parse_contract_json(str(result["text"]))
         findings = _locale_reader_findings(value, names_asked=bool(whole))
         if not value.get("followed", True) and whole:
@@ -11598,6 +11684,8 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
                  chapter_order=int(contract.get("order", 0)))
     else:
         _reopen_task(root, task_id)
+    pinned, ladder = _role_ladder(root, role)
+    effort = pinned
     for ask in range(1, LOCALE_SLICE_ASKS + 1):
         claim = None
         try:
@@ -11614,7 +11702,7 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
                 max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
             )
             claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-            result = runner(role, envelope, Path(claim["capsule"]).parent)
+            result = _call_at(runner, role, envelope, Path(claim["capsule"]).parent, effort, pinned)
             mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
             _refuse_empty_answer("locale-reviser", chapter_id, result)
             answer = _parse_contract_json(str(result["text"]))
@@ -11641,9 +11729,12 @@ def _revise_one_slice(  # noqa: PLR0913 - one rewrite over one run of paragraphs
                 except BookForgeError:
                     pass
             if ask < LOCALE_SLICE_ASKS:
+                if isinstance(unrevised, ReasoningCeilingSpent):
+                    effort = _lower_effort(runner, effort, ladder) or effort
                 print(
                     f"[locale-reviser] {chapter_id} paragraphs {first}-{last} unusable on ask "
-                    f"{ask}/{LOCALE_SLICE_ASKS}, asking again: {str(unrevised)[:120]}",
+                    f"{ask}/{LOCALE_SLICE_ASKS}, asking again"
+                    + (f" at {effort}" if effort != pinned else "") + f": {str(unrevised)[:120]}",
                     file=sys.stderr,
                 )
                 continue
@@ -12065,6 +12156,8 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
     # it the most likely to come back malformed, and it was the only role with no
     # second ask. Two of landfall's three chapters went unread for want of one.
     unreadable = ""
+    critic_pin, critic_ladder = _role_ladder(root, "translation-critic")
+    critic_effort = critic_pin
     for attempt_number in range(1, CRITIC_ATTEMPTS + 1):
         claim = None
         try:
@@ -12122,7 +12215,7 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
             )
             claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
             attempt_dir = Path(claim["capsule"]).parent
-            result = runner("translation-critic", envelope, attempt_dir)
+            result = _call_at(runner, "translation-critic", envelope, attempt_dir, critic_effort, critic_pin)
             mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
             _refuse_empty_answer("translation-critic", chapter_id, result)
             value = _parse_contract_json(str(result["text"]))
@@ -12203,6 +12296,17 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
             # the remaining asks are not spent. Two of every three calls on this
             # failure bought nothing before this line existed.
             spent = isinstance(exc, ReasoningCeilingSpent)
+            lower = _lower_effort(runner, critic_effort, critic_ladder) if spent else None
+            if lower and attempt_number < CRITIC_ATTEMPTS:
+                # One rung lower leaves the model room to write, which the same
+                # effort does not (M59); no wait, the provider answered.
+                critic_effort = lower
+                print(
+                    f"[translation-critic] {chapter_id} spent its ceiling with nothing written; "
+                    f"asking again at {lower}",
+                    file=sys.stderr,
+                )
+                continue
             if spent or attempt_number == CRITIC_ATTEMPTS:
                 print(
                     f"[translation-critic] {chapter_id} was not read, asked {attempt_number} time(s): {unreadable}",

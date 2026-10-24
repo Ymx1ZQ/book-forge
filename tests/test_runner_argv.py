@@ -34,7 +34,7 @@ class RunnerArgvTests(unittest.TestCase):
         self.attempt_dir.mkdir(parents=True)
         self.envelope = {"bytes": b'{"schema":1}\n', "hash": "abc", "estimated_input_tokens": 10}
 
-    def _argv(self, role="writer"):
+    def _argv(self, role="writer", **kwargs):
         captured = []
 
         def fake_run(args, **kwargs):
@@ -50,7 +50,7 @@ class RunnerArgvTests(unittest.TestCase):
         with mock.patch.object(self.bf, "_verify_opencode_cli", lambda binary: None), \
              mock.patch.object(self.bf, "_run_opencode_process", side_effect=fake_run):
             try:
-                self.bf.run_opencode_role(role, self.envelope, self.attempt_dir)
+                self.bf.run_opencode_role(role, self.envelope, self.attempt_dir, **kwargs)
             except Exception:
                 pass
         return next(args for args in captured if "run" in args)
@@ -72,6 +72,15 @@ class RunnerArgvTests(unittest.TestCase):
         prompt_at = argv.index(self.prompt)
         for flag in ("--dir", "--agent", "--format", "--title"):
             self.assertLess(argv.index(flag), prompt_at, flag)
+
+    def test_a_stepped_down_effort_follows_the_role_and_precedes_the_prompt(self):
+        argv = self._argv(variant="medium")
+        self.assertEqual(argv[argv.index("--agent") + 1], "writer", "--agent keeps its value")
+        self.assertEqual(argv[argv.index("--variant") + 1], "medium")
+        self.assertLess(argv.index("--variant"), argv.index(self.prompt))
+
+    def test_no_effort_is_passed_unless_one_was_asked_for(self):
+        self.assertNotIn("--variant", self._argv())
 
 
 if __name__ == "__main__":

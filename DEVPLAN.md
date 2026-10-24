@@ -5858,7 +5858,7 @@ only the anchored paragraphs of CH-0001 and of its translation; CH-0002 and CH-0
 manuscripts, receipts and translations are byte-identical; a note the verifier finds
 unmet leaves the chapter as it was. Depends on M55 for the versioned contract.
 
-### M59 — A call that spends its reasoning and writes nothing is asked again one step lower — pending, measurement not started
+### M59 — A call that spends its reasoning and writes nothing is asked again one step lower 🔄
 
 **Why:** Since M57 (DeepSeek V4.1 Flash 1017), the Italian read-back of Ground Truth
 CH-0001 on 2026-10-18 lost most of its asks to `ReasoningCeilingSpent`, which is
@@ -5883,20 +5883,25 @@ catalogue's `default_effort` (`high`), not at the `medium` that `ROLE_SPECS` giv
   61–72, 73–84). Rewriter at `high`, `medium` and `low`, and locale reader at
   `medium` and `low`, 5 asks per arm: empty answers, valid contract JSON,
   rewrites that land. Budget USD 2. Two arms at a time at most.
-- [ ] On `ReasoningCeilingSpent`, the re-ask steps one rung down the model's
-  `variants` ladder (high → medium → low) and records the step in the receipt.
-  The lowest rung keeps today's behaviour.
-  Mechanism (read 2026-10-24): the effort is not in the envelope. The agent file
-  fixes it, and `_opencode_runner` (~7662) passes only `--agent <role>`; the
-  provider accepts `--variant` per call (`OPENCODE_RUN_FLAGS`, ~1686), so the
-  re-ask in `_ask_past_empty` (~9450) passes `--variant <one rung lower>` and the
-  agent file stays as it is. The runner takes an optional `variant=None` keyword
-  so the fake runners in `tests/` keep their three positional arguments. The
-  translation critic (~12134) stops after one spent ceiling and is not re-asked.
+- [x] On `ReasoningCeilingSpent`, the re-ask steps one rung down the model's
+  `variants` ladder and records the step in the receipt. Done 2026-10-24:
+  `_role_ladder` reads a role's pin and its model's ladder; `_call_at` passes
+  `--variant` on the call, after the role, and stamps `stepped_from`; the pin
+  check on the receipt accepts a step that names its pin. Where it applies:
+  the technical-editor verifier (three asks, as M53, now stepping down);
+  the locale reader (one re-ask, only when a lower rung exists: it had none);
+  the locale reviser (its second ask steps down after a spent ceiling); the
+  translation critic (steps down instead of stopping, and stops when no rung
+  is left). A runner that cannot take an effort is never re-asked at the same
+  one on the roles that used to stop. The runner reports the effort it asked
+  at, not the agent's.
+  The first attempt on 2026-10-23 broke 82 review tests: an unchecked
+  replacement matched the telemetry line inside `draft_chapter` instead of
+  `_provider_telemetry` and inserted a dedented block into the drafting code.
 - [ ] The rewriter chain's agent takes the `locale-reviser` effort from
   `ROLE_SPECS` unless `translation.rewriters` names one, if the measurement
   supports it.
-- [ ] Tests: a fake runner that answers empty at `high` and with text at `medium`
+- [x] Tests: a fake runner that answers empty at `high` and with text at `medium`
   makes the passage land on the second ask at `medium`. An empty answer at `low`
   fails as today. The rewriter agent's `variant` follows the role.
 

@@ -957,6 +957,80 @@ class WhenTheCriticSpendsItsCeilingTests(TranslationReviewFixture):
         )
 
 
+
+class AnEmptyAnswerIsAskedAgainOneRungLowerTests(TranslationReviewFixture):
+    """M59: on DeepSeek V4.1 Flash 1017 the Italian read-back of Ground Truth CH-0001
+    lost most of its asks to reasoning spent to the ceiling with nothing written.
+    Asked again at the same effort the model spends the same and writes the same
+    nothing; one rung lower it has room to write."""
+
+    class Stepping(ScriptedProvider):
+        """Writes nothing for `role` at the agent's own effort, and answers below it."""
+
+        def __init__(self, role, **kw):
+            super().__init__([translation(GOOD_BODY)], **kw)
+            self.role = role
+            self.efforts = []
+
+        def __call__(self, role, envelope, attempt_dir, variant=None):
+            matches = role == self.role or (self.role == "locale-reviser" and role.startswith("reviser-"))
+            if matches and not ("changed" in envelope["payload"]["task"] and role == "translation-critic"):
+                self.efforts.append(variant)
+                if variant is None:
+                    payload = envelope["payload"]
+                    self.calls.append(role)
+                    return {
+                        "text": "", "provider": "openrouter", "model": payload["model"], "variant": payload["variant"],
+                        "session_id": f"ses-empty-{len(self.calls)}",
+                        "tokens": {"input": 15000, "output": 0, "reasoning": 39000},
+                        "cost": 0.1, "latency_ms": 50, "finish": "stop",
+                    }
+            return super().__call__(role, envelope, attempt_dir)
+
+    def lower(self, role):
+        pinned, ladder = self.bf._role_ladder(self.bf._project_root(self.project), role)
+        lower = self.bf._one_rung_lower(pinned, ladder)
+        if lower is None:
+            self.skipTest(f"{role} has no rung below {pinned} in this catalogue")
+        return pinned, lower
+
+    def run_back(self, role, **kw):
+        self.translate(ScriptedProvider([translation(GOOD_BODY)]))
+        provider = self.Stepping(role, critic={"findings": [], "verdict": "faithful"}, **kw)
+        self.bf.review_translation(self.project, self.book, "it", provider=provider)
+        return provider
+
+    def test_the_critic_reads_the_chapter_one_rung_lower(self):
+        _, lower = self.lower("translation-critic")
+        provider = self.run_back("translation-critic")
+        self.assertEqual(provider.efforts, [None, lower])
+        state = json.loads((self.locale_root / "reviews" / "CH-0001.state.json").read_text())
+        self.assertNotEqual(state["state"], "unread")
+
+    def test_the_critics_receipt_names_the_step(self):
+        pinned, lower = self.lower("translation-critic")
+        self.run_back("translation-critic")
+        receipts = [
+            json.loads(path.read_text())
+            for path in (self.project / ".book-forge" / "runs").glob("*/attempts/*/execution-receipt.json")
+        ]
+        stepped = [row for row in receipts if row.get("stepped_from")]
+        self.assertEqual(len(stepped), 1, receipts)
+        self.assertEqual((stepped[0]["variant"], stepped[0]["stepped_from"]), (lower, pinned))
+
+    def test_the_reviser_lands_the_passage_one_rung_lower(self):
+        _, lower = self.lower("locale-reviser")
+        reviser = {"revised_markdown": f"# La chiatta dell'alba\n\n{REVISED_BODY}", "changed": []}
+        provider = self.run_back("locale-reviser", reviser=reviser)
+        self.assertEqual(provider.efforts[:2], [None, lower])
+        record = json.loads((self.locale_root / "revisions" / "CH-0001.json").read_text())
+        self.assertEqual(record["unrevised"], [])
+
+    def test_the_reader_reads_the_passage_one_rung_lower(self):
+        _, lower = self.lower("locale-reader")
+        provider = self.run_back("locale-reader")
+        self.assertEqual(provider.efforts[:2], [None, lower])
+
 class TheAnswerBoundTests(TranslationReviewFixture):
     """Measured on CH-0003, the chapter this role failed most: twelve calls at
     `medium`, three arms of four. The question as asked answered 0 of 4 and
