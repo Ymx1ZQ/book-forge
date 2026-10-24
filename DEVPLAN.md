@@ -5926,6 +5926,48 @@ design attempts before it ships.
 **Tests/done:** `grep -rnE '\bM[0-9]{1,3}\b'` over shipped `.md` outside the
 devplans finds nothing; `pytest -q` green; `./install.sh --force`.
 
+### M61 — Catch the sentence shapes of generated prose before and during review — pending, awaiting approval
+
+**Why:** `writer.md` and `style-review.md` carry rules on desire, obstacle and
+dialogue, and no catalogue of the shapes that mark generated prose. The
+`plain-concrete` preset names four (aphorism, twist closer, inverted echo,
+fragment kept for rhythm), and a project on another preset gets none. Sources
+read 2026-10-24, all MIT: blader/humanizer (built on Wikipedia:Signs of AI
+writing), conorbronsdon/avoid-ai-writing, hardikpandya/stop-slop, and the
+fiction skill story-deslop in zenstory-ai/oh-story-claudecode. Most of their
+catalogue targets encyclopedic and marketing text. The part that applies to
+fiction: negative parallelism ("not X but Y", "It wasn't X. It wasn't Y. It was
+Z."), forced triads, one-line closers and dramatic fragments, a closer that
+explains what the scene just showed, rotating epithets for one character,
+inanimate subjects doing what a person did, a scene that restates its premise
+(two paragraphs could swap with no loss), and marked vocabulary in clusters.
+Their own guard rails: one tell is a signal and a cluster is the finding;
+quoted speech is left alone; forced variation of rhythm or wording produces a
+new uniformity; text with no justified finding is returned unchanged.
+
+- [ ] Measure first. A deterministic scanner, with no model call, counts per
+  promoted chapter of the existing projects: negative parallelism, negative
+  listing, closing fragments, and the sources' marked vocabulary, in narration
+  and in dialogue separately. A pattern with no hits in narration is not added.
+- [ ] `writer.md`: one rule naming the shapes the measurement found, so the
+  drafter avoids them under every style preset. Rotating epithets and triads
+  go here too, since a scanner cannot find them reliably.
+- [ ] `style-review.md`: one finding category for those shapes, raised when two
+  or more occur in one passage or one shape repeats across the chapter. A line
+  of dialogue in a character's voice is exempt. The suggestion may be a rewrite
+  and need not be shorter (with M50).
+- [ ] The scanner's hits go into the style reviewer's capsule as located
+  evidence, so the model judges hits instead of searching for them.
+- [ ] Not adopted: absolute bans on adverbs, passive voice and em dashes;
+  a separate rewrite pass after revision; forced sentence-length variation;
+  synonym substitution. English source prose only; a locale catalogue for
+  translations is its own item.
+
+**Tests/done:** scanner fixtures with each pattern in narration and in
+dialogue, and a chapter with none that yields no finding; the style reviewer
+receives the hits with locations; `pytest -q` green; `./install.sh --force`.
+Relates to M50, which removes the shorter-replacement rule.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
