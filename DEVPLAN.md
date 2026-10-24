@@ -5834,6 +5834,77 @@ config names no grok model, and `_runtime_models` at the previous HEAD returns
 the same set apart from the DeepSeek id. Project commits: landfall `32f2d852`,
 margherita `2324e65`, ground-truth-forge `20c6a78`.
 
+### M58 — Revise one passage of a promoted chapter from an author note — pending, awaiting approval
+
+**Why:** An author note on a promoted chapter, such as "show the HDMI-to-VGA
+converter when he plugs in", can be applied today only by
+`reset --scope prose --chapter`. That redrafts the whole chapter and deletes its
+translations and editions (`_reset_paths` ~13696), and a beat cannot change after
+design except through `reset --scope design`, which wipes every chapter of the book.
+A one-sentence fix costs a new chapter, and the author may prefer the promoted text.
+
+- [ ] `revise --book <id> --chapter <ch> --note <text> [--anchor <quote>]`: the
+  reviser rewrites only the passages the note touches; the technical editor checks
+  that the note is met and that nothing outside those passages changed; promotion
+  with a receipt, as for an ordinary revision.
+- [ ] When the note changes what a beat shows, the chapter contract's beat is
+  amended in the same transaction and versioned, as in M55's reopen.
+- [ ] Translations of that chapter: only paragraphs whose source changed are
+  re-translated and re-checked; the others are kept; paragraph counts stay equal.
+- [ ] The note is stored as an M45 feedback record (accepted, scope: that chapter).
+
+**Tests/done:** On a fixture with three promoted chapters, a note on CH-0001 changes
+only the anchored paragraphs of CH-0001 and of its translation; CH-0002 and CH-0003
+manuscripts, receipts and translations are byte-identical; a note the verifier finds
+unmet leaves the chapter as it was. Depends on M55 for the versioned contract.
+
+### M59 — A call that spends its reasoning and writes nothing is asked again one step lower — pending, measurement not started
+
+**Why:** Since M57 (DeepSeek V4.1 Flash 1017), the Italian read-back of Ground Truth
+CH-0001 on 2026-10-18 lost most of its asks to `ReasoningCeilingSpent`, which is
+reasoning spent to the ceiling with 0 output tokens:
+- locale-reviser, through the rewriter chain's `reviser-deepseek-deepseek-v4-1-flash-1017`
+  agent at `high`, ~39,000 reasoning tokens: 1 block of 11 in the first run, 3 blocks
+  failing their first ask in the second;
+- locale-reader at `medium`, ~35,000 reasoning tokens: 3 of 4 asks.
+
+A block whose two asks fail stays unrevised. On 2026-09-28, the undated snapshot
+left 1 block of 11 unrevised. `_refuse_empty_answer` (~10897) already says that
+asking again at the same effort "spends the same amount to be told the same
+nothing", yet the re-ask keeps the effort.
+
+Cerase (`cerase-acp` 676b41a, `src/empty-turn.ts`) re-prompts an empty turn up to
+three times. It did not test a lower effort, and measured `max` on 1017 as worse
+than `high` (15 of 130 sessions unfinished). The rewriter chain also runs at the
+catalogue's `default_effort` (`high`), not at the `medium` that `ROLE_SPECS` gives
+`locale-reviser` (~96).
+
+- [ ] Measure first, on the CH-0001 passages that failed (paragraphs 25–36, 37–48,
+  61–72, 73–84). Rewriter at `high`, `medium` and `low`, and locale reader at
+  `medium` and `low`, 5 asks per arm: empty answers, valid contract JSON,
+  rewrites that land. Budget USD 2. Two arms at a time at most.
+- [ ] On `ReasoningCeilingSpent`, the re-ask steps one rung down the model's
+  `variants` ladder (high → medium → low) and records the step in the receipt.
+  The lowest rung keeps today's behaviour.
+  Mechanism (read 2026-10-24): the effort is not in the envelope. The agent file
+  fixes it, and `_opencode_runner` (~7662) passes only `--agent <role>`; the
+  provider accepts `--variant` per call (`OPENCODE_RUN_FLAGS`, ~1686), so the
+  re-ask in `_ask_past_empty` (~9450) passes `--variant <one rung lower>` and the
+  agent file stays as it is. The runner takes an optional `variant=None` keyword
+  so the fake runners in `tests/` keep their three positional arguments. The
+  translation critic (~12134) stops after one spent ceiling and is not re-asked.
+- [ ] The rewriter chain's agent takes the `locale-reviser` effort from
+  `ROLE_SPECS` unless `translation.rewriters` names one, if the measurement
+  supports it.
+- [ ] Tests: a fake runner that answers empty at `high` and with text at `medium`
+  makes the passage land on the second ask at `medium`. An empty answer at `low`
+  fails as today. The rewriter agent's `variant` follows the role.
+
+**Tests/done:** `pytest -q` green, `./install.sh --force`, `runtime sync` in the
+three projects. Then the Ground Truth Italian read-back (`translate review
+--chapter`, CH-0001 to CH-0003) runs with no passage left unrevised for an empty
+answer, or the remaining cases are counted in the receipts.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
