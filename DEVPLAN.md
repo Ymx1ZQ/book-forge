@@ -5983,6 +5983,22 @@ dialogue, and a chapter with none that yields no finding; the style reviewer
 receives the hits with locations; `pytest -q` green; `./install.sh --force`.
 Relates to M50, which removes the shorter-replacement rule.
 
+### M62 — Remove the stale Codex copy of the skill ✅
+
+**Why:** `~/.codex/skills/book-forge` was installed on 2026-08-23 with
+`BOOK_FORGE_CONFIG_HOME=~/.codex`, from commit 30fce30, and no later install
+updated it: 212 commits behind on 2026-10-24, without M57, M60 or M61. Launching
+book-forge from Codex ran that engine. The projects run through OpenCode, and
+`install.sh` installs only to `~/.config/opencode` unless the variable is set.
+
+- [x] Checked before deleting: every file matches a committed version except
+  `references/design.md` and `scripts/book_forge.py`, which are the working
+  state that 6be702e completed (combined word count, cumulative design repair).
+  Nothing in it exists only there. Delete the directory.
+
+**Tests/done:** the directory is gone; `~/.config/opencode/skills/book-forge`
+is untouched and carries M61.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
