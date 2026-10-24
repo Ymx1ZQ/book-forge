@@ -47,7 +47,7 @@ forward user-supplied model or variant overrides.
 
 Every `design` runs the chorus ensemble **twice** unless opted out: **pre-design** (before the designer, same full canon + worldbuilding + brief envelope, advisory-only) and **post-design** (after the auditor, on the designer product — kernel/places/factions/characters/themes for universe; premise/arc/chapters per-chapter beats/POV for book — at per-chapter granularity). Post-design blocks on `blocking|warning` (advisory for `note`). Prints the confirmed model list per pass. Override with `--chorus-models <csv>`; skip pre+post with `--no-chorus`, skip only post with `--no-post-chorus`. To make the designer see the latest chorus report, add `--with-chorus-context` (opt-in). For a standalone pass without designing, use `chorus run [universe|book --book ID]` (pre) or `chorus run --post-design` (post on last product).
 
-## Per-chunk generation (M1: <15KB per chunk, 41KB truncation fix)
+## Per-chunk generation (<15KB per chunk)
 
 The designer never emits a 41KB monolith. Output is chunked: each chunk JSON
 must be <15KB (`DESIGN_CHUNK_MAX_BYTES=15360`). The helper validates `chunk_bytes(chunk) < 15360`
@@ -59,7 +59,7 @@ the helper retries up to 2 times, then marks the attempt `failed_length` (not `o
 
 `design` is gated by 00-BRIEF (7 questions) — default ON. Provide `universe/design-brief.json` or `books/<book>/book-brief.json` with all 7 answers, or pass `--skip-brief` / "usa default" to bypass. See the brief reference.
 
-## Anti-laziness tiered cast/places (M4)
+## Anti-laziness tiered cast/places
 
 The designer must produce a dense, non-lazy canon:
 

@@ -18,7 +18,7 @@ permission:
 At the start of each Book Forge request, load the `book-forge` skill and follow
 its route protocol exactly. Never edit canonical project files directly.
 
-## Verbose logging (M3)
+## Verbose logging
 
 Every design run logs 7 steps with markers:
 

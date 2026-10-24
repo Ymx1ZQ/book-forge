@@ -5905,6 +5905,27 @@ three projects. Then the Ground Truth Italian read-back (`translate review
 --chapter`, CH-0001 to CH-0003) runs with no passage left unrevised for an empty
 answer, or the remaining cases are counted in the receipts.
 
+### M60 — Remove milestone tags from the prompt files the skill loads ✅
+
+**Why:** The model reads every reference and asset prompt the skill loads and pays
+for each token on every read. A milestone tag (`M1:`, `(M4)`, `M29/M30`) tells it
+nothing it can act on; the history belongs in this devplan and in commit bodies.
+Same rule as fv-scout M323 (ce7f0bc).
+
+- [x] Drop the tags at `references/design.md` (two headings), `references/chorus.md`
+  (one line) and `assets/opencode/book-forge-orchestrator.md` (one heading). Every
+  rule and operative fact stays, including the <15KB chunk limit. No test or
+  script greps these headings (checked 2026-10-24).
+
+Not covered: the designer envelope built in `scripts/book_forge.py` (~6610) sends
+`tiered cast (M4)` to the model on every design call, and two tests assert that
+text (`test_design_chunking.py`, `test_universe_design.py`). Changing it changes
+the design envelope hash, so it is its own item, to be checked against in-flight
+design attempts before it ships.
+
+**Tests/done:** `grep -rnE '\bM[0-9]{1,3}\b'` over shipped `.md` outside the
+devplans finds nothing; `pytest -q` green; `./install.sh --force`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
