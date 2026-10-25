@@ -5926,6 +5926,13 @@ catalogue's `default_effort` (`high`), not at the `medium` that `ROLE_SPECS` giv
   The first attempt on 2026-10-23 broke 82 review tests: an unchecked
   replacement matched the telemetry line inside `draft_chapter` instead of
   `_provider_telemetry` and inserted a dedented block into the drafting code.
+Observed 2026-10-25 on the Ground Truth Italian read-back of CH-0001: the
+step-down fired in production (locale reader "asking again 2/2 at low",
+locale reviser "asking again at medium"), and one reader ask still came back
+empty at `low`. The read-back ran 1 h 30 on CH-0001 alone, 22 reader and 20
+reviser calls, USD 0.92, and was stopped by the host for low memory before it
+applied anything; CH-0002 and CH-0003 were not reached. Its length is the
+next thing to measure with point 1.
 - [ ] The rewriter chain's agent takes the `locale-reviser` effort from
   `ROLE_SPECS` unless `translation.rewriters` names one, if the measurement
   supports it.
@@ -6037,7 +6044,7 @@ book-forge from Codex ran that engine. The projects run through OpenCode, and
 **Tests/done:** the directory is gone; `~/.config/opencode/skills/book-forge`
 is untouched and carries M61.
 
-### M63 — Humanize a promoted chapter: find the shapes of generated prose and revise only those passages 🔄
+### M63 — Humanize a promoted chapter: find the shapes of generated prose and revise only those passages ✅
 
 **Why:** M61 keeps new chapters from carrying the shapes of generated prose.
 Chapters already promoted keep theirs, and the only way to change them was a
@@ -6073,6 +6080,10 @@ Truth's three chapters, in English and Italian.
 **Tests/done:** `pytest -q` green, install; Ground Truth CH-0001 to CH-0003
 humanized in English, their Italian re-translated where the source changed,
 the reading package rebuilt and uploaded to the book's Drive folder.
+Done 2026-10-25: 23 paragraphs humanized, 9 facts restored and 3 sentences
+smoothed by `revise --notes`, every changed paragraph re-translated and
+checked (4 re-asked after the critic's note). Ground Truth `fe4350e`.
+Spend: humanize and repairs USD 0.28.
 
 ### Dependencies and exclusions
 
