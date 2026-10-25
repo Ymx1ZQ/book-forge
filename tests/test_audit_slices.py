@@ -475,6 +475,18 @@ class PromiseEvidenceTests(unittest.TestCase):
         self.assertIn("never a promise's own id", prompt)
 
 
+class PinnedAuditProvider(AuditProvider):
+    """Answers as the model the project pinned the designer and the auditor to."""
+
+    PINNED = "z-ai/glm-5.3-flash"
+
+    def _ok(self, envelope, payload, role):
+        row = super()._ok(envelope, payload, role)
+        if role in {"designer", "canon-auditor"}:
+            row.update(model=self.PINNED, variant="high")
+        return row
+
+
 class AuditFixture(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
@@ -505,6 +517,26 @@ class SlicedAuditTests(AuditFixture):
         self.assertEqual(provider.calls.count("canon-auditor"), 20 + walk)
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
         self.assertEqual(len(record["findings"]), 20 + walk)
+
+    def test_a_role_pinned_to_another_model_promotes_its_chunked_audit(self):
+        """M66: Ground Truth's canon auditor on GLM 5.3 Flash answered all 23 passes
+        of a book and the receipt was refused, because the chunked result reported
+        the engine's default model whatever the pin."""
+        config = json.loads((self.project / "book-forge.yaml").read_text())
+        config["roles"] = {
+            role: {"model": "openrouter/z-ai/glm-5.3-flash", "variant": "high"} for role in ("designer", "canon-auditor")
+        }
+        (self.project / "book-forge.yaml").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        self.bf.sync_runtime(self.project)
+        result = self.bf.execute_book_design(self.project, self.book, provider=PinnedAuditProvider(self.bf))
+        self.assertEqual(result["state"], "design_clean")
+        receipts = [
+            json.loads(path.read_text())
+            for path in (self.project / ".book-forge" / "runs").glob("*/attempts/*/execution-receipt.json")
+        ]
+        for task in (f"DESIGN-{self.book}", f"AUDIT-{self.book}"):
+            receipt = next(row for row in receipts if row["task"] == task)
+            self.assertEqual((receipt["model"], receipt["variant"]), (PinnedAuditProvider.PINNED, "high"), task)
 
     def test_no_pass_is_handed_the_staging_or_the_wiring(self):
         provider = AuditProvider(self.bf)

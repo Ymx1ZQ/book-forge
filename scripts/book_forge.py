@@ -4948,9 +4948,15 @@ def _design_digest(chapters: list[object]) -> list[dict[str, object]]:
 def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, object], *, role: str = "designer") -> dict[str, object]:
     """Aggregate per-chunk results into one result record for completion telemetry.
 
-    The variant is the one the role is pinned to, not the designer's: completion
-    verifies the receipt against the pin, and an audit reported under the designer's
-    variant is rejected by the check that exists to catch a model swap."""
+    The model and variant are the ones the chunks were answered at: completion
+    verifies the receipt against the role's pin, and a record reporting anything
+    else is rejected by the check that exists to catch a model swap. It used to
+    report the engine default whatever the pin, so Ground Truth's canon auditor on
+    GLM 5.3 Flash answered all 23 passes of a book and was refused (M66). With no
+    answer to read them from, the role's default stands, as before."""
+    answered = [row for row in results if row.get("model")]
+    model = str(answered[-1]["model"]) if answered else MODEL_ID
+    variant = str(answered[-1].get("variant") or ROLE_SPECS[role][1]) if answered else ROLE_SPECS[role][1]
     tokens = {"input": 0, "output": 0}
     cost = 0.0
     latency = 0
@@ -4966,8 +4972,8 @@ def _synthetic_chunk_result(results: list[dict[str, object]], merged: dict[str, 
     return {
         "text": json.dumps(merged, ensure_ascii=False, sort_keys=True),
         "provider": "openrouter",
-        "model": MODEL_ID,
-        "variant": ROLE_SPECS[role][1],
+        "model": model,
+        "variant": variant,
         "session_id": session_id,
         "tokens": tokens,
         "cost": cost,

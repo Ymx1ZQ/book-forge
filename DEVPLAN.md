@@ -6184,6 +6184,30 @@ and the auditor is asked about a book with no start or end.
     keeps entry and exit;
   - a string entry is read back.
 
+### M66 — A chunked audit or design reports the model that answered it ✅
+
+**Why:** Found on 2026-10-25 while auditing Ground Truth's BOOK-0001, whose
+canon auditor is pinned to GLM 5.3 Flash because DeepSeek spent its ceiling on
+the universe audit.
+- All 23 chunks answered, and the receipt was then refused: "Provider receipt
+  does not match the pinned OpenRouter model".
+- `_synthetic_chunk_result` reports the engine default (`MODEL_ID`) and the
+  role's default effort, never the pin. A project that pins `canon-auditor`, or
+  `designer`, to another model can therefore never promote a chunked audit or
+  design: a book audit has more than 2 chapters, and a design has 40.
+
+- [x] The chunk result reports the model and effort the chunks were answered
+  at, taken from the chunk results. A chunk set with no answers reports the
+  role's pin.
+- [x] Tests: a chunked audit on a project that pins `canon-auditor` to another
+  model promotes, and its receipt names that model.
+- [x] Commit, push, install. Rerun Ground Truth's BOOK-0001 audit from its
+  cached answers.
+
+Done 2026-10-25: `_synthetic_chunk_result` takes the model and variant from the
+last answered chunk. The new test fails without the change and passes with it.
+Full suite green (1032).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
