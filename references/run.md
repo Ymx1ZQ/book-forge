@@ -17,6 +17,22 @@ workflow.
 - Never retry an `outcome_unknown` call. Never exceed one validated repair call
   or two concurrent review workers.
 
+A review that spends its whole output ceiling on reasoning and writes nothing is
+asked again one effort step lower, then once on the role's fallback model:
+Gemini 3.8 Flash at `high` unless the role already runs on it. A project names
+another fallback, or turns it off, in `book-forge.yaml`:
+
+```yaml
+roles:
+  technical-editor:
+    fallback:
+      model: openrouter/z-ai/glm-5.3-flash
+      variant: high
+```
+
+`fallback: false` stops the role after its own asks. The receipt of an answer
+from the fallback names the pin it fell back from.
+
 Do not load a whole manuscript. Context packets contain the chapter contract, explicit canon imports, current state, and only the required previous boundary. The cold-reader receives only the synthetic previous-chapters summary (reader_state compact + previous boundaries synopsis), not the full canon — exactly what a fresh linear reader knows.
 
 ## Driving a book to completion

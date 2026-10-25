@@ -5470,7 +5470,7 @@ fingerprints resume normally; intentional migration has clear provenance; isolat
 installation leaves the shared installation untouched. Use current installer
 interfaces and `--check`; no second package manager or parallel skill fork.
 
-### M48 — Support honest, minimal native import proposals
+### M48 — Support honest, minimal native import proposals — not needed
 
 **Why:** Ground Truth's legacy Markdown needs conversion, but most migration
 logic and artistic decisions belong in the book repository.
@@ -5485,6 +5485,12 @@ logic and artistic decisions belong in the book repository.
 - [ ] Keep legacy prose archived for comparison by default. If prose is imported,
   mark it staged/unreviewed; do not create a closed-chapter importer merely to
   preserve thirteen chapters whose prose is being reconsidered.
+
+**Not built (author, 2026-10-25).** Ground Truth is the only book that will ever
+come from the legacy skill. Its design is imported once by a script in the
+book's repository, which calls the engine's own `_reopen_task` and
+`apply_*_design` and then audits with `design universe|book`. The script and the
+record are in that project's `DEVPLAN-RECOVERY.md` P9.
 
 **Tests/done:** Malformed imports fail without partial promotion; interruption
 recovers correctly; replay is idempotent; structural validation cannot forge
@@ -6084,6 +6090,99 @@ Done 2026-10-25: 23 paragraphs humanized, 9 facts restored and 3 sentences
 smoothed by `revise --notes`, every changed paragraph re-translated and
 checked (4 re-asked after the critic's note). Ground Truth `fe4350e`.
 Spend: humanize and repairs USD 0.28.
+
+### M64 — The chapter reviews step down a rung when a call spends its ceiling ✅
+
+**Why:** On 2026-10-25 Landfall rewrote CH-0001 from scratch. Its canon half of
+the technical review, `REVIEW-TECH`, failed with the same answer six times:
+- the role was on DeepSeek V4.1 Flash 1017, 3 asks at `high` and 3 at `medium`;
+- each answer was 13,379 input, 35,000 reasoning and 0 output tokens, then `length`
+  (RUN-0038, ATT-1340/1342/1344);
+- 35,000 is the whole cap: `OPENCODE_OUTPUT_TOKEN_MAX` (32,000) plus the role's
+  3,000.
+
+The run stops on the canon half of the review. The contract half,
+`REVIEW-TECHC` (a 20 KB envelope against 40 KB), answered at `medium`.
+
+The three chapter reviews (`REVIEW-COLD`, `REVIEW-TECH`, `REVIEW-TECHC`) call
+`_ask_past_empty(runner, role, envelope, attempt_dir)` without the role's
+ladder. The M59 step-down therefore never runs there, and the three asks are
+the same call made three times.
+
+The comment above the `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX` override says
+the role's budget is "room it [reasoning] cannot take". Measured here, reasoning
+took all of it.
+
+- [x] Measure on Landfall's `REVIEW-TECH` envelope (ATT-1344), technical
+  editor on DeepSeek V4.1 Flash 1017. Arms: 2 asks at `low`, and 2 asks at
+  `medium` with the cap raised to 64,000 + 3,000. Budget USD 0.30.
+- [x] Pass `*_role_ladder(root, role)` to the review batch, so a spent ceiling
+  re-asks the same review one rung lower and the receipt carries `stepped_from`.
+- [x] Fallback model per role: when every ask spent its ceiling, ask once more on
+  a second model.
+  - Configured as `roles.<role>.fallback` in `book-forge.yaml`.
+  - The default is Gemini 3.8 Flash at `high` when the role is pinned to
+    another model and the project's runtime carries Gemini.
+  - The call passes `--model`/`--variant`, and the receipt carries
+    `fell_back_from`, which the pin check accepts.
+- [x] Raise the role's cap only if the measurement shows that the raised cap
+  answers.
+- [x] Correct the override comment: the cap is shared, and the budget is room
+  for the answer only while reasoning stops short of it.
+- [x] Tests:
+  - a runner that spends the ceiling at `high` and answers at `medium` settles
+    `REVIEW-TECH` on the second ask, with `stepped_from: high`;
+  - a runner that takes no variant is asked as today.
+  - Full suite green.
+- [x] Commit, push, `./install.sh --force`.
+
+Approved 2026-10-25 with the measurement and the fallback model. Landfall's
+technical editor itself is the author's project choice: on 2026-10-25 the author
+moved it to `gemini-3.8-flash` at `high`, the project's translation critic.
+
+Measured 2026-10-25 on the envelope of ATT-1344, one ask per row, USD 0.09:
+
+| Effort | Cap | Reasoning | Output | Answered |
+|---|---:|---:|---:|---|
+| `low` | 35,000 | 29,717 | 131 | yes |
+| `low` | 35,000 | 35,000 | 0 | no |
+| `medium` | 67,000 | 34,203 | 595 | yes |
+| `medium` | 67,000 | 31,607 | 150 | yes |
+
+At `medium` with the old cap the same envelope failed 3 times in 3 (the run itself).
+Done 2026-10-25:
+- `REASONING_ROOM` gives the technical editor 64,000 + its 3,000; other roles keep
+  32,000.
+- The three chapter reviews and both technical-editor verifiers step down and then
+  ask the fallback once (`_role_fallback`, `FALLBACK_PIN`).
+- The receipt carries `fell_back_from`, and `references/run.md` documents
+  `roles.<role>.fallback`.
+- Tests: 6 review tests, 4 runner tests. Full suite green.
+
+### M65 — A book's reader entry and exit survive its first chapter — proposed
+
+**Why:** Found on 2026-10-25 while importing Ground Truth's design. The book
+design writes the reader's entry and intended exit into
+`books/<book>/reader-state.md`. Two things lose them:
+- each chapter close rewrites that file with the reviser's reader state, so
+  after CH-0001 the lines are gone;
+- `_book_proposal_from_artifacts` reads them back only as JSON objects
+  (`^Entry: (\{.*\})$`), while designs have written them as strings. The
+  Ground Truth pilot wrote `Entry: "The reader arrives knowing nothing…"`, and
+  the engine could not read it back even before the first close.
+
+A later `design book`, run after the auditor changes, rebuilds the proposal
+with an empty entry and exit. The validator refuses it (`book.arc-incomplete`),
+and the auditor is asked about a book with no start or end.
+
+- [ ] The design keeps entry and exit in `design.md` (`## Reader entry`,
+  `## Reader exit`). The proposal reader takes them from there, with
+  `reader-state.md` as the fallback for designs written before. JSON strings
+  and objects are both read.
+- [ ] Tests:
+  - a design, then a closed chapter, then `_book_proposal_from_artifacts`
+    keeps entry and exit;
+  - a string entry is read back.
 
 ### Dependencies and exclusions
 

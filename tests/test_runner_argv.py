@@ -82,6 +82,42 @@ class RunnerArgvTests(unittest.TestCase):
     def test_no_effort_is_passed_unless_one_was_asked_for(self):
         self.assertNotIn("--variant", self._argv())
 
+    def test_a_fallback_model_follows_the_role_and_precedes_the_prompt(self):
+        argv = self._argv(model="openrouter/google/gemini-3.8-flash", variant="high")
+        self.assertEqual(argv[argv.index("--agent") + 1], "writer", "--agent keeps its value")
+        self.assertEqual(argv[argv.index("--model") + 1], "openrouter/google/gemini-3.8-flash")
+        self.assertEqual(argv[argv.index("--variant") + 1], "high")
+        self.assertLess(argv.index("--model"), argv.index(self.prompt))
+
+    def test_no_model_is_passed_unless_one_was_asked_for(self):
+        self.assertNotIn("--model", self._argv())
+
+    def _cap(self, role):
+        envelope = {**self.envelope, "bytes": b'{"max_output_tokens":3000,"schema":1}\n'}
+        captured = []
+
+        def fake_run(args, **kwargs):
+            if "debug" in args:
+                model_id, variant = self.bf._expected_pin(role)
+                payload = {"name": role, "model": {"providerID": "openrouter", "modelID": model_id}, "variant": variant}
+                return mock.Mock(stdout=json.dumps(payload), stderr="", returncode=0)
+            captured.append(kwargs["env"].get(self.bf.OPENCODE_OUTPUT_TOKEN_MAX_ENV))
+            return mock.Mock(stdout=json.dumps({"parts": []}), stderr="", returncode=0)
+
+        with mock.patch.object(self.bf, "_verify_opencode_cli", lambda binary: None), \
+             mock.patch.object(self.bf, "_run_opencode_process", side_effect=fake_run):
+            try:
+                self.bf.run_opencode_role(role, envelope, self.attempt_dir)
+            except Exception:
+                pass
+        return int(captured[0])
+
+    def test_the_technical_editor_has_the_reasoning_room_it_was_measured_to_need(self):
+        self.assertEqual(self._cap("technical-editor"), 64000 + 3000)
+
+    def test_other_roles_keep_the_provider_default(self):
+        self.assertEqual(self._cap("writer"), self.bf.OPENCODE_OUTPUT_TOKEN_MAX + 3000)
+
 
 if __name__ == "__main__":
     unittest.main()

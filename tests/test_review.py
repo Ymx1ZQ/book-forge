@@ -653,6 +653,131 @@ class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
 
 
 
+class AReviewThatSpendsItsCeilingIsAskedLowerThenOnAnotherModelTests(ReviewTests):
+    """M64. Landfall's canon review of a rewritten CH-0001 spent its 35000 tokens on
+    reasoning six times, three at `high` and three at `medium`: the chapter reviews
+    re-asked at the pinned effort, on the pinned model, so the three asks were one
+    call made three times."""
+
+    FALLBACK = "openrouter/google/gemini-3.8-flash"
+
+    class Answers:
+        """The canon half answers only at one of `variants` or on one of `models`."""
+
+        def __init__(self, revision, variants=(), models=()):
+            self.revision = revision
+            self.variants, self.models = set(variants), set(models)
+            self.calls = []
+            self.lock = threading.Lock()
+
+        def __call__(self, role, envelope, attempt_dir, variant=None, model=None):
+            key = RoleProvider._key(self, role, envelope)
+            with self.lock:
+                self.calls.append((key, variant, model))
+                number = len(self.calls)
+            payload = envelope["payload"]
+            base = {
+                "provider": "openrouter", "model": model.split("/", 1)[1] if model else payload["model"],
+                "variant": variant or payload["variant"], "session_id": f"ses-{number}",
+                "cost": 0.1, "latency_ms": 1, "finish": "stop",
+            }
+            if key == "technical-editor" and variant not in self.variants and model not in self.models:
+                return {**base, "text": "", "tokens": {"input": 13379, "output": 0, "reasoning": 35000}}
+            answer = {"findings": [], "verdict": "faithful"}
+            if role == "technical-editor":
+                answer = {"verified": True, "findings": [], "consequences": []}
+            if role == "reviser":
+                answer = self.revision
+            return {**base, "text": json.dumps(answer), "tokens": {"input": 13379, "output": 400}}
+
+    def close_chapter(self, provider):
+        try:
+            self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
+        except self.bf.BookForgeError as stopped:
+            return stopped
+        return None
+
+    def canon_asks(self, provider):
+        return [(variant, model) for key, variant, model in provider.calls if key == "technical-editor"]
+
+    def receipt(self, task_id):
+        for path in sorted((self.project / ".book-forge" / "runs").glob("*/attempts/*/execution-receipt.json")):
+            receipt = json.loads(path.read_text())
+            if receipt["task"] == task_id:
+                return receipt
+        return None
+
+    def set_role(self, role, value):
+        path = self.project / "book-forge.yaml"
+        config = json.loads(path.read_text())
+        config.setdefault("roles", {})[role] = value
+        path.write_text(json.dumps(config))
+
+    def test_a_canon_review_empty_at_high_lands_one_rung_lower(self):
+        provider = self.Answers(self.reviser(), variants={"medium"})
+        self.assertIsNone(self.close_chapter(provider))
+        self.assertEqual(self.canon_asks(provider), [(None, None), ("medium", None)])
+        receipt = self.receipt(f"REVIEW-TECH-{self.book}-CH-0001")
+        self.assertEqual((receipt["variant"], receipt["stepped_from"]), ("medium", "high"))
+
+    def test_a_canon_review_empty_on_every_rung_is_answered_on_the_fallback_model(self):
+        provider = self.Answers(self.reviser(), models={self.FALLBACK})
+        self.assertIsNone(self.close_chapter(provider))
+        self.assertEqual(
+            self.canon_asks(provider),
+            [(None, None), ("medium", None), ("low", None), ("high", self.FALLBACK)],
+        )
+        receipt = self.receipt(f"REVIEW-TECH-{self.book}-CH-0001")
+        self.assertEqual(receipt["model"], "google/gemini-3.8-flash")
+        self.assertEqual(receipt["fell_back_from"], MODEL)
+
+    def test_a_role_whose_fallback_is_turned_off_stops_as_before(self):
+        self.set_role("technical-editor", {"fallback": False})
+        provider = self.Answers(self.reviser(), models={self.FALLBACK})
+        self.assertIsInstance(self.close_chapter(provider), self.bf.ReasoningCeilingSpent)
+        self.assertEqual(len(self.canon_asks(provider)), self.bf.REVIEW_CEILING_REASKS)
+
+    def test_the_default_fallback_is_another_model_the_runtime_carries(self):
+        root = self.bf._project_root(self.project)
+        self.assertEqual(
+            self.bf._role_fallback(root, "technical-editor"),
+            {"model": self.FALLBACK, "variant": "high", "from": MODEL},
+        )
+        self.set_role("technical-editor", {"model": self.FALLBACK, "variant": "high"})
+        self.assertIsNone(self.bf._role_fallback(root, "technical-editor"), "a role already on it has none")
+
+    def test_a_named_fallback_is_used_with_its_model_s_own_effort(self):
+        root = self.bf._project_root(self.project)
+        config = self.bf._project_config(root)
+        other = next(
+            model for model in self.bf._runtime_models(config)
+            if model not in {MODEL, self.FALLBACK} and model in self.bf.CHORUS_MODEL_CONFIGS
+        )
+        self.set_role("technical-editor", {"fallback": {"model": other}})
+        expected = self.bf.CHORUS_MODEL_CONFIGS[other].get("default_effort") or self.bf.DEFAULT_EFFORT
+        self.assertEqual(
+            self.bf._role_fallback(root, "technical-editor"),
+            {"model": other, "variant": expected, "from": MODEL},
+        )
+        self.set_role("technical-editor", {"fallback": {"model": "openrouter/nobody/not-in-the-runtime"}})
+        self.assertIsNone(self.bf._role_fallback(root, "technical-editor"))
+
+    def test_a_receipt_from_another_model_needs_the_pin_it_fell_back_from(self):
+        provider = self.Answers(self.reviser(), models={self.FALLBACK})
+        original = self.bf._ask_past_empty
+
+        def without_the_pin(*args, **kwargs):
+            result = original(*args, **kwargs)
+            result.pop("fell_back_from", None)
+            return result
+
+        self.bf._ask_past_empty = without_the_pin
+        self.addCleanup(setattr, self.bf, "_ask_past_empty", original)
+        stopped = self.close_chapter(provider)
+        self.assertIsInstance(stopped, self.bf.BookForgeError)
+        self.assertIn("does not match the pinned", str(stopped))
+
+
 class TheReviserIsGivenRoomForTheAnswerAskedForTests(unittest.TestCase):
     """CH-0013 stopped the run three times on `Expecting ',' delimiter` at column
     17602. The budget was `target_words * 2` — 4000 tokens for a 2000-word chapter

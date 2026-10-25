@@ -2187,9 +2187,11 @@ def record_execution(
         expected_model, expected_variant = _role_pin(_project_config(root), role)
         expected_models = {expected_model, expected_model.split("/", 1)[1]}
         observed_model = str(telemetry.get("model"))
-        if telemetry.get("provider") != "openrouter" or observed_model not in expected_models:
+        # An answer from the role's fallback model (M64) names the pin it fell back from.
+        fell_back = telemetry.get("fell_back_from") in expected_models
+        if telemetry.get("provider") != "openrouter" or not (observed_model in expected_models or fell_back):
             raise BookForgeError("Provider receipt does not match the pinned OpenRouter model")
-        if telemetry.get("variant") != expected_variant and telemetry.get("stepped_from") != expected_variant:
+        if not fell_back and telemetry.get("variant") != expected_variant and telemetry.get("stepped_from") != expected_variant:
             # A re-ask one rung lower (M59) carries the pin it stepped from.
             raise BookForgeError(f"Provider variant {telemetry.get('variant')} does not match {role} pin {expected_variant}")
         receipt.update(telemetry)
@@ -3582,6 +3584,12 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
 # room. No other role comes close.
 OPENCODE_OUTPUT_TOKEN_MAX = 32000
 OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
+# Reasoning room above the provider's default, for the roles measured to need it
+# (M64). Landfall's canon review on DeepSeek V4.1 Flash 1017, one 13,379-token
+# envelope: at `medium` it reasoned 31,607 and 34,203 tokens and answered both
+# times under 64,000 + 3,000; under 32,000 + 3,000 it spent all 35,000 three times
+# in three, and at `low` once in two.
+REASONING_ROOM = {"technical-editor": 64000}
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),
@@ -7652,7 +7660,9 @@ def _wire_bytes(payload: object) -> bytes:
     return rendered.encode()
 
 
-def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path, variant: str | None = None) -> dict[str, object]:
+def run_opencode_role(
+    role: str, envelope: dict[str, object], attempt_dir: Path, variant: str | None = None, model: str | None = None,
+) -> dict[str, object]:
     # Chorus advisors are allowed despite not being in ROLE_SPECS.
     if (
         role not in ROLE_SPECS
@@ -7714,12 +7724,14 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path,
     # a model could spend the whole ceiling reasoning and have nothing left to
     # write, which is how the technical editor and the translation critic failed
     # all night. The override is the provider's own default plus this role's
-    # budget, because the cap is shared between reasoning and completion: reasoning
-    # keeps exactly the room it has today, and the budget becomes room it cannot
-    # take.
+    # budget, because the cap is shared between reasoning and completion. The
+    # budget is room for the answer only while reasoning stops short of the
+    # provider's default: Landfall's technical editor on DeepSeek V4.1 Flash 1017
+    # spent all 35000 on reasoning, at `high` and at `medium` alike (M64).
     declared = int(json.loads(envelope["bytes"]).get("max_output_tokens") or 0)
     if declared > 0:
-        environment = {**environment, OPENCODE_OUTPUT_TOKEN_MAX_ENV: str(OPENCODE_OUTPUT_TOKEN_MAX + declared)}
+        room = REASONING_ROOM.get(role, OPENCODE_OUTPUT_TOKEN_MAX)
+        environment = {**environment, OPENCODE_OUTPUT_TOKEN_MAX_ENV: str(room + declared)}
     started = time.monotonic()
     envelope_path = attempt_dir / "envelope.json"
     _write_bytes_atomic(envelope_path, envelope["bytes"])
@@ -7754,6 +7766,12 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path,
         # flag goes after the role so that `--agent` keeps its value.
         after_role = argv.index("--agent") + 2
         argv[after_role:after_role] = ["--variant", variant]
+    if model:
+        # The role's fallback model, asked once after every rung spent its ceiling
+        # (M64). The agent keeps its prompt and permissions; only the model moves.
+        after_role = argv.index("--agent") + 2
+        argv[after_role:after_role] = ["--model", model]
+    answered_by = model.split("/", 1)[1] if model else expected_model_id
     try:
         result = _run_opencode_process(
             argv, cwd=root, env=environment, timeout=OPENCODE_CALL_TIMEOUT, what=f"call for {role}"
@@ -7823,7 +7841,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path,
             return {
                 "text": "",
                 "provider": "openrouter",
-                "model": expected_model_id,
+                "model": answered_by,
                 "variant": variant or resolved["variant"],
                 "session_id": session_id,
                 "tokens": raw_finish.get("tokens", {}),
@@ -7844,7 +7862,7 @@ def run_opencode_role(role: str, envelope: dict[str, object], attempt_dir: Path,
     return {
         "text": texts[-1],
         "provider": "openrouter",
-        "model": expected_model_id,
+        "model": answered_by,
         "variant": variant or resolved["variant"],
         "session_id": session_id,
         "tokens": tokens,
@@ -9032,8 +9050,9 @@ def _ensure_review_tasks(root: Path, book_id: str, chapter_id: str) -> dict[str,
 
 def _provider_telemetry(result: dict[str, object], envelope: dict[str, object], call_number: int = 1) -> dict[str, object]:
     telemetry = {key: result[key] for key in ("provider", "model", "variant", "session_id", "tokens", "cost", "latency_ms", "finish")}
-    if result.get("stepped_from"):
-        telemetry["stepped_from"] = result["stepped_from"]
+    for key in ("stepped_from", "fell_back_from"):
+        if result.get(key):
+            telemetry[key] = result[key]
     telemetry.update({"envelope_hash": envelope["hash"], "estimated_input_tokens": envelope["estimated_input_tokens"], "call_number": call_number})
     if "chunk_telemetry" in result:
         telemetry["chunk_telemetry"] = result["chunk_telemetry"]
@@ -9285,7 +9304,10 @@ def _call_parallel_reviews(
     failures: list[BookForgeError] = []
     with ThreadPoolExecutor(max_workers=len(REVIEW_CALLS)) as executor:
         futures = {
-            executor.submit(_ask_past_empty, runner, role, envelope, attempt_dir): (key, role, task_id, envelope, claim)
+            executor.submit(
+                _ask_past_empty, runner, role, envelope, attempt_dir, *_role_ladder(root, role),
+                fallback=_role_fallback(root, role),
+            ): (key, role, task_id, envelope, claim)
             for key, role, task_id, envelope, claim, attempt_dir in jobs
         }
         for future in as_completed(futures):
@@ -9562,6 +9584,47 @@ def _lower_effort(runner, current: str | None, ladder: list[str] | None) -> str 
     return _one_rung_lower(current, ladder)
 
 
+# Asked once when every rung of a role's own model spent its ceiling (M64): another
+# family, already in every project's runtime as the translation critic and a style
+# reviewer, and one that answered Landfall's canon review where DeepSeek did not.
+FALLBACK_PIN = ("openrouter/google/gemini-3.8-flash", "high")
+
+
+def _role_fallback(root: Path, role: str) -> dict[str, str] | None:
+    """The model a role is asked on once more after every rung spent its ceiling.
+
+    `roles.<role>.fallback` in book-forge.yaml names one (`{"model", "variant"}`)
+    or turns it off (`false`). Otherwise it is `FALLBACK_PIN`, unless the role
+    already runs on it or the project's runtime has no agent able to call it.
+    """
+    try:
+        config = _project_config(root)
+        pinned, _ = _role_pin(config, role)
+        override = _role_overrides(config).get(role) or {}
+        if "fallback" in override:
+            named = override["fallback"]
+            if not named:
+                return None
+            model = _resolve_catalogue_model(str(named["model"])) if not str(named["model"]).startswith("openrouter/") else str(named["model"])
+            cfg = CHORUS_MODEL_CONFIGS.get(model) or {}
+            variant = str(named.get("variant") or cfg.get("default_effort") or DEFAULT_EFFORT)
+        else:
+            model, variant = FALLBACK_PIN
+        if model == pinned or model not in _runtime_models(config):
+            return None
+    except Exception:
+        return None
+    return {"model": model, "variant": variant, "from": pinned}
+
+
+def _accepts_model(runner) -> bool:
+    try:
+        params = inspect.signature(runner).parameters
+    except (TypeError, ValueError):
+        return False
+    return "model" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _call_at(runner, role: str, envelope: dict[str, object], attempt_dir: Path,
              variant: str | None, pinned: str | None) -> dict[str, object]:
     """One call at `variant`: the pinned effort, unless an empty answer stepped it down.
@@ -9588,7 +9651,7 @@ def _accepts_variant(runner) -> bool:
 def _ask_past_empty(
     runner, role: str, envelope: dict[str, object], attempt_dir: Path,
     variant: str | None = None, ladder: list[str] | None = None, asks: int = REVIEW_CEILING_REASKS,
-    only_lower: bool = False,
+    only_lower: bool = False, fallback: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """One answer, re-asked while it spends its ceiling and says nothing.
 
@@ -9621,6 +9684,19 @@ def _ask_past_empty(
                     f"{attempt + 1}/{asks}" + (f" at {current}" if current != variant else ""),
                     file=sys.stderr,
                 )
+    if fallback and _accepts_model(runner):
+        # Every rung of the pinned model thought until it had no room to write. The
+        # same question on another model is the one ask left that can be answered
+        # (M64); it is asked once, and its own empty answer stops the role.
+        print(
+            f"[{role}] spent its ceiling on every ask; asking once on {fallback['model']} at {fallback['variant']}",
+            file=sys.stderr,
+        )
+        result = runner(role, envelope, attempt_dir, model=fallback["model"], variant=fallback["variant"])
+        result["variant"] = fallback["variant"]
+        result["fell_back_from"] = fallback["from"]
+        _refuse_empty_answer(role, role, result)
+        return result
     raise last  # type: ignore[misc]
 
 
@@ -9946,7 +10022,8 @@ def _verify_revision(
             verify_dir = Path(verify_claim["capsule"]).parent
             _write_bytes_atomic(verify_dir / "envelope.json", envelope["bytes"])
             result = _ask_past_empty(runner, "technical-editor", envelope, verify_dir,
-                                     *_role_ladder(root, "technical-editor"))
+                                     *_role_ladder(root, "technical-editor"),
+                                     fallback=_role_fallback(root, "technical-editor"))
             mark_provider_accepted(root, verify_claim["attempt"], str(result["session_id"]))
             try:
                 verification = _parse_contract_json(str(result["text"]))
@@ -14285,7 +14362,10 @@ def _check_passages(
         )
         claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
         attempt_dir = Path(claim["capsule"]).parent
-        result = _ask_past_empty(runner, "technical-editor", envelope, attempt_dir, *_role_ladder(root, "technical-editor"))
+        result = _ask_past_empty(
+            runner, "technical-editor", envelope, attempt_dir, *_role_ladder(root, "technical-editor"),
+            fallback=_role_fallback(root, "technical-editor"),
+        )
         mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
         value = _parse_contract_json(str(result["text"]))
         _release_claim(root, claim["attempt"], note="passages ruled")
