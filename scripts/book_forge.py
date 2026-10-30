@@ -9005,6 +9005,10 @@ REVIEW_CALLS = (
     ("technical-editor", "technical-editor", "REVIEW-TECH", "technical-editor.json"),
     ("technical-contract", "technical-editor", "REVIEW-TECHC", "technical-editor-contract.json"),
 )
+# A stranger reads the chapter and the prose before it, nothing else. Three
+# chapters is enough to carry a voice and the state of the story without turning
+# the read into a recall test; chapter one reads with no prior text at all.
+COLD_READER_PRIOR_CHAPTERS = 3
 # What each half of the technical review is asked, in the capsule as well as in the
 # prompt, so neither half reports a defect it was not given the material to judge.
 TECHNICAL_ASKED = {
@@ -9157,6 +9161,38 @@ def _materialize_review_result(
     return receipt
 
 
+def _cold_reader_capsule(
+    root: Path,
+    book_id: str,
+    chapter_id: str,
+    contract: dict[str, object],
+    draft: str,
+) -> dict[str, object]:
+    """The stranger's whole world: this chapter and the prose just before it.
+
+    No contract, no synopsis, no reader-state and no `coldread-state`: those carry
+    the canon the writer and reviser work from, and a reader holding them knows
+    every invented term before the prose has had to earn it.
+    """
+    title = str(contract.get("title") or "").strip()
+    if not title:
+        title = next((line[2:].strip() for line in draft.splitlines() if line.startswith("# ")), "")
+    prior: list[dict[str, object]] = []
+    manuscript_dir = root / f"books/{book_id}/manuscript/chapters"
+    if manuscript_dir.is_dir():
+        for path in sorted(manuscript_dir.glob("*.md")):
+            if path.stem < chapter_id:
+                prior.append({"chapter": path.stem, "prose": path.read_text(encoding="utf-8")})
+    return {
+        "book": book_id,
+        "chapter": chapter_id,
+        "title": title,
+        "prose": draft,
+        "prior_chapters": prior[-COLD_READER_PRIOR_CHAPTERS:],
+        "answer_bound": f"Report at most {REVIEW_MAX_FINDINGS} findings, most severe first.",
+    }
+
+
 def _call_parallel_reviews(
     root: Path,
     book_id: str,
@@ -9195,23 +9231,6 @@ def _call_parallel_reviews(
     # Two halves of one role, and the second is the reason this pass exists in this
     # shape: a claim per half, so a run that dies between them pays for one call
     # again and not for both.
-    # Build synthetic previous-chapters summary for cold-reader — persisted artifact, not reconstructed
-    previous_synthetic = ""
-    try:
-        # Prefer persisted coldread-state chain (authoritative, versioned)
-        coldread_state_dir = root / f"books/{book_id}/coldread-state"
-        if coldread_state_dir.is_dir():
-            for prev in sorted(coldread_state_dir.glob("*.md")):
-                # Only include chapters before current (lexicographic order = chapter order for CH-####)
-                if prev.stem < chapter_id:
-                    previous_synthetic += f"\n\n{prev.read_text(encoding='utf-8').strip()[:600]}"
-            previous_synthetic = previous_synthetic.strip()[-3000:]
-        if not previous_synthetic:
-            reader_state_path = root / f"books/{book_id}/reader-state.md"
-            if reader_state_path.is_file():
-                previous_synthetic = reader_state_path.read_text(encoding="utf-8").strip()[-2000:]
-    except Exception:
-        previous_synthetic = ""
     for key, role, prefix, _ in REVIEW_CALLS:
         task_id = f"{prefix}-{book_id}-{chapter_id}"
         if key in materialized:
@@ -9227,9 +9246,7 @@ def _call_parallel_reviews(
             "answer_bound": f"Report at most {REVIEW_MAX_FINDINGS} findings, most severe first.",
         }
         if key == "cold-reader":
-            capsule["contract"] = _withheld_for_reader(contract)
-            capsule["previous_synthetic"] = previous_synthetic
-            capsule["has_full_canon"] = False
+            capsule = _cold_reader_capsule(root, book_id, chapter_id, contract, draft)
         if key in TECHNICAL_ASKED:
             capsule["asked"] = TECHNICAL_ASKED[key]
         if key == "technical-contract":

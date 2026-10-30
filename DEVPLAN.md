@@ -6208,6 +6208,152 @@ Done 2026-10-25: `_synthetic_chunk_result` takes the model and variant from the
 last answered chunk. The new test fails without the change and passes with it.
 Full suite green (1032).
 
+### M67 — The cold reader reads like a stranger ✅
+
+**Why:** Found on 2026-10-30 reading BOOK-0001 CH-0001..CH-0006 cold, in English
+and in Italian: oro, "edited" eyes, tide-chalk, the blue seam and the Candle are
+never explained, and the cold reader never flagged one of them.
+- `_review_chapter` (`scripts/book_forge.py`, near line 9195) hands the cold
+  reader the chapter contract (`_withheld_for_reader` only removes withheld
+  facts, so beats, plants and defined terms stay) and `previous_synthetic`, the
+  first 600 characters of each `coldread-state/*.md`, which the reviser writes
+  with the whole canon in view. A reader holding both knows every term.
+- On CH-0001 it received a synopsis left over from before the rewrite
+  (`reader-state.md` fallback) and raised a blocking finding about it.
+
+- [x] The cold reader's capsule carries the chapter title, the chapter prose and
+  the prose of the preceding chapters (the last `COLD_READER_PRIOR_CHAPTERS = 3`,
+  in order, whole). No contract beats, plants, reveals or imports, no
+  `previous_synthetic`, no `reader-state.md` fallback. Chapter 1 reads with no
+  prior text.
+- [x] `P/cold-reader.md` is rewritten for that reader: it has only the text,
+  the `withheld` paragraph goes, and the prompt says so.
+- [x] Tests: the capsule built for CH-0003 holds the prose of CH-0001 and
+  CH-0002 and none of the contract's beats or plants; the capsule for CH-0001
+  holds no prior text.
+
+Done 2026-10-30: `_cold_reader_capsule` builds the stranger's capsule; `tests/test_cold_reader_stranger.py` (3 tests) plus the full suite green (1035).
+
+### M68 — The cold reader says what happened and what it could not define 🔄
+
+**Why:** The same read found that five of six chapters summarise in one
+sentence and that nothing in the pipeline asks what happened in a chapter or
+what a reader could not define. `P/cold-reader.md` asks only for stumbles
+(clarity, pacing, emotion, agency, promise-payoff, continuity-gap) and caps the
+answer at `REVIEW_MAX_FINDINGS`.
+
+- [~] The answer gains three fields beside `findings`: `events` (what a
+  character does in this chapter that changes the situation, one line each,
+  at most 5), `undefined_terms` (invented words or institutions the text uses
+  without making clear what they are, each with a quote, at most 8) and
+  `stakes` (one line: what the protagonist can gain or lose here, or the empty
+  string when the text gives none).
+- [ ] After validation the engine adds findings of its own, `source: engine`,
+  `severity: blocking`: dimension `pacing` when `events` is empty or `stakes`
+  is empty; dimension `clarity` when `undefined_terms` holds more than
+  `review.max_undefined_terms` (default 3, read from the project's
+  `book-forge.yaml`). Each carries the offending list as evidence.
+- [ ] The schema validator accepts the new fields and refuses an answer
+  without them.
+- [ ] Tests: an answer with no events yields the blocking `pacing` finding; an
+  answer with four undefined terms yields the blocking `clarity` finding at the
+  default cap and none at a cap of 5.
+
+### M69 — A finding about clarity or story cannot be waved off — pending
+
+**Why:** The reviewer that rewrites the chapter is the model that wrote it, and
+`dispositions.json` shows it marking findings `dismissed` or `accepted-risk`
+(CH-0001 held three, one of them the chapter's opening line). Style findings
+are `warning` or `note` only, so no style reviewer can stop a chapter.
+`scripts/book_forge.py` ~line 9960 requires every blocking and warning finding
+to be dispositioned, but allows any action except for `objective` blocking
+findings (~line 9978).
+
+- [ ] A blocking finding with dimension `clarity` or `pacing`, from the cold
+  reader or from the engine (M68), must be dispositioned `repaired`; the
+  validator refuses `dismissed` and `accepted-risk` for it, with a message that
+  names the finding.
+- [ ] The style reviewer may report `blocking` for two shapes only: a chapter
+  in which nobody wants anything and nothing is in the way, and a chapter that
+  opens more invented terms than `review.max_undefined_terms` allows without
+  making them concrete. `P/style-review.md` and its schema say so.
+- [ ] Tests: a revision that dismisses a blocking clarity finding is refused
+  and one that repairs it is accepted; the style schema accepts `blocking`.
+
+### M70 — The engine counts the shapes the readers named — pending
+
+**Why:** The cold reads counted, per chapter, about 6 similes "the way X
+reads Y" and about 6 objects acting as persons ("the paper came to the table",
+"the pane woke", "the candle gave its grain", "the dark took them", "the mud gave
+up its men"). `prose_tells` (`scripts/book_forge.py:875`, `_shape_hits`:864)
+finds only the negated contrast.
+
+- [ ] `_shape_hits` also finds, in narration only: (1) the simile shapes
+  "the way <clause>" and "as if / as though" (kind `simile`); (2) an inanimate
+  noun phrase as subject of a verb of will, speech or perception, from a list
+  kept in one constant (came to, woke, took, gave, said, knew, wanted, asked,
+  drank, swallowed, refused, listened, watched, remembered, held its breath)
+  (kind `personified`); (3) the same word of a counted lexicon repeated
+  (kind `motif`) when a chapter uses it more than `style.limits.motif_per_chapter`
+  times, the lexicon being the project's `style.limits.motif_words` (default
+  empty).
+- [ ] `prose_tells` also returns `counts` per kind. The project's
+  `book-forge.yaml` may set `style.limits`: `similes_per_chapter` (default 6),
+  `personified_per_chapter` (default 3), `motif_per_chapter` (default 8). A
+  count over its limit adds a `warning` finding of kind `style-limit` to the
+  style reviewer's capsule, naming the count, the limit and the quotes, and
+  `P/style-review.md` tells the reviewer to cut down to the limit.
+- [ ] Tests: each shape is found in a sample and not found in a plain
+  sentence; a chapter over a limit gets the finding and a chapter under it gets
+  none; dialogue matches are counted and not listed, as today.
+
+### M71 — The prompts ask for what a reader needs — pending
+
+**Why:** The pipeline's own rules produce the unexplained terms:
+`P/writer.md:7` ("never by glossing it… Introduce no invented term you cannot
+make concrete in the same scene") and `:15` (no definite article on a noun the
+reader has never been given), repeated in `P/style-review.md` items 2 and 3.
+Nothing asks for an event per scene, stakes, or a ceiling on similes, and the
+technical editor treats a numeric contradiction as blocking
+(`P/technical-editor.md:35-43`) while nothing checks that a chapter changes
+anything.
+
+- [ ] `P/writer.md`: rule 3 becomes: a new invented term is defined in one
+  plain sentence the first time it appears, in the viewpoint character's words,
+  and at most three new terms enter a chapter; a term already defined is used
+  without explanation. Rule 6 is removed. A new rule: no inanimate thing is
+  the subject of a verb of will, speech or perception; no more than two
+  similes of the "the way X" kind per chapter; one named want and one visible
+  obstacle per scene, and the chapter ends with the protagonist's situation
+  changed.
+- [ ] `P/style-review.md`: items 2 and 3 are replaced by the matching reader
+  question: a term used before the text has made clear what it is. The
+  suggestion for such a finding adds the plain sentence, which may be longer
+  than the original; the "shorter than the original" rule keeps applying to
+  every other finding.
+- [ ] `P/style/plain-concrete.md`: rule 12 keeps its limit and states the cap of
+  three; new rules for personification and simile density match `P/writer.md`.
+- [ ] `P/technical-editor.md`: a numeric or period discrepancy between prose and
+  canon is a `note`, a contradiction of a main fact stays blocking; a new check
+  reports a chapter in which the protagonist's situation does not change.
+- [ ] `P/designer.md`: the beat rule requires that each beat names who wants
+  what, what stands in the way, and what has changed at its end, and forbids a
+  mechanism or object as a beat's subject.
+- [ ] Tests: the prompt files contain the new rule text and no longer contain
+  the removed sentences; any existing test that asserted the old text is
+  updated with the reason in the commit body.
+
+### M72 — Install and measure on a cold read 
+
+**Why:** M67..M71 are only worth what a stranger's read says of the next chapter.
+
+- [ ] Full test suite green. Commit and push the skill; `./install.sh --force`
+  from the skill directory.
+- [ ] Re-run the cold read of M67 on CH-0001..CH-0003 of BOOK-0001 as they are
+  now and record in this file how many `events`, `undefined_terms` and `stakes`
+  the new reader reports per chapter: that is the baseline the rewrite is
+  measured against.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
