@@ -3809,7 +3809,17 @@ def _block_content(root: Path, block_id: str, index: dict[str, object]) -> str:
     for position, marker in enumerate(markers):
         if marker.group(1) == local_name:
             end = markers[position + 1].start() if position + 1 < len(markers) else len(text_value)
-            return text_value[marker.end():end].strip()
+            content = text_value[marker.end():end].strip()
+            # A canon file's name is its `# ...` heading, outside every block. An
+            # imported block that does not carry the name would reach the writer
+            # without the entity it is about, so the envelope prefixes it. The
+            # stored canon and the block hash are untouched.
+            heading = re.search(r"^#\s+(.+?)\s*$", text_value, re.MULTILINE)
+            if heading:
+                name = heading.group(1).strip()
+                if not content.startswith(name) and not content.startswith(f"# {name}"):
+                    content = f"# {name}\n{content}"
+            return content
     raise BookForgeError(f"Indexed block cannot be materialized: {block_id}")
 
 

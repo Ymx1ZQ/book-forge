@@ -6361,6 +6361,32 @@ Done 2026-10-30: writer rules 3 and 6 replaced, rule 8 added; style-review items
   CH-0006 of BOOK-0001 (see `DEVPLAN-CLARITY.md` C5): record here how many
   `events`, `undefined_terms` and `stakes` it reports per chapter.
 
+### M73 — A canon character keeps its name through the draft and the revision ✅
+
+**Why:** Found on 2026-10-30 reading the rewritten BOOK-0001 CH-0003..CH-0006:
+the Reader of canon (`CHR-0003`, "Ren Chen-Silva") is called "Tarn" in three
+chapters.
+- The writer imports `CHR-0003#summary`, whose block starts "Heretical Reader;
+  felt the Arc slip…": the name is the file's heading, outside the block, so the
+  writer never sees it and invents one.
+- The technical editor raised it (`reviews/CH-0006/technical-editor.json`) and
+  the reviser answered with a consequence that "supersedes" the canon name
+  (`reviews/CH-0005/dispositions.json`), so every later chapter ratified it.
+
+- [x] A canon block imported into a writer or reviser envelope carries its
+  entity's name: the context packet prefixes each imported block with the
+  entity's heading (`# Ren Chen-Silva`) when the block does not already begin
+  with it.
+- [x] `P/reviser.md`: a consequence never changes a canon entity's name, and a
+  finding that the prose renames a canon character is repaired in the prose
+  (`repaired`), not dismissed or superseded. `P/technical-editor.md`: a prose
+  name for a canon character that differs from the canon name is blocking and
+  `objective`.
+- [x] Tests: the envelope for a chapter that imports `CHR-0003#summary` holds the
+  string "Ren Chen-Silva"; the prompt files carry the new rule text.
+
+Done 2026-10-31: `_block_content` prefixes an imported block with its entity heading; reviser and technical-editor prompts carry the no-rename rule; `tests/test_import_names.py`. Full suite green (1071).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

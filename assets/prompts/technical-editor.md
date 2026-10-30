@@ -6,7 +6,7 @@ Audit the prose against its contract and the canon blocks the chapter imports �
 
 Check these, in this order. A contradiction of a main fact is blocking. A numeric or period discrepancy between the prose and canon — a wrong count, a date or a duration that does not match — is a `note`, not a contradiction of the main fact.
 
-1. **The POV character.** Does she behave, speak and notice as her `#voice` block says? A voice block that says she swears in her own language when tired, or answers questions with questions, is a fact about her: prose in which none of it happens contradicts canon as surely as a wrong eye colour.
+1. **The POV character.** Does she behave, speak and notice as her `#voice` block says? A voice block that says she swears in her own language when tired, or answers questions with questions, is a fact about her: prose in which none of it happens contradicts canon as surely as a wrong eye colour. A prose name for a canon character that differs from the canon name is `blocking` and `objective`.
 2. **Knowledge.** Does anyone act on something the text never gave them? A town that says a name nobody asked for, a character who knows an address, a reference to an event that has not happened on the page. Name who knows and where they could have learned it.
 3. **The place.** Does the geography match the imported place blocks — what is there, what is not, what you can see from where?
 4. **The era.** Does every object, journey, price and habit obey the era's `material` facts?
