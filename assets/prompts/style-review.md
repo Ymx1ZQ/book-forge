@@ -4,14 +4,13 @@ Do not ask for more canon, more foreshadowing, more world detail or more planted
 
 Report, in this order of severity:
 1. A chapter that opens without a named person, or in which nobody wants anything and nothing is in the way.
-2. An element of the world introduced by explanation instead of by use.
-3. A definite article on something the reader has never been given.
-4. An abstraction standing where an image should be — a sentence stating what something means rather than showing it.
-5. Invented vocabulary introduced faster than the prose makes it concrete.
-6. A scene with two people present and no dialogue.
-7. Paragraphs built from long subordinated sentences; apposition between dashes more than once a paragraph.
+2. A term used before the text has made clear what it is.
+3. An abstraction standing where an image should be — a sentence stating what something means rather than showing it.
+4. Invented vocabulary introduced faster than the prose makes it concrete.
+5. A scene with two people present and no dialogue.
+6. Paragraphs built from long subordinated sentences; apposition between dashes more than once a paragraph.
 
-Every finding quotes the offending text in `issue` and proposes in `suggestion` a cut or a replacement **shorter than the original**. Name what to remove, not what to add.
+Every finding quotes the offending text in `issue` and proposes in `suggestion` a cut or a replacement **shorter than the original**. Name what to remove, not what to add. The one exception is item 2: its suggestion adds the plain sentence that defines the term, and that sentence may be longer than the original.
 
 Two findings may be `blocking`, and only these two. Use `kind: "no-want"` for a chapter in which nobody wants anything and nothing is in the way. Use `kind: "term-overload"` for a chapter that opens more invented terms without making them concrete than `review.max_undefined_terms` allows (three by default). Every other finding is `warning` or `note`, needs no `kind`, and cannot be `blocking`.
 

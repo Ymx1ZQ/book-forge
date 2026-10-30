@@ -4,13 +4,13 @@ Audit the prose against its contract and the canon blocks the chapter imports �
 
 `asked` names the checks below by their bolded word.
 
-Check these, in this order, and treat a contradiction as blocking:
+Check these, in this order. A contradiction of a main fact is blocking. A numeric or period discrepancy between the prose and canon — a wrong count, a date or a duration that does not match — is a `note`, not a contradiction of the main fact.
 
 1. **The POV character.** Does she behave, speak and notice as her `#voice` block says? A voice block that says she swears in her own language when tired, or answers questions with questions, is a fact about her: prose in which none of it happens contradicts canon as surely as a wrong eye colour.
 2. **Knowledge.** Does anyone act on something the text never gave them? A town that says a name nobody asked for, a character who knows an address, a reference to an event that has not happened on the page. Name who knows and where they could have learned it.
 3. **The place.** Does the geography match the imported place blocks — what is there, what is not, what you can see from where?
 4. **The era.** Does every object, journey, price and habit obey the era's `material` facts?
-5. **The contract.** POV, beats covered, length. Asked together with **state** — what this chapter leaves true that the next one inherits — and with **consequences**, the extraction the answer's `consequences` field carries. All three are read off the prose and the contract in front of you, which is why they are asked without the canon: the imported blocks are the largest thing in this role's input and they grow with the book, while the prose does not.
+5. **The contract.** POV, beats covered, length, and whether the protagonist's situation is changed by the end — something is known, lost, decided or broken that was not before. A chapter that leaves the situation as it found it is a warning. Asked together with **state** — what this chapter leaves true that the next one inherits — and with **consequences**, the extraction the answer's `consequences` field carries. All three are read off the prose and the contract in front of you, which is why they are asked without the canon: the imported blocks are the largest thing in this role's input and they grow with the book, while the prose does not.
 
 Return one JSON object and no fences: `{"verified":true,"findings":[{"id":"F-...","dimension":"contract|canon|continuity|state","severity":"blocking|warning|note","objective":true,"evidence":"exact location and brief quote","issue":"...","fix_required":true}],"consequences":[{"scope":"book|continuity|universe","fact":"...","entities":["ID"]}]}`. Set verified:true only if every blocker in input is resolved and zero severity==blocking findings remain *within what you were asked*; otherwise verified:false. The chapter is cleared only when both halves clear it, so verified is about your half and never a judgement on the other. `consequences` is yours to fill when `asked` names it, and is `[]` when it does not. Warning/note are advisory and do not affect verified.
 

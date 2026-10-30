@@ -81,6 +81,38 @@ class PromptContractTests(unittest.TestCase):
         for phrase in ("epigraph", "practical want", "misunderstands", "introduces themselves by their function", "costs the asker"):
             self.assertIn(phrase, prompt)
 
+    def test_the_writer_defines_each_new_term_once_and_caps_the_rest(self):
+        """M71 removed the glossing rule and the definite-article ban: both asked
+        the writer to withhold a term, and the reader was left without its
+        meaning."""
+        prompt = self.read("writer.md")
+        for phrase in ("one plain sentence", "At most three new terms enter a chapter", "used without explanation"):
+            self.assertIn(phrase, prompt)
+        for removed in ("never by glossing it", "Do not put a definite article"):
+            self.assertNotIn(removed, prompt)
+
+    def test_the_writer_forbids_personification_and_names_the_stakes(self):
+        prompt = self.read("writer.md")
+        for phrase in ("No inanimate thing", "at most two similes", "one named want and one visible obstacle", "the protagonist's situation changed"):
+            self.assertIn(phrase, prompt)
+
+    def test_the_style_review_asks_for_a_plain_sentence_not_a_cut(self):
+        prompt = self.read("style-review.md")
+        self.assertIn("A term used before the text has made clear what it is", prompt)
+        self.assertNotIn("A definite article on something", prompt)
+        self.assertIn("may be longer than the original", prompt)
+
+    def test_the_designer_requires_a_person_with_a_want_in_each_beat(self):
+        prompt = self.read("designer.md")
+        self.assertIn("who wants what, what stands in the way, and what has changed at its end", prompt)
+        self.assertIn("a mechanism, an institution or an object may not be the subject of a beat", prompt)
+
+    def test_the_technical_editor_rates_a_wrong_number_as_a_note(self):
+        prompt = self.read("technical-editor.md")
+        self.assertIn("numeric or period discrepancy", prompt)
+        self.assertIn("is a `note`", prompt)
+        self.assertIn("situation is changed by the end", prompt)
+
     def test_the_style_review_reads_dialogue_for_the_same_five(self):
         prompt = self.read("style-review.md")
         self.assertIn("states the book's theme", prompt)

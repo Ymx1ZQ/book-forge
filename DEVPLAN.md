@@ -6313,7 +6313,7 @@ finds only the negated contrast.
 
 Done 2026-10-30: `_shape_hits` finds simile and personified shapes; `prose_tells` returns `counts` and motif hits; `style_limit_findings` reaches the style reviewer. Full suite green (1063). Open: motif hits are listed one per occurrence, so a chapter of 80 counted words sends 80 hits to the reviewer; M72 measures whether that crowds out the other findings.
 
-### M71 — The prompts ask for what a reader needs 🔄
+### M71 — The prompts ask for what a reader needs ✅
 
 **Why:** The pipeline's own rules produce the unexplained terms:
 `P/writer.md:7` ("never by glossing it… Introduce no invented term you cannot
@@ -6324,7 +6324,7 @@ technical editor treats a numeric contradiction as blocking
 (`P/technical-editor.md:35-43`) while nothing checks that a chapter changes
 anything.
 
-- [ ] `P/writer.md`: rule 3 becomes: a new invented term is defined in one
+- [x] `P/writer.md`: rule 3 becomes: a new invented term is defined in one
   plain sentence the first time it appears, in the viewpoint character's words,
   and at most three new terms enter a chapter; a term already defined is used
   without explanation. Rule 6 is removed. A new rule: no inanimate thing is
@@ -6332,33 +6332,34 @@ anything.
   similes of the "the way X" kind per chapter; one named want and one visible
   obstacle per scene, and the chapter ends with the protagonist's situation
   changed.
-- [ ] `P/style-review.md`: items 2 and 3 are replaced by the matching reader
+- [x] `P/style-review.md`: items 2 and 3 are replaced by the matching reader
   question: a term used before the text has made clear what it is. The
   suggestion for such a finding adds the plain sentence, which may be longer
   than the original; the "shorter than the original" rule keeps applying to
   every other finding.
-- [ ] `P/style/plain-concrete.md`: rule 12 keeps its limit and states the cap of
+- [x] `P/style/plain-concrete.md`: rule 12 keeps its limit and states the cap of
   three; new rules for personification and simile density match `P/writer.md`.
-- [ ] `P/technical-editor.md`: a numeric or period discrepancy between prose and
+- [x] `P/technical-editor.md`: a numeric or period discrepancy between prose and
   canon is a `note`, a contradiction of a main fact stays blocking; a new check
   reports a chapter in which the protagonist's situation does not change.
-- [ ] `P/designer.md`: the beat rule requires that each beat names who wants
+- [x] `P/designer.md`: the beat rule requires that each beat names who wants
   what, what stands in the way, and what has changed at its end, and forbids a
   mechanism or object as a beat's subject.
-- [ ] Tests: the prompt files contain the new rule text and no longer contain
+- [x] Tests: the prompt files contain the new rule text and no longer contain
   the removed sentences; any existing test that asserted the old text is
   updated with the reason in the commit body.
 
-### M72 — Install and measure on a cold read 
+Done 2026-10-30: writer rules 3 and 6 replaced, rule 8 added; style-review items merged; plain-concrete, technical-editor and designer updated; prompt-text tests in `tests/test_world_conformance.py`. Full suite green (1068).
+
+### M72 — Install and measure on a cold read 🔄
 
 **Why:** M67..M71 are only worth what a stranger's read says of the next chapter.
 
 - [ ] Full test suite green. Commit and push the skill; `./install.sh --force`
   from the skill directory.
-- [ ] Re-run the cold read of M67 on CH-0001..CH-0003 of BOOK-0001 as they are
-  now and record in this file how many `events`, `undefined_terms` and `stakes`
-  the new reader reports per chapter: that is the baseline the rewrite is
-  measured against.
+- [ ] The measure is the cold reader's own report on the rewritten CH-0001..
+  CH-0006 of BOOK-0001 (see `DEVPLAN-CLARITY.md` C5): record here how many
+  `events`, `undefined_terms` and `stakes` it reports per chapter.
 
 ### Dependencies and exclusions
 
