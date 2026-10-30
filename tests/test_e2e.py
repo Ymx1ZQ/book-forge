@@ -106,7 +106,12 @@ class FixtureProvider:
             elif role == "writer":
                 value = {"prose_markdown": prose("memory"), "beat_map": [{"beat": "Mara chooses to open the archive", "evidence": "She opens it."}], "consequences": []}
             elif role == "cold-reader":
-                value = {"findings": []}
+                value = {
+                    "findings": [],
+                    "events": ["Mara chooses to open the archive."],
+                    "undefined_terms": [],
+                    "stakes": "Mara can lose the archive.",
+                }
             elif role == "technical-editor":
                 value = {"findings": [], "consequences": []}
             elif role == "reviser":

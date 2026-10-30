@@ -38,7 +38,12 @@ class PivotalProvider:
                 labels = sorted(envelope["payload"]["task"]["candidates"])
                 payload = {"ranking": [labels[1], labels[0]], "evidence": [{"dimension": "causality", "winner": labels[1], "reason": "The choice lands."}]}
             elif role == "cold-reader":
-                payload = {"findings": []}
+                payload = {
+                    "findings": [],
+                    "events": ["Mara makes the choice."],
+                    "undefined_terms": [],
+                    "stakes": "Mara can lose what the choice buys.",
+                }
             elif role == "technical-editor":
                 payload = {"findings": [], "consequences": []}
             elif role == "reviser":

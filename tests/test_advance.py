@@ -95,7 +95,12 @@ class ScriptedProvider:
         if role == "writer":
             return self._envelope({"prose_markdown": PROSE, "beat_map": [{"beat": "Mara wants the log and the warden will not open it", "evidence": "Open it, she said."}], "consequences": []}, role)
         if role in {"cold-reader"}:
-            return self._envelope({"findings": []}, role)
+            return self._envelope({
+                "findings": [],
+                "events": ["Mara asks the warden to open the log."],
+                "undefined_terms": [],
+                "stakes": "Mara can lose the log.",
+            }, role)
         if role == "technical-editor":
             return self._envelope({"findings": [], "consequences": []}, role)
         if role == "reviser":

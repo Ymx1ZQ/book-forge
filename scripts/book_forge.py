@@ -9082,6 +9082,11 @@ def _chorus_telemetry(result: dict[str, object], envelope: dict[str, object]) ->
 
 
 REVIEW_FINDING_FIELDS = frozenset({"id", "dimension", "severity", "evidence", "issue", "fix_required"})
+# What the cold reader reports beside its findings. Its answer bound limits how
+# many findings it may list; these three have bounds of their own.
+COLD_READER_MAX_EVENTS = 5
+COLD_READER_MAX_UNDEFINED_TERMS = 8
+REVIEW_MAX_UNDEFINED_TERMS_DEFAULT = 3
 
 
 def _validate_findings(
@@ -9136,6 +9141,92 @@ def _validate_findings(
     if findings and not usable:
         raise BookForgeError("Review finding is missing required evidence fields")
     return usable, set_aside
+
+
+def _validate_cold_reader_result(value: dict[str, object]) -> None:
+    """The three reports the cold reader owes beside its findings.
+
+    `findings` is bounded by `answer_bound`; what happened, what a stranger could
+    not define and what is at stake are the reader's own evidence that the chapter
+    moves and can be followed, so they have bounds of their own. An answer without
+    them is refused like any other malformed review: the retry exists to get one
+    that carries them.
+    """
+    events = value.get("events")
+    if not isinstance(events, list):
+        raise BookForgeError("Cold-reader output has no events list")
+    if len(events) > COLD_READER_MAX_EVENTS:
+        raise BookForgeError(
+            f"Cold-reader output has {len(events)} events; the bound is {COLD_READER_MAX_EVENTS}"
+        )
+    if any(not isinstance(event, str) for event in events):
+        raise BookForgeError("Cold-reader events must be strings")
+    terms = value.get("undefined_terms")
+    if not isinstance(terms, list):
+        raise BookForgeError("Cold-reader output has no undefined_terms list")
+    if len(terms) > COLD_READER_MAX_UNDEFINED_TERMS:
+        raise BookForgeError(
+            f"Cold-reader output has {len(terms)} undefined terms; "
+            f"the bound is {COLD_READER_MAX_UNDEFINED_TERMS}"
+        )
+    if any(
+        not isinstance(term, dict)
+        or not isinstance(term.get("term"), str)
+        or not isinstance(term.get("quote"), str)
+        for term in terms
+    ):
+        raise BookForgeError("Cold-reader undefined_terms must be objects with term and quote")
+    stakes = value.get("stakes")
+    if not isinstance(stakes, str):
+        raise BookForgeError("Cold-reader output has no stakes line")
+
+
+def _review_max_undefined_terms(root: Path) -> int:
+    """`review.max_undefined_terms`, or three when the project does not set it."""
+    review = _project_config(root).get("review")
+    named = review.get("max_undefined_terms") if isinstance(review, dict) else None
+    if isinstance(named, int) and not isinstance(named, bool) and named >= 0:
+        return named
+    return REVIEW_MAX_UNDEFINED_TERMS_DEFAULT
+
+
+def _cold_reader_engine_findings(root: Path, value: dict[str, object]) -> list[dict[str, object]]:
+    """The blocking findings the engine adds after the cold reader's report.
+
+    A chapter where nobody does anything that changes the situation, or where the
+    protagonist has nothing to gain or lose, does not move; too many undefined terms
+    is a stranger lost in the first pages. Each finding carries the offending report
+    as evidence and states the count against the limit it broke.
+    """
+    events = list(value["events"])
+    terms = list(value["undefined_terms"])
+    stakes = str(value["stakes"])
+    findings: list[dict[str, object]] = []
+
+    def add(dimension: str, evidence: list[object], issue: str) -> None:
+        findings.append({
+            "id": f"F-ENG-{len(findings) + 1:04d}",
+            "dimension": dimension,
+            "severity": "blocking",
+            "source": "engine",
+            "evidence": evidence,
+            "issue": issue,
+            "fix_required": True,
+        })
+
+    if not events:
+        add(
+            "pacing",
+            events,
+            f"No event: 0 of at most {COLD_READER_MAX_EVENTS} lines say what a character "
+            "does that changes the situation",
+        )
+    if not stakes.strip():
+        add("pacing", [], "No stakes: 0 of 1 line says what the protagonist can gain or lose here")
+    limit = _review_max_undefined_terms(root)
+    if len(terms) > limit:
+        add("clarity", terms, f"{len(terms)} undefined terms, over the limit of {limit}")
+    return findings
 
 
 def _materialize_review_result(
@@ -9296,6 +9387,8 @@ def _call_parallel_reviews(
         mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
         _refuse_empty_answer(role, task_id, result)
         value = _parse_contract_json(str(result["text"]))
+        if key == "cold-reader":
+            _validate_cold_reader_result(value)
         usable, set_aside = _validate_findings(value, technical=role == "technical-editor")
         if set_aside:
             print(
@@ -9303,6 +9396,11 @@ def _call_parallel_reviews(
                 f"{len(usable)} kept: {'; '.join(str(row['why']) for row in set_aside)}",
                 file=sys.stderr,
             )
+        if key == "cold-reader":
+            # The reader's report is evidence like a finding, and the engine owes
+            # the same disposition path: what it says nobody does or cannot define
+            # is added beside the model's findings, not kept apart from them.
+            usable.extend(_cold_reader_engine_findings(root, value))
         # The review is acted on through what survived, and what did not is
         # carried beside it rather than dropped on the floor.
         value["findings"] = usable

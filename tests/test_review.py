@@ -23,6 +23,16 @@ def prose(words=700):
     return "# Chapter\n\n" + " ".join(["memory"] * words)
 
 
+def cold_answer(findings=None):
+    """A complete cold-reader answer: the three reports beside its findings."""
+    return {
+        "findings": list(findings or []),
+        "events": ["Mara opens the archive."],
+        "undefined_terms": [],
+        "stakes": "Mara can lose the archive.",
+    }
+
+
 class RoleProvider:
     """Answers per role, and per half for the role that is asked in two calls.
 
@@ -101,7 +111,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_closes_in_three_review_calls_and_updates_state(self):
         provider = RoleProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [], "consequences": []}],
             "reviser": [self.reviser()],
         })
@@ -125,7 +135,7 @@ class ReviewTests(unittest.TestCase):
         consequence = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
         disposition = {"finding": "T-0001", "action": "repaired", "evidence": "final paragraph", "loss": "none", "supersedes": []}
         provider = RoleProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [finding], "consequences": [consequence]}, {"verified": True, "findings": []}],
             "reviser": [self.reviser([consequence], [disposition])],
         })
@@ -147,7 +157,7 @@ class ReviewTests(unittest.TestCase):
                 return {"text": json.dumps({"prose_markdown": prose(), "beat_map": [{"beat": "Find signal", "evidence": "found"}], "consequences": []}), "provider": "openrouter", "model": MODEL, "variant": "low", "session_id": "ses-d", "tokens": {}, "cost": 0, "latency_ms": 1, "finish": "stop"}
         self.bf.draft_chapter(second, book, "CH-0001", provider=DraftProvider())
         bad = RoleProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [finding], "consequences": [consequence]}],
             "reviser": [self.reviser([], [{**disposition, "action": "dismissed"}])],
         })
@@ -159,7 +169,7 @@ class ReviewTests(unittest.TestCase):
         cold_finding = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
         tech_finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing consequence", "fix_required": True, "objective": False}
         provider = RoleProvider({
-            "cold-reader": [{"findings": [cold_finding]}],
+            "cold-reader": [cold_answer([cold_finding])],
             "technical-editor": [{"findings": [tech_finding], "consequences": []}],
             "reviser": [self.reviser([], [
                 {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
@@ -179,7 +189,7 @@ class ReviewTests(unittest.TestCase):
         cold_finding = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
         tech_finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing", "fix_required": True, "objective": False}
         provider = RoleProvider({
-            "cold-reader": [{"findings": [cold_finding]}],
+            "cold-reader": [cold_answer([cold_finding])],
             "technical-editor": [{"findings": [tech_finding], "consequences": []}],
             "reviser": [self.reviser([], [
                 {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
@@ -212,7 +222,7 @@ class ReviewTests(unittest.TestCase):
         finding = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "span", "issue": "missing fact", "fix_required": True, "objective": False}
         consequence = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
         provider = RoleProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [finding], "consequences": [consequence]}],
             "reviser": [{
                 "prose_markdown": prose(),
@@ -463,7 +473,7 @@ class APassOfTwoRolesResumesOnTheOneThatAnsweredTests(ReviewTests):
         cold = {"id": "F-0001", "dimension": "clarity", "severity": "warning", "evidence": "a span", "issue": "vague", "fix_required": True}
         tech = {"id": "F-0001", "dimension": "state", "severity": "warning", "evidence": "another span", "issue": "missing", "fix_required": True, "objective": False}
         provider = RoleProvider({
-            "cold-reader": [{"findings": [cold]}],
+            "cold-reader": [cold_answer([cold])],
             "technical-editor": [{"findings": [tech], "consequences": []}],
             "reviser": [self.reviser([], [
                 {"finding": "F-0001", "action": "repaired", "evidence": "fixed", "loss": "none", "supersedes": []},
@@ -615,6 +625,8 @@ class ARoleThatAnswersOnTheSecondAskIsGivenOneTests(ReviewTests):
                 self.empties[key] += 1
                 return {**base, "text": "", "tokens": {"input": 15000, "output": 0, "reasoning": 32000}}
             answer = {"findings": [], "verdict": "faithful"}
+            if role == "cold-reader":
+                answer = cold_answer()
             if role == "technical-editor":
                 answer = {"verified": True, "findings": [], "consequences": []}
             return {**base, "text": json.dumps(answer), "tokens": {"input": 15000, "output": 400}}
@@ -684,6 +696,8 @@ class AReviewThatSpendsItsCeilingIsAskedLowerThenOnAnotherModelTests(ReviewTests
             if key == "technical-editor" and variant not in self.variants and model not in self.models:
                 return {**base, "text": "", "tokens": {"input": 13379, "output": 0, "reasoning": 35000}}
             answer = {"findings": [], "verdict": "faithful"}
+            if role == "cold-reader":
+                answer = cold_answer()
             if role == "technical-editor":
                 answer = {"verified": True, "findings": [], "consequences": []}
             if role == "reviser":
@@ -841,7 +855,7 @@ class TheChapterReviewersInputDoesNotGrowTests(ReviewTests):
 
     def quiet(self, **halves):
         answers = {
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"verified": True, "findings": []}],
             "technical-contract": [{"verified": True, "findings": [], "consequences": []}],
         }
@@ -997,7 +1011,7 @@ class SettlementHelpers:
     def verifying_reviews(self, *verifier_answers):
         """The canon half raises an objective blocker, so a verifier is asked."""
         return {
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [self.FINDING], "consequences": [self.CONSEQUENCE]}, *verifier_answers],
         }
 
@@ -1086,7 +1100,7 @@ class AKilledReviewBatchKeepsWhatWasPaidForTests(SettlementHelpers, ReviewTests)
                     raise SystemExit("killed by the wrapper's timeout")
                 return super().__call__(role, envelope, attempt_dir)
 
-        provider = KilledAfterTheColdReader({"cold-reader": [{"findings": []}]})
+        provider = KilledAfterTheColdReader({"cold-reader": [cold_answer()]})
         with self.assertRaises(SystemExit):
             self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
         test.assertTrue(cold_path.is_file(), "the cold reader's paid answer is on disk")
@@ -1094,7 +1108,7 @@ class AKilledReviewBatchKeepsWhatWasPaidForTests(SettlementHelpers, ReviewTests)
 
     def test_one_unusable_review_does_not_discard_the_others(self):
         provider = ScriptedProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [Raw("I could not settle on an answer.")],
         })
         with self.assertRaises(self.bf.BookForgeError):
@@ -1112,7 +1126,7 @@ class AMalformedAnswerIsAskedAgainBeforeBlockingTests(SettlementHelpers, ReviewT
 
     def test_a_malformed_revision_is_asked_again_in_the_same_pass(self):
         provider = ScriptedProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [], "consequences": []}],
             "reviser": [Raw(MALFORMED_REVISION), self.reviser()],
         })
@@ -1124,7 +1138,7 @@ class AMalformedAnswerIsAskedAgainBeforeBlockingTests(SettlementHelpers, ReviewT
     def test_a_reviser_malformed_on_every_ask_is_bounded_and_blocks(self):
         asks = self.bf.MALFORMED_ANSWER_ASKS
         provider = ScriptedProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [], "consequences": []}],
             "reviser": [Raw(MALFORMED_REVISION)] * asks,
         })
@@ -1138,7 +1152,7 @@ class AMalformedAnswerIsAskedAgainBeforeBlockingTests(SettlementHelpers, ReviewT
     def test_a_revision_that_parses_but_fails_validation_is_not_asked_again(self):
         """Only the unreadable answer is variance; a wrong one is a finding."""
         provider = ScriptedProvider({
-            "cold-reader": [{"findings": []}],
+            "cold-reader": [cold_answer()],
             "technical-editor": [{"findings": [], "consequences": []}],
             "reviser": [{**self.reviser(), "reader_state": ""}],
         })

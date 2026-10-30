@@ -6234,7 +6234,7 @@ never explained, and the cold reader never flagged one of them.
 
 Done 2026-10-30: `_cold_reader_capsule` builds the stranger's capsule; `tests/test_cold_reader_stranger.py` (3 tests) plus the full suite green (1035).
 
-### M68 — The cold reader says what happened and what it could not define 🔄
+### M68 — The cold reader says what happened and what it could not define ✅
 
 **Why:** The same read found that five of six chapters summarise in one
 sentence and that nothing in the pipeline asks what happened in a chapter or
@@ -6242,24 +6242,26 @@ what a reader could not define. `P/cold-reader.md` asks only for stumbles
 (clarity, pacing, emotion, agency, promise-payoff, continuity-gap) and caps the
 answer at `REVIEW_MAX_FINDINGS`.
 
-- [~] The answer gains three fields beside `findings`: `events` (what a
+- [x] The answer gains three fields beside `findings`: `events` (what a
   character does in this chapter that changes the situation, one line each,
   at most 5), `undefined_terms` (invented words or institutions the text uses
   without making clear what they are, each with a quote, at most 8) and
   `stakes` (one line: what the protagonist can gain or lose here, or the empty
   string when the text gives none).
-- [ ] After validation the engine adds findings of its own, `source: engine`,
+- [x] After validation the engine adds findings of its own, `source: engine`,
   `severity: blocking`: dimension `pacing` when `events` is empty or `stakes`
   is empty; dimension `clarity` when `undefined_terms` holds more than
   `review.max_undefined_terms` (default 3, read from the project's
   `book-forge.yaml`). Each carries the offending list as evidence.
-- [ ] The schema validator accepts the new fields and refuses an answer
+- [x] The schema validator accepts the new fields and refuses an answer
   without them.
-- [ ] Tests: an answer with no events yields the blocking `pacing` finding; an
+- [x] Tests: an answer with no events yields the blocking `pacing` finding; an
   answer with four undefined terms yields the blocking `clarity` finding at the
   default cap and none at a cap of 5.
 
-### M69 — A finding about clarity or story cannot be waved off — pending
+Done 2026-10-30: `_validate_cold_reader_result` and `_cold_reader_engine_findings`; `tests/test_cold_reader_report.py`; three provider fixtures (`test_advance`, `test_pivotal`, `test_e2e`) and `test_review` gained the new fields. Full suite green (1041).
+
+### M69 — A finding about clarity or story cannot be waved off 🔄
 
 **Why:** The reviewer that rewrites the chapter is the model that wrote it, and
 `dispositions.json` shows it marking findings `dismissed` or `accepted-risk`
