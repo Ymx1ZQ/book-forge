@@ -9946,8 +9946,35 @@ def _repetition_findings(prose: str) -> list[dict[str, object]]:
     return findings
 
 
+STYLE_BLOCKING_KINDS = frozenset({"no-want", "term-overload"})
+
+
+def _validate_style_review_result(value: dict[str, object]) -> None:
+    """A style finding may be blocking for two named shapes, and only these.
+
+    `no-want` is a chapter in which nobody wants anything and nothing is in the
+    way. `term-overload` is a chapter that opens more invented terms without
+    making them concrete than `review.max_undefined_terms` allows. Every other
+    style finding is advisory, so `warning` and `note` need no `kind`.
+    """
+    findings = value.get("findings")
+    if not isinstance(findings, list):
+        raise BookForgeError("Style review output has no findings list")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise BookForgeError("Style review finding is not an object")
+        if finding.get("severity") != "blocking":
+            continue
+        kind = finding.get("kind")
+        if kind not in STYLE_BLOCKING_KINDS:
+            raise BookForgeError(
+                f"Blocking style finding {finding.get('id')} needs kind "
+                f"{' or '.join(sorted(STYLE_BLOCKING_KINDS))}; got {kind!r}"
+            )
+
+
 def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
-    """Chorus style review on chapters: tag-aware, advisory only (note/warning, never blocking). On by default, opt-out via chorus.style_review: false. Supports per-tag rules with rewrite."""
+    """Chorus style review on chapters: tag-aware, advisory except for the two kinds that may block. On by default, opt-out via chorus.style_review: false. Supports per-tag rules with rewrite."""
     try:
         config = _read_json(root / "book-forge.yaml")
     except Exception:
@@ -9988,8 +10015,6 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
     def _normalize(f, slug):
         f = dict(f)
         f["dimension"] = "style"
-        if f.get("severity") == "blocking":
-            f["severity"] = "warning"
         # Every reviewer numbers its own findings from 01, so without the reviewer's
         # name four of them share one identifier: the reviser is asked to disposition
         # four different requests that answer to `S-01`, and three vanish whatever it
@@ -10008,6 +10033,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             task = next((row for row in plan["tasks"] if row["id"] == task_id), None)
             if out_path.is_file() and task and task["state"] == "succeeded":
                 value = _read_json(out_path)
+                _validate_style_review_result(value)
                 findings.extend(_normalize(f, slug) for f in value.get("findings", []))
                 continue
             if not task:
@@ -10022,6 +10048,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             result = runner(role, envelope, attempt_dir)
             mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
             value = _parse_contract_json(str(result["text"]))
+            _validate_style_review_result(value)
             findings.extend(_normalize(f, slug) for f in value.get("findings", []))
             try:
                 _materialize_review_result(root, task_id, claim, envelope, result, value)
@@ -10041,7 +10068,7 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
             except Exception:
                 pass
             continue
-    return [f for f in findings if f.get("severity") in ("note", "warning")]
+    return [f for f in findings if f.get("severity") in ("note", "warning", "blocking")]
 
 def _validate_revision(
     contract: dict[str, object],
@@ -10090,6 +10117,15 @@ def _validate_revision(
         validated_row = validated_by.get(str(finding["id"]))
         if isinstance(validated_row, dict):
             validated_row.setdefault("supersedes", disposition.get("supersedes", []))
+        if (
+            finding.get("severity") == "blocking"
+            and finding.get("dimension") in {"clarity", "pacing"}
+            and disposition["action"] != "repaired"
+        ):
+            raise BookForgeError(
+                f"Blocking {finding['dimension']} finding {finding['id']} cannot be "
+                f"{disposition['action']}; only 'repaired' is accepted"
+            )
         if finding.get("objective") and finding["severity"] == "blocking" and disposition["action"] != "repaired":
             raise BookForgeError(f"Objective blocker {finding['id']} cannot be dismissed")
     revised_rows = value.get("consequences", [])

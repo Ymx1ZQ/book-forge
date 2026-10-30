@@ -6261,7 +6261,7 @@ answer at `REVIEW_MAX_FINDINGS`.
 
 Done 2026-10-30: `_validate_cold_reader_result` and `_cold_reader_engine_findings`; `tests/test_cold_reader_report.py`; three provider fixtures (`test_advance`, `test_pivotal`, `test_e2e`) and `test_review` gained the new fields. Full suite green (1041).
 
-### M69 — A finding about clarity or story cannot be waved off 🔄
+### M69 — A finding about clarity or story cannot be waved off ✅
 
 **Why:** The reviewer that rewrites the chapter is the model that wrote it, and
 `dispositions.json` shows it marking findings `dismissed` or `accepted-risk`
@@ -6271,18 +6271,20 @@ are `warning` or `note` only, so no style reviewer can stop a chapter.
 to be dispositioned, but allows any action except for `objective` blocking
 findings (~line 9978).
 
-- [ ] A blocking finding with dimension `clarity` or `pacing`, from the cold
+- [x] A blocking finding with dimension `clarity` or `pacing`, from the cold
   reader or from the engine (M68), must be dispositioned `repaired`; the
   validator refuses `dismissed` and `accepted-risk` for it, with a message that
   names the finding.
-- [ ] The style reviewer may report `blocking` for two shapes only: a chapter
+- [x] The style reviewer may report `blocking` for two shapes only: a chapter
   in which nobody wants anything and nothing is in the way, and a chapter that
   opens more invented terms than `review.max_undefined_terms` allows without
   making them concrete. `P/style-review.md` and its schema say so.
-- [ ] Tests: a revision that dismisses a blocking clarity finding is refused
+- [x] Tests: a revision that dismisses a blocking clarity finding is refused
   and one that repairs it is accepted; the style schema accepts `blocking`.
 
-### M70 — The engine counts the shapes the readers named — pending
+Done 2026-10-30: `_validate_revision` refuses anything but `repaired` for a blocking clarity/pacing finding; `_validate_style_review_result` accepts `blocking` for `no-want` and `term-overload` only; the style normaliser no longer downgrades blocking. Full suite green (1050).
+
+### M70 — The engine counts the shapes the readers named 🔄
 
 **Why:** The cold reads counted, per chapter, about 6 similes "the way X
 reads Y" and about 6 objects acting as persons ("the paper came to the table",

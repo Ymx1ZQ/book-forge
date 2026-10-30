@@ -13,7 +13,9 @@ Report, in this order of severity:
 
 Every finding quotes the offending text in `issue` and proposes in `suggestion` a cut or a replacement **shorter than the original**. Name what to remove, not what to add.
 
-Return one JSON object and no fences: `{"findings":[{"id":"01","severity":"warning|note","issue":"quoted text and what it costs the reader","evidence":[{"location":"chapter path","hash":"sha256"}],"suggestion":"the shorter replacement, or the cut"}],"suggestions":["one-sentence overall note"]}`.
+Two findings may be `blocking`, and only these two. Use `kind: "no-want"` for a chapter in which nobody wants anything and nothing is in the way. Use `kind: "term-overload"` for a chapter that opens more invented terms without making them concrete than `review.max_undefined_terms` allows (three by default). Every other finding is `warning` or `note`, needs no `kind`, and cannot be `blocking`.
+
+Return one JSON object and no fences: `{"findings":[{"id":"01","severity":"blocking|warning|note","kind":"no-want|term-overload (optional; only with blocking)","issue":"quoted text and what it costs the reader","evidence":[{"location":"chapter path","hash":"sha256"}],"suggestion":"the shorter replacement, or the cut"}],"suggestions":["one-sentence overall note"]}`.
 
 Read the dialogue separately, and against these five:
 
