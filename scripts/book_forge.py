@@ -849,6 +849,46 @@ _NEGATED_ROW = re.compile(
 _CONTRAST_TURNS = frozenset(
     "a an the for to in of with by from because at on about as what who how why when where".split()
 )
+# The reader's named shapes (M70): a simile introduced by "the way" or "as if /
+# as though", and an inanimate thing acting as if it had a will.
+_SIMILE_WAY = re.compile(
+    r"\b(?P<quote>the\s+way\s+(?!(?:of|to|back|home)\b)[a-z][a-z'-]*(?:\s+[^\s.!?;\n]+)+[^.!?;\n]{0,60})",
+    re.IGNORECASE,
+)
+_SIMILE_AS_IF = re.compile(
+    r"\b(?P<quote>(?:as\s+if|as\s+though)\b[^.!?;\n]{0,80})",
+    re.IGNORECASE,
+)
+# One constant for the subjects the readers saw acting, one for the verbs they
+# acted with. A noun outside this tuple is left alone, whatever verb follows it.
+_INANIMATE_NOUNS = (
+    "paper", "pane", "candle", "lamp", "harbor", "harbour", "dark", "sky",
+    "gold", "mud", "wall", "fen", "road", "city", "town", "door", "gate",
+    "ledger", "screen", "light", "water", "wind", "tide", "night", "dawn",
+    "nave", "wick", "flame",
+)
+_PERSONIFYING_VERBS = (
+    "came to", "woke", "took", "gave", "said", "knew", "wanted", "asked",
+    "drank", "swallowed", "refused", "listened", "watched", "remembered",
+    "held its breath", "spoke", "answered", "waited",
+)
+_INANIMATE_SUBJECT = "|".join(
+    re.escape(noun) for noun in sorted(_INANIMATE_NOUNS, key=len, reverse=True)
+)
+_PERSONIFYING_VERB = "|".join(
+    r"\s+".join(re.escape(part) for part in verb.split())
+    for verb in sorted(_PERSONIFYING_VERBS, key=len, reverse=True)
+)
+_PERSONIFIED = re.compile(
+    r"\b(?P<quote>(?:the|a|an|this|that|these|those|his|her|their|its|my|our|your)"
+    rf"\s+(?:(?!of\b)[a-z][a-z'-]*\s+){{0,2}}(?:{_INANIMATE_SUBJECT})\s+(?:{_PERSONIFYING_VERB})\b[^.!?;\n]{{0,80}})",
+    re.IGNORECASE,
+)
+_STYLE_LIMIT_DEFAULTS = (
+    ("simile", "similes_per_chapter", 6),
+    ("personified", "personified_per_chapter", 3),
+    ("motif", "motif_per_chapter", 8),
+)
 
 
 def _narration_spans(paragraph: str) -> list[tuple[str, bool]]:
@@ -869,17 +909,43 @@ def _shape_hits(text: str) -> list[tuple[str, str]]:
             found.append(("negated-contrast", match.group(0)))
     found.extend(("negated-contrast", match.group(0)) for match in _SPLIT_CONTRAST.finditer(text))
     found.extend(("negated-row", match.group(0)) for match in _NEGATED_ROW.finditer(text))
+    found.extend(("simile", match.group("quote")) for match in _SIMILE_WAY.finditer(text))
+    found.extend(("simile", match.group("quote")) for match in _SIMILE_AS_IF.finditer(text))
+    found.extend(("personified", match.group("quote")) for match in _PERSONIFIED.finditer(text))
     return found
 
 
-def prose_tells(markdown: str) -> dict[str, object]:
+def _motif_words(config: dict[str, object] | None) -> list[str]:
+    style = config.get("style") if isinstance(config, dict) else None
+    limits = style.get("limits") if isinstance(style, dict) else None
+    words = limits.get("motif_words", []) if isinstance(limits, dict) else []
+    if not isinstance(words, list):
+        return []
+    found: list[str] = []
+    for word in words:
+        if isinstance(word, str) and word.strip() and word.strip() not in found:
+            found.append(word.strip())
+    return found
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    left = max(text.rfind(mark, 0, start) for mark in ".!?\n") + 1
+    stops = [text.find(mark, end) for mark in ".!?\n" if text.find(mark, end) != -1]
+    right = min(stops) + 1 if stops else len(text)
+    return text[left:right].strip()
+
+
+def prose_tells(markdown: str, config: dict[str, object] | None = None) -> dict[str, object]:
     """Located sentence shapes of generated prose in one chapter's narration.
 
     Deterministic and free: no model call. Each hit is a candidate for the style
-    reviewer, not a verdict. Dialogue matches are counted, not listed.
+    reviewer, not a verdict. Dialogue matches are counted, not listed. Counts are
+    per kind, narration only; motif words come from the project's style limits.
     """
     hits: list[dict[str, object]] = []
+    counts: dict[str, int] = {}
     dialogue = 0
+    motif_words = _motif_words(config)
     paragraphs = [block.strip() for block in markdown.split("\n\n") if block.strip()]
     for number, paragraph in enumerate(paragraphs, 1):
         if paragraph.startswith("#"):
@@ -890,7 +956,45 @@ def prose_tells(markdown: str) -> dict[str, object]:
                     dialogue += 1
                 else:
                     hits.append({"kind": kind, "paragraph": number, "quote": quote.strip()})
-    return {"hits": hits, "dialogue_hits": dialogue}
+                    counts[kind] = counts.get(kind, 0) + 1
+            if not spoken:
+                for word in motif_words:
+                    for match in re.finditer(rf"\b{re.escape(word)}\b", text, re.IGNORECASE):
+                        hits.append({
+                            "kind": "motif", "paragraph": number,
+                            "quote": _sentence_around(text, match.start(), match.end()),
+                        })
+                        counts["motif"] = counts.get("motif", 0) + 1
+    result: dict[str, object] = {"hits": hits, "dialogue_hits": dialogue}
+    if counts:
+        result["counts"] = counts
+    return result
+
+
+def style_limit_findings(
+    counts: dict[str, int], hits: list[dict[str, object]], config: dict[str, object]
+) -> list[dict[str, object]]:
+    """Warning entries for each shape or motif the chapter uses past its limit."""
+    style = config.get("style") if isinstance(config, dict) else None
+    limits = style.get("limits") if isinstance(style, dict) else None
+    if not isinstance(limits, dict):
+        limits = {}
+    findings: list[dict[str, object]] = []
+    for kind, key, default in _STYLE_LIMIT_DEFAULTS:
+        count = counts.get(kind)
+        if not isinstance(count, int):
+            count = sum(1 for hit in hits if isinstance(hit, dict) and hit.get("kind") == kind)
+        limit = limits.get(key, default)
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            limit = default
+        if count <= limit:
+            continue
+        quotes = [
+            str(hit["quote"]) for hit in hits
+            if isinstance(hit, dict) and hit.get("kind") == kind and "quote" in hit
+        ][:8]
+        findings.append({"kind": "style-limit", "of": kind, "count": count, "limit": limit, "quotes": quotes})
+    return findings
 
 
 def _style_review_rules(config: dict[str, object]) -> list[dict[str, object]]:
@@ -10007,9 +10111,12 @@ def _call_style_review(root, book_id, chapter_id, contract, draft, runner):
         # one that was overflowing the reviser downstream of it.
         "answer_bound": f"Report at most {STYLE_MAX_FINDINGS} findings, most severe first.",
     }
-    tells = prose_tells(draft)["hits"]
-    if tells:
-        capsule["prose_tells"] = tells
+    tells = prose_tells(draft, config)
+    if tells["hits"]:
+        capsule["prose_tells"] = tells["hits"]
+    limits = style_limit_findings(tells.get("counts", {}), tells["hits"], config)
+    if limits:
+        capsule["style_limits"] = limits
     findings = []
 
     def _normalize(f, slug):

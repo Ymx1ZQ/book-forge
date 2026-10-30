@@ -6284,7 +6284,7 @@ findings (~line 9978).
 
 Done 2026-10-30: `_validate_revision` refuses anything but `repaired` for a blocking clarity/pacing finding; `_validate_style_review_result` accepts `blocking` for `no-want` and `term-overload` only; the style normaliser no longer downgrades blocking. Full suite green (1050).
 
-### M70 — The engine counts the shapes the readers named 🔄
+### M70 — The engine counts the shapes the readers named ✅
 
 **Why:** The cold reads counted, per chapter, about 6 similes "the way X
 reads Y" and about 6 objects acting as persons ("the paper came to the table",
@@ -6292,7 +6292,7 @@ reads Y" and about 6 objects acting as persons ("the paper came to the table",
 up its men"). `prose_tells` (`scripts/book_forge.py:875`, `_shape_hits`:864)
 finds only the negated contrast.
 
-- [ ] `_shape_hits` also finds, in narration only: (1) the simile shapes
+- [x] `_shape_hits` also finds, in narration only: (1) the simile shapes
   "the way <clause>" and "as if / as though" (kind `simile`); (2) an inanimate
   noun phrase as subject of a verb of will, speech or perception, from a list
   kept in one constant (came to, woke, took, gave, said, knew, wanted, asked,
@@ -6301,17 +6301,19 @@ finds only the negated contrast.
   (kind `motif`) when a chapter uses it more than `style.limits.motif_per_chapter`
   times, the lexicon being the project's `style.limits.motif_words` (default
   empty).
-- [ ] `prose_tells` also returns `counts` per kind. The project's
+- [x] `prose_tells` also returns `counts` per kind. The project's
   `book-forge.yaml` may set `style.limits`: `similes_per_chapter` (default 6),
   `personified_per_chapter` (default 3), `motif_per_chapter` (default 8). A
   count over its limit adds a `warning` finding of kind `style-limit` to the
   style reviewer's capsule, naming the count, the limit and the quotes, and
   `P/style-review.md` tells the reviewer to cut down to the limit.
-- [ ] Tests: each shape is found in a sample and not found in a plain
+- [x] Tests: each shape is found in a sample and not found in a plain
   sentence; a chapter over a limit gets the finding and a chapter under it gets
   none; dialogue matches are counted and not listed, as today.
 
-### M71 — The prompts ask for what a reader needs — pending
+Done 2026-10-30: `_shape_hits` finds simile and personified shapes; `prose_tells` returns `counts` and motif hits; `style_limit_findings` reaches the style reviewer. Full suite green (1063). Open: motif hits are listed one per occurrence, so a chapter of 80 counted words sends 80 hits to the reviewer; M72 measures whether that crowds out the other findings.
+
+### M71 — The prompts ask for what a reader needs 🔄
 
 **Why:** The pipeline's own rules produce the unexplained terms:
 `P/writer.md:7` ("never by glossing it… Introduce no invented term you cannot
