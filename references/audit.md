@@ -27,3 +27,14 @@ audit:
 
 Validation is strict: a non-integer `audit.input_budget` fails closed with `audit.input_budget must be an integer`. `max_output_tokens` budgets are unchanged by this knob.
 
+## Engagement audit
+
+`audit --book BOOK --kind engagement` reads only the book's chapter contracts (`books/BOOK-NNNN/chapters/CH-NNNN.json`) and reports each chapter's status (`ok`, `exempt`, `legacy`); it never calls a model, creates a task, run or receipt, or writes under `.book-forge/`.
+
+- `engagement.missing-field` (blocking): a `legacy` chapter is missing `want`, `obstacle` or `turn`, or carries a `chapter_kind` without a valid `exempt_reason`.
+- `engagement.beat-shape` (blocking): a beat carries bookkeeping or is longer than 900 characters.
+- `engagement.turn-run` (blocking): three consecutive non-exempt chapters share the same `turn.kind`.
+- `engagement.no-clock` (warning): none of the first three non-exempt chapters mentions a deadline, a count of days or hours, a vote, a window or a countdown in `want`, `obstacle` or its beats.
+- `engagement.repeated-opening` (warning): three or more chapters open their first beat with the same first three words.
+- `engagement.wants-in-beats` (warning): a chapter's beats use "want", "wants", "wanted" or "wanting" more than once.
+

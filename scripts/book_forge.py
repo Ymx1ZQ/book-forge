@@ -13651,6 +13651,166 @@ def _set_aside(value: dict[str, object], finding: object, why: str) -> None:
         rows.append({**row, "set_aside": why})
 
 
+_ENGAGEMENT_CLOCK = re.compile(
+    r"\b(deadline|days?|nights?|hours?|minutes?|cycles?|weeks?|countdown|clock|vote|window|due|before dawn|until)\b",
+    re.IGNORECASE,
+)
+_ENGAGEMENT_WANT = re.compile(r"\bwant(s|ed|ing)?\b", re.IGNORECASE)
+
+
+def _engagement_chapter_entries(root: Path, book_id: str) -> list[tuple[str, dict[str, object]]]:
+    book_directory = root / "books" / book_id
+    if not book_directory.is_dir():
+        raise BookForgeError(f"Unknown book: {book_id}")
+    entries: list[tuple[str, dict[str, object]]] = []
+    for path in sorted((book_directory / "chapters").glob("CH-*.json")):
+        row = _read_json(path)
+        entries.append((str(row.get("id") or path.stem), row))
+
+    def sort_key(entry: tuple[str, dict[str, object]]) -> tuple[int, int, str]:
+        order = entry[1].get("order")
+        if isinstance(order, int) and not isinstance(order, bool):
+            return (0, order, entry[0])
+        if isinstance(order, str) and order.isdigit():
+            return (0, int(order), entry[0])
+        return (1, 0, entry[0])
+
+    return sorted(entries, key=sort_key)
+
+
+def _engagement_turn_kind(row: dict[str, object]) -> str | None:
+    turn = row.get("turn")
+    if isinstance(turn, dict) and isinstance(turn.get("kind"), str):
+        return str(turn["kind"])
+    return None
+
+
+def _engagement_beats_text(row: dict[str, object]) -> str:
+    beats = row.get("beats")
+    if not isinstance(beats, list):
+        return ""
+    return "\n".join(str(beat) for beat in beats)
+
+
+def _engagement_opening_words(row: dict[str, object]) -> tuple[str, ...] | None:
+    beats = row.get("beats")
+    if not isinstance(beats, list) or not beats:
+        return None
+    words: list[str] = []
+    for token in re.split(r"\s+", str(beats[0]).strip()):
+        cleaned = re.sub(r"[^\w]", "", token.lower())
+        if cleaned:
+            words.append(cleaned)
+        if len(words) == 3:
+            break
+    return tuple(words) if len(words) == 3 else None
+
+
+def audit_engagement(project: Path | str, book_id: str) -> dict[str, object]:
+    """Read a book's chapter contracts for pacing faults, with no model call.
+
+    This pass only reads `books/BOOK-NNNN/chapters/CH-NNNN.json`; it creates no
+    task, run or receipt and writes nothing under `.book-forge/`."""
+    root = _project_root(project)
+    entries = _engagement_chapter_entries(root, book_id)
+    rows = [(chapter_id, row, _chapter_engagement_status(row)) for chapter_id, row in entries]
+    positions = {chapter_id: index for index, (chapter_id, _row, _status) in enumerate(rows)}
+    raw_findings: list[tuple[int, str, int, dict[str, object]]] = []
+    sequence = 0
+
+    def add(code: str, severity: str, chapter: str, message: str) -> None:
+        nonlocal sequence
+        sequence += 1
+        raw_findings.append((
+            positions[chapter],
+            code,
+            sequence,
+            {"code": code, "severity": severity, "chapter": chapter, "message": message},
+        ))
+
+    for chapter_id, row, status in rows:
+        if status == "legacy":
+            for field_name in _chapter_engagement_missing_fields(row):
+                add("engagement.missing-field", "blocking", chapter_id, f"{chapter_id} is missing {field_name}")
+            if row.get("chapter_kind"):
+                add(
+                    "engagement.missing-field",
+                    "blocking",
+                    chapter_id,
+                    f"{chapter_id} has chapter_kind {row.get('chapter_kind')!r} but no valid exempt_reason",
+                )
+        for problem in _beat_shape_problems(row.get("beats")):
+            add("engagement.beat-shape", "blocking", chapter_id, f"{chapter_id}: {problem}")
+
+    non_exempt = [(chapter_id, row) for chapter_id, row, status in rows if status != "exempt"]
+    for index in range(2, len(non_exempt)):
+        window = non_exempt[index - 2:index + 1]
+        kinds = [_engagement_turn_kind(row) for _chapter_id, row in window]
+        if kinds[0] is not None and kinds[0] == kinds[1] == kinds[2]:
+            first_id, second_id, third_id = (chapter_id for chapter_id, _row in window)
+            add(
+                "engagement.turn-run",
+                "blocking",
+                third_id,
+                f"{first_id}, {second_id} and {third_id} all turn on {kinds[0]}",
+            )
+
+    opening = non_exempt[:3]
+    if len(opening) == 3 and not any(
+        _ENGAGEMENT_CLOCK.search(
+            "\n".join(
+                [str(row.get(key)) for key in ("want", "obstacle") if isinstance(row.get(key), str)]
+                + [_engagement_beats_text(row)]
+            )
+        )
+        for _chapter_id, row in opening
+    ):
+        first_id = opening[0][0]
+        add("engagement.no-clock", "warning", first_id, f"{first_id} opens without a clock in want, obstacle or beats")
+
+    opening_groups: dict[tuple[str, ...], list[str]] = {}
+    for chapter_id, row, _status in rows:
+        words = _engagement_opening_words(row)
+        if words is not None:
+            opening_groups.setdefault(words, []).append(chapter_id)
+    for words, chapter_ids in opening_groups.items():
+        for chapter_id in chapter_ids[2:]:
+            add(
+                "engagement.repeated-opening",
+                "warning",
+                chapter_id,
+                f"{chapter_id} opens with the same three words as earlier chapters: {' '.join(words)}",
+            )
+
+    for chapter_id, row, _status in rows:
+        count = len(_ENGAGEMENT_WANT.findall(_engagement_beats_text(row)))
+        if count > 1:
+            add(
+                "engagement.wants-in-beats",
+                "warning",
+                chapter_id,
+                f"{chapter_id} uses want {count} times in its beats",
+            )
+
+    raw_findings.sort(key=lambda item: (item[0], item[1], item[2]))
+    findings = [finding for _position, _code, _sequence, finding in raw_findings]
+    summary = {"blocking": 0, "warning": 0, "ok": 0, "exempt": 0, "legacy": 0}
+    for finding in findings:
+        summary[str(finding["severity"])] += 1
+    for _chapter_id, _row, status in rows:
+        summary[status] += 1
+    return {
+        "book": book_id,
+        "kind": "engagement",
+        "chapters": [
+            {"id": chapter_id, "status": status, "turn_kind": _engagement_turn_kind(row)}
+            for chapter_id, row, status in rows
+        ],
+        "findings": findings,
+        "summary": summary,
+    }
+
+
 def audit_continuity(
     project: Path | str,
     *,
@@ -15238,6 +15398,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_scope.add_argument("--book")
     audit_scope.add_argument("--relation")
     audit_scope.add_argument("--continuity")
+    audit.add_argument("--kind", choices=("continuity", "engagement"), default="continuity")
     audit.add_argument("--max-jobs", type=int, default=8)
     audit.add_argument("--override", action="store_true")
     chorus = commands.add_parser("chorus")
@@ -15402,7 +15563,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "translate":
             print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
         elif args.command == "audit":
-            print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
+            if args.kind == "engagement":
+                if not args.book:
+                    raise BookForgeError("The engagement audit requires --book BOOK")
+                print(json.dumps(audit_engagement(args.project, args.book), sort_keys=True))
+            else:
+                print(json.dumps(audit_continuity(args.project, book_id=args.book, relation_id=args.relation, continuity_id=args.continuity, max_jobs=args.max_jobs, override=args.override), sort_keys=True))
         elif args.command == "advance":
             print(json.dumps(advance_book(args.project, args.book, locales=args.locale, until=args.until), sort_keys=True))
         elif args.command == "bakeoff":

@@ -6479,10 +6479,17 @@ Approved by the author 2026-10-31, including the required fields.
 
 Done 2026-10-31: `ENGAGEMENT_TURN_KINDS`, `CHAPTER_EXEMPT_KINDS`, `_beat_shape_problems`, `_chapter_engagement_missing_fields`, `_chapter_engagement_status` and the `chapter.engagement-missing`, `chapter.beat-shape`, `chapter.chapter-kind`, `chapter.exempt-reason` findings in `validate_book_design`; designer and writer prompts; `references/design.md`; `tests/test_engagement_fields.py`. The writer's capsule carries the whole contract, so it receives the three fields; the cold reader's does not. Full suite green (1091).
 
-**Step B: the pacing audit**
-- [ ] Role `story-editor` (`P/story-editor.md`) and `audit --kind engagement`: reads the outline and the contracts of a book in act-sized chunks and reports per chapter whether `want`, `obstacle` and `turn` hold against the beats, then flags FLAT (no event or no cost), TALK (people explaining, a meeting, an analysis, a log) and runs of three. The engine adds blocking findings for a FLAT chapter, a run of three, a `turn.kind` or scene shape repeated a third time, an opening without a clock, and no antagonist by the first third; it schedules a contract repair of the flagged chapters only.
+**Step B1: the engagement audit without a model ✅**
+- [x] `audit --book BOOK --kind engagement` (default `--kind` stays the existing continuity audit): no model call, no task created. It reads the book's contracts and reports per chapter its status (`ok`, `exempt`, `legacy`) and these findings: `engagement.missing-field` (blocking), `engagement.beat-shape` (blocking, `_beat_shape_problems`), `engagement.turn-run` (blocking: three consecutive chapters with the same `turn.kind`, exempt chapters skipped), `engagement.no-clock` (warning: none of the first three non-exempt chapters mentions a deadline, a count of days or hours, a vote, a window or a countdown in `want`, `obstacle` or its beats), `engagement.repeated-opening` (warning: three or more chapters whose first beat opens with the same three words) and `engagement.wants-in-beats` (warning: a chapter whose beats use "wants" or "wanting" more than once).
+- [x] Tests with a fixture book that has each fault, and one clean.
+- [x] `references/audit.md` describes the kind and its findings.
+
+Done 2026-10-31: `audit_engagement` and `--kind engagement` on `audit`, `tests/test_engagement_audit.py`, a section in `references/audit.md`. Full suite green (1096).
+
+**Step B2: the story editor**
+- [ ] Role `story-editor` (`P/story-editor.md`) and `audit --kind engagement --editor`: reads the outline and contracts in act-sized chunks and reports per chapter whether `want`, `obstacle` and `turn` hold against the beats, then flags FLAT (no event or no cost), TALK (people explaining, a meeting, an analysis, a log), runs of three and repeated scene shapes. The engine adds blocking findings for a FLAT chapter and a run of three, and schedules a contract repair of the flagged chapters only.
 - [ ] `design` for a book does not report the book as designed while an engagement finding is blocking.
-- [ ] Tests with a fixture outline that has a flat run and one with bookkeeping beats.
+- [ ] Tests with a fixture outline that has a flat run.
 
 **Step C: existing projects**
 - [ ] `audit --kind engagement --fill`: for a chapter that lacks the three fields, the story-editor proposes them from the beats and the engine writes them into the contract through the control plane; the author reviews the diff.
