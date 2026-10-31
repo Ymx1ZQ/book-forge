@@ -6462,6 +6462,20 @@ installing it.
 
 Done 2026-10-31: three rules in `translator.md` and `passage-translator.md`, two defect classes in `locale-reviser.md` and `locale-reader.md`, a `checks.yaml` example in `references/translate.md`, `README.md`, `tests/test_translation_prompts.py`. `test_release_surface` required that no `README.md` exist; it now requires one. The repair-envelope test's budget went from 3000 to 3600 because the translator prompt grew. The suspension mark itself is each project's `checks.yaml` and `style.md`.
 
+### M77 — A book is not designed flat: engagement rules, a beat-shape gate and a pacing audit (proposed)
+
+**Why:** Three read-only analyses on 2026-10-31 of a three-book project (95 chapter contracts) found the same upstream faults in all three books, before any prose existed.
+- Openings without a want or a clock for the POV character; protagonists who receive information instead of choosing; one scene shape repeated four to six times in a book; endings that go slack after the climax; no antagonist with a plan; a reveal given away ten chapters early.
+- `designer.md` already says what a beat is (who wants what, what is in the way, what changed; no mechanism as subject), yet those contracts hold beats such as "Economic anchor enforced per (...)", "Refs: ...", "Seeds Ch.5/Ch.11". Nothing refuses them, and nothing reads the outline as a whole for pacing.
+
+- [ ] `P/designer.md`: engagement rules for the outline and the chapter rows. (1) The first three chapters of a book give the POV character a want and a visible clock. (2) Each chapter has one event a reader could film and one thing the POV character can lose, and ends on a turn (a decision, a loss, a new danger, a new question), never on a recap. (3) No run of three chapters in one thread without a turning point, a new danger or a new question. (4) A scene shape is not used a third time in a book without a changed consequence. (5) A named antagonist or opposing group acts on the page by the end of the first third. (6) After the climax, at most one chapter of consequence. (7) A hint of a reveal is never stated outright more than once before its reveal chapter.
+- [ ] `_beat_shape_problems(beats)` in the design validator: a beat that carries bookkeeping (a `Refs:` line, a `plant` note, a reference of the form `Ch.12` or `B2 Ch.21`, a `writing-notes` remark) or is longer than 900 characters is refused with the offending quote, so the designer repairs it the way a bad title is repaired.
+- [ ] Role `story-editor` (`P/story-editor.md`) and `audit --kind engagement`: reads the outline and the contracts of a book in act-sized chunks and returns, per chapter, the POV character's want, the obstacle, the visible event, the cost and what the chapter ends on, then flags FLAT (no event or no cost), TALK (people explaining, a meeting, an analysis, a log) and runs of three. The engine adds blocking findings for a FLAT chapter, a run of three, a shape repeated a third time, an opening without a clock and no antagonist by the first third, and schedules a contract repair of only the flagged chapters.
+- [ ] `design` for a book does not report the book as designed while an engagement finding is blocking.
+- [ ] Tests for each of the above; a fixture outline with a flat run and one with bookkeeping beats.
+
+Open question for the author: whether `want`, `obstacle` and `turn` become required fields of each chapter row, so the audit and the writer read them directly. It changes the contract schema and every project's chapters, so it is not part of this milestone until approved.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
