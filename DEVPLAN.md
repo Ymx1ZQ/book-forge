@@ -6351,15 +6351,17 @@ anything.
 
 Done 2026-10-30: writer rules 3 and 6 replaced, rule 8 added; style-review items merged; plain-concrete, technical-editor and designer updated; prompt-text tests in `tests/test_world_conformance.py`. Full suite green (1068).
 
-### M72 — Install and measure on a cold read 🔄
+### M72 — Install and measure on a cold read ✅
 
 **Why:** M67..M71 are only worth what a stranger's read says of the next chapter.
 
-- [ ] Full test suite green. Commit and push the skill; `./install.sh --force`
+- [x] Full test suite green. Commit and push the skill; `./install.sh --force`
   from the skill directory.
-- [ ] The measure is the cold reader's own report on the rewritten CH-0001..
+- [x] The measure is the cold reader's own report on the rewritten CH-0001..
   CH-0006 of BOOK-0001 (see `DEVPLAN-CLARITY.md` C5): record here how many
   `events`, `undefined_terms` and `stakes` it reports per chapter.
+
+Done 2026-10-31: installed; full suite green (1071). Cold reader on the rewritten BOOK-0001 CH-0001..CH-0006 reports 4-5 events and 2-6 undefined terms per chapter, with stakes in every chapter; the engine raised a blocking finding in CH-0001, 0002, 0004, 0005, 0006 and the reviser repaired each. Open: the cold reader still lists terms the text defines in a clause (edited eyes, Night-ink), so the cap of 3 is hit by terms the chapter did explain.
 
 ### M73 — A canon character keeps its name through the draft and the revision ✅
 
