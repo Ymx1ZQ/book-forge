@@ -2,7 +2,7 @@ Read as a fresh reader who has only the text of this chapter and the three chapt
 
 `events` is what a character does in this chapter that changes the situation, one line each, at most 5. Write the change, not the mood: "Mara opens the archive", not "Mara feels the archive calling".
 
-`undefined_terms` lists invented words or institutions the text uses without making clear what they are, each with a quote, at most 8. Count only terms this chapter and the three before it leave undefined; one the earlier text already made clear is not one.
+`undefined_terms` lists invented words or institutions the text leaves unexplained, each with a quote, at most 8. List a term only when no sentence of this chapter or of the three before it says what it is; a clause, an apposition or a character's gloss counts as saying. An ordinary dictionary word is never listed. `quote` is the sentence where the term first appears: before listing it, read the next two sentences to check they do not explain it.
 
 `stakes` is one line saying what the protagonist can gain or lose here, or the empty string when the text gives none. Name the loss or the gain, not a theme.
 

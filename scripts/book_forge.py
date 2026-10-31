@@ -859,6 +859,19 @@ _SIMILE_AS_IF = re.compile(
     r"\b(?P<quote>(?:as\s+if|as\s+though)\b[^.!?;\n]{0,80})",
     re.IGNORECASE,
 )
+# "like a wall", the commonest simile: a determiner and one to six words after
+# "like", up to the next punctuation. The word before "like" tells a simile apart
+# from a verb of appearance or a wish, and those are filtered below.
+_SIMILE_LIKE = re.compile(
+    r"\b(?:(?P<before>[a-z][a-z'-]*)\s+)?"
+    r"(?P<quote>like\s+(?:a|an|the|some|his|her|their)\s+"
+    r"[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,5})",
+    re.IGNORECASE,
+)
+_SIMILE_LIKE_BEFORE = frozenset(
+    "look looks looked looking feel feels felt feeling seem seems seemed "
+    "something would".split()
+)
 # One constant for the subjects the readers saw acting, one for the verbs they
 # acted with. A noun outside this tuple is left alone, whatever verb follows it.
 _INANIMATE_NOUNS = (
@@ -909,8 +922,19 @@ def _shape_hits(text: str) -> list[tuple[str, str]]:
             found.append(("negated-contrast", match.group(0)))
     found.extend(("negated-contrast", match.group(0)) for match in _SPLIT_CONTRAST.finditer(text))
     found.extend(("negated-row", match.group(0)) for match in _NEGATED_ROW.finditer(text))
-    found.extend(("simile", match.group("quote")) for match in _SIMILE_WAY.finditer(text))
-    found.extend(("simile", match.group("quote")) for match in _SIMILE_AS_IF.finditer(text))
+    way_matches = list(_SIMILE_WAY.finditer(text))
+    as_if_matches = list(_SIMILE_AS_IF.finditer(text))
+    found.extend(("simile", match.group("quote")) for match in way_matches)
+    found.extend(("simile", match.group("quote")) for match in as_if_matches)
+    simile_spans = [match.span("quote") for match in way_matches + as_if_matches]
+    for match in _SIMILE_LIKE.finditer(text):
+        before = (match.group("before") or "").lower()
+        start, end = match.span("quote")
+        if before in _SIMILE_LIKE_BEFORE:
+            continue
+        if any(left < end and start < right for left, right in simile_spans):
+            continue
+        found.append(("simile", match.group("quote")))
     found.extend(("personified", match.group("quote")) for match in _PERSONIFIED.finditer(text))
     return found
 

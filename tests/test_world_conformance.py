@@ -132,6 +132,11 @@ class PromptContractTests(unittest.TestCase):
         prompt = self.read("designer.md")
         self.assertIn("`when` is a year or a decade", prompt)
 
+    def test_the_cold_reader_lists_only_unexplained_terms(self):
+        prompt = self.read("cold-reader.md")
+        self.assertIn("no sentence", prompt)
+        self.assertIn("ordinary", prompt)
+
 
 class RepetitionTests(unittest.TestCase):
     def setUp(self):

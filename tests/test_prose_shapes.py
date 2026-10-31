@@ -43,6 +43,15 @@ class ProseShapeTests(unittest.TestCase):
         self.assertEqual(self.kinds("The paper moved as if a hand had touched it."), ["simile"])
         self.assertEqual(self.kinds("It was quiet as though the room held its breath."), ["simile"])
 
+    def test_like_a_wall_is_a_simile(self):
+        result = self.result("The sea stood like a wall.")
+        self.assertEqual([hit["kind"] for hit in result["hits"]], ["simile"])
+        self.assertEqual(result["counts"], {"simile": 1})
+
+    def test_appearance_and_wish_with_like_are_not_similes(self):
+        for text in ("It looked like rain.", "She would like tea.", "It felt like a stone."):
+            self.assertEqual(self.kinds(text), [], text)
+
     def test_dialogue_shapes_are_counted_not_listed(self):
         result = self.result('"The paper came to the table," she said.')
         self.assertEqual(result["hits"], [])

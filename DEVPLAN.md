@@ -6389,6 +6389,32 @@ chapters.
 
 Done 2026-10-31: `_block_content` prefixes an imported block with its entity heading; reviser and technical-editor prompts carry the no-rename rule; `tests/test_import_names.py`. Full suite green (1071).
 
+### M74 — The cold reader lists only terms the text leaves unexplained; the scanner counts "like a" similes ✅
+
+**Why:** Measured on 2026-10-31 on the rewritten BOOK-0001 CH-0001..CH-0006.
+- The cold reader listed terms the chapter had defined in a clause ("edited /
+  clear-eyed" and "Night-ink" in CH-0001), so the cap of
+  `review.max_undefined_terms` was reached by terms the text had explained and the
+  engine raised a blocking `clarity` finding for nothing.
+- `prose_tells` counts "the way <clause>" and "as if/though" (1-4 per chapter in
+  the final texts) but not "like a/an/the <noun>", the commonest simile of these
+  chapters ("like breath on glass", "like water leaving a mudflat"). A hand count
+  gives 0-2 more per chapter, all inside the limit of 6, so the limit stays a
+  warning and is not made blocking.
+
+- [x] `P/cold-reader.md`: `undefined_terms` lists a term only when no sentence of
+  the chapter or of the three before it says what it is, even briefly (a clause,
+  an apposition or a character's gloss counts as saying); an ordinary word is
+  never listed; each entry's `quote` is the sentence where the term first appears
+  and the reader checks the next two sentences before listing it.
+- [x] `_shape_hits` finds kind `simile` for "like a/an/the/some/his/her <words>" in
+  narration, excluding "look(s|ed) like", "feel(s|t) like", "seem(s|ed) like",
+  "something like", "like this/that" and "would like".
+- [x] Tests: the prompt carries the new rule text; "The sea stood like a wall"
+  is found, "It looked like rain" and "She would like tea" are not.
+
+Done 2026-10-31: cold-reader `undefined_terms` rule and `_SIMILE_LIKE`; full suite green (1074).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
