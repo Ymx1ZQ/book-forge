@@ -3,6 +3,7 @@
 Use this route only for `run`.
 
 The helper selects the next unfinished chapter from stable chapter contracts.
+Before it starts, it reads the book's contracts; a contract without `want`, `obstacle` and `turn` (or a valid `chapter_kind` with an `exempt_reason`) stops the run and names the chapter and the missing fields until the contract is repaired.
 For an ordinary chapter, the first unit drafts once and the next unit runs two
 independent reviews concurrently plus one reviser. A pivotal chapter runs two
 blind drafts, one judge, the two reviews, and one reviser in a single bounded

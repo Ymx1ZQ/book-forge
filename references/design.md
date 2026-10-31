@@ -8,6 +8,7 @@ Use this route only for `design`.
 - `design book --book BOOK-ID` makes the same two-call pattern for premise,
   causal arc, entry/exit state, chapter contracts, relation imports, and exact
   obligation targets.
+- `design sync-outline --book BOOK-ID` copies each contract's `beats`, `want`, `obstacle`, `turn`, `chapter_kind`, `exempt_reason`, `plants` and `obligations` into the matching `outline.yaml` row, keeps the file's JSON formatting, creates no task or receipt, and reports how many fields changed.
 - Run the helper once. It constructs bounded context, invokes the pinned
   OpenCode agents, validates their JSON contracts, and promotes outputs.
 - If validation or the independent audit blocks, report the evidence and stop.
@@ -15,7 +16,9 @@ Use this route only for `design`.
 
 ## Chapter engagement fields
 
-Every chapter row of a new book carries `want` (what the POV character wants in the chapter), `obstacle` (what stands in the way) and `turn` (`{"kind":"decision|loss|danger|question|reveal","text":"..."}`, how the chapter ends); a `prologue`, `interlude` or `epilogue` may set `chapter_kind` and a non-empty `exempt_reason` instead, and a `chapter_kind` without a reason is refused. A contract written before these fields existed is reported as legacy by `_chapter_engagement_status` and still loads and runs, while a new design that omits them is refused with the chapter and the missing field named.
+Every chapter row of a new book carries `want` (what the POV character wants in the chapter), `obstacle` (what stands in the way) and `turn` (`{"kind":"decision|loss|danger|question|reveal","text":"..."}`, how the chapter ends); a `prologue`, `interlude` or `epilogue` may set `chapter_kind` and a non-empty `exempt_reason` instead, and a `chapter_kind` without a reason is refused. A contract without them stops `run` until it is repaired, naming the chapter and the missing fields.
+
+A beat is one thing that happens on the page, in one or two sentences, with a person as its subject, in plain active prose; what the character wants and what stands in the way live in `want` and `obstacle`, not in the beats, and a chapter whose beats use "want" more than once is refused. A beat longer than 450 characters is refused with `chapter.beat-too-long`, and bookkeeping is still refused by `_beat_shape_problems`, including its 900-character limit. A chapter may carry `new_terms`, an optional list of at most three `{"term":"...","definition":"one plain sentence"}` objects naming the coined words the chapter introduces; a value that is not a list, has more than three entries, or lacks a non-empty `term` and `definition` in an entry is refused with `chapter.new-terms`.
 
 ## Author brief is mandatory for books
 

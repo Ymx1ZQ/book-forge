@@ -4,7 +4,7 @@ How to write it. Where these conflict, the earlier one wins.
 
 1. Put a named person on the page in the first paragraph and keep them there. A role, a rank or a title is not a character.
 2. In every scene someone wants something and something is in the way. When a beat describes a mechanism, an institution or a rule, dramatise who it presses on and what they do about it — never report it.
-3. Define a new invented term in one plain sentence the first time it appears, in the viewpoint character's own words. At most three new terms enter a chapter. A term already defined is used without explanation.
+3. Define a new invented term in one plain sentence the first time it appears, in the viewpoint character's own words. At most three new terms enter a chapter. A term already defined is used without explanation. The terms listed in the contract's `new_terms` are defined in that chapter, each in one plain sentence, using its `definition`.
 4. Prefer the thing to the statement about the thing. A sentence that tells the reader what something means is weaker than the thing doing it.
 5. When two people share a scene, let them speak. Dialogue applies pressure that narration only describes. Five rules govern it, and they are the difference between people and a chorus:
    - No line states the theme. If a line could be printed as the book's epigraph, it is the author talking and it goes.

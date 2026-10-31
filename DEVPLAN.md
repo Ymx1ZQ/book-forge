@@ -6495,9 +6495,18 @@ The skill already has an advisory reader of the designed book, `chorus-bestselle
 
 Done 2026-10-31: `chorus-bestseller.md` carries the seven rules and the finding codes; the post-design scope carries the whole chapter row, so the three fields reach the advisor without an engine change; `tests/test_chorus_engagement.py`. Full suite green (1098).
 
-**Step C: existing projects**
-- [ ] `audit --kind engagement --fill`: for a chapter that lacks the three fields, the story-editor proposes them from the beats and the engine writes them into the contract through the control plane; the author reviews the diff.
-- [ ] Run on the three projects on this machine; their contracts are repaired from the audit's findings rather than by hand.
+**Step C: no legacy**
+All three projects on this machine carry the fields on every contract (2026-10-31), so the legacy path is removed rather than kept.
+- [x] `design sync-outline --book BOOK`: zero-model; copies `beats`, `want`, `obstacle`, `turn`, `chapter_kind`, `exempt_reason`, `plants` and `obligations` of each contract into the matching `outline.yaml` row, keeping the file's JSON formatting, and reports how many fields changed. `outline.yaml` holds a copy of every chapter row, so a contract edited on its own leaves the copy stale.
+- [x] A contract on disk without the three fields (and without a valid exemption) is an error: `run` for the book refuses to start and names the chapters and the missing fields; `_chapter_engagement_status` returns `ok`, `exempt` or `invalid`; `validate_book_design` no longer takes `legacy_ids`.
+- [x] Test fixtures that build contracts carry the fields through one helper.
+
+**Step A2: beats are events, terms are declared**
+Measured with the engagement audit on 2026-10-31: the verb "want" appears in the beats of 26 of 26 chapters of one project, 15 of 30 of another, 11 of 40 of a third, because the beat was defined as "who wants what, what is in the way, what has changed" while `want` and `obstacle` now have fields of their own; and a chapter's beats introduce coined words the book never defines.
+- [x] `P/designer.md`: a beat is one thing that happens on the page, in one or two sentences, with a person as its subject; what the character wants and what is in the way live in `want` and `obstacle`, not in the beats. Each chapter row may carry `new_terms`: a list of at most three `{"term", "definition"}` objects, one plain sentence each, naming the coined words the chapter introduces; the writer defines each in that chapter.
+- [x] `validate_book_design`: a beat longer than 450 characters, or a chapter whose beats use "want" more than once, is a blocking finding; `new_terms` with more than three entries or a malformed entry is blocking.
+- [x] `audit --kind engagement`: `engagement.long-beat` and `engagement.wants-in-beats` (already there) report the same limits as warnings on contracts already on disk; `engagement.too-many-terms` is a warning.
+- [x] Tests for each; `references/design.md` describes `new_terms`.
 
 ### Dependencies and exclusions
 

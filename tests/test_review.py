@@ -7,6 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
+from engagement_support import with_engagement_fields
+
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
 MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
@@ -85,11 +87,11 @@ class ReviewTests(unittest.TestCase):
         self.book = self.bf.add_book(self.project, "Book")["id"]
         chapter_dir = self.project / f"books/{self.book}/chapters"
         chapter_dir.mkdir()
-        contract = {
+        contract = with_engagement_fields({
             "schema": 1, "book": self.book, "id": "CH-0001", "order": 1,
             "pov": "CHR-0001", "beats": ["Find signal"], "plants": [], "reveals": [],
             "target_words": 700, "imports": ["UNI-0001#kernel"], "pivotal": None,
-        }
+        })
         (chapter_dir / "CH-0001.json").write_text(json.dumps(contract))
         draft = {
             "prose_markdown": prose(), "beat_map": [{"beat": "Find signal", "evidence": "found"}],

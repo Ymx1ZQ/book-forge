@@ -5331,6 +5331,10 @@ _BEAT_BOOKKEEPING_PATTERNS = (
     re.compile(r"\bCHORUS\b", re.IGNORECASE),
 )
 
+_MAX_BEAT_CHARACTERS = 450
+_MAX_NEW_TERMS = 3
+_BEAT_WANT = re.compile(r"\bwant(s|ed|ing)?\b", re.IGNORECASE)
+
 
 def _beat_shape_problems(beats: object) -> list[str]:
     """Bookkeeping that belongs in the design's notes, not in a beat.
@@ -5350,6 +5354,32 @@ def _beat_shape_problems(beats: object) -> list[str]:
             continue
         if any(pattern.search(text_value) for pattern in _BEAT_BOOKKEEPING_PATTERNS):
             problems.append(f"beat carries bookkeeping: {quote!r}")
+    return problems
+
+
+def _new_terms_problems(terms: object) -> list[str]:
+    """Why a chapter's `new_terms` cannot be handed to a writer.
+
+    The field is optional, so an absent value is not a problem. A present value
+    must be a short list of objects that each name a coined word and define it in
+    one plain sentence."""
+    if terms is None:
+        return []
+    if not isinstance(terms, list):
+        return ["new_terms is not a list"]
+    problems: list[str] = []
+    if len(terms) > _MAX_NEW_TERMS:
+        problems.append(f"new_terms has {len(terms)} entries, more than {_MAX_NEW_TERMS}")
+    for entry in terms:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("term"), str)
+            or not entry["term"].strip()
+            or not isinstance(entry.get("definition"), str)
+            or not entry["definition"].strip()
+        ):
+            quote = str(entry)[:90]
+            problems.append(f"new_terms entry needs a non-empty term and definition: {quote!r}")
     return problems
 
 
@@ -5374,15 +5404,16 @@ def _chapter_engagement_status(row: dict[str, object]) -> str:
     """Whether a chapter row carries what a reader needs from it.
 
     `ok` is a row with a want, an obstacle and a turn. `exempt` is a prologue,
-    interlude or epilogue that says why it stands outside the spine. `legacy` is
-    any other row without the three fields: it was written before they were
-    required, so it still loads and runs. A new design refuses it."""
+    interlude or epilogue that says why it stands outside the spine. `invalid`
+    is any other row: it lacks the three fields, or names a chapter_kind without
+    a valid exemption. There is no legacy status; every contract must carry
+    them before a book runs."""
     if row.get("chapter_kind"):
         if row.get("chapter_kind") in CHAPTER_EXEMPT_KINDS and str(row.get("exempt_reason") or "").strip():
             return "exempt"
-        return "legacy"
+        return "invalid"
     if _chapter_engagement_missing_fields(row):
-        return "legacy"
+        return "invalid"
     return "ok"
 
 
@@ -5390,14 +5421,11 @@ def validate_book_design(
     project: Path | str,
     book_id: str,
     proposal: dict[str, object],
-    *,
-    legacy_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     root = _project_root(project)
     if book_id not in {str(book["id"]) for book in list_books(root)}:
         raise BookForgeError(f"Unknown book: {book_id}")
     findings: list[dict[str, object]] = []
-    legacy = {str(value) for value in (legacy_ids or set())}
     chapters = proposal.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         return [{"code": "chapters.empty", "severity": "blocking"}]
@@ -5415,16 +5443,34 @@ def validate_book_design(
         if _title_is_beat_prefix(chapter):
             findings.append({"code": "chapter.title-from-beat", "severity": "warning", "chapter": chapter.get("id"), "title": chapter.get("title")})
         chapter_id = str(chapter.get("id") or "")
-        if chapter_id in legacy:
-            continue
         chapter_kind = chapter.get("chapter_kind")
         if chapter_kind and chapter_kind not in CHAPTER_EXEMPT_KINDS:
             findings.append({"code": "chapter.chapter-kind", "severity": "blocking", "chapter": chapter_id, "chapter_kind": chapter_kind, "message": f"{chapter_id} has an unknown chapter_kind {chapter_kind!r}"})
         elif chapter_kind and not str(chapter.get("exempt_reason") or "").strip():
             findings.append({"code": "chapter.exempt-reason", "severity": "blocking", "chapter": chapter_id, "field": "exempt_reason", "message": f"{chapter_id} names a chapter_kind but has no exempt_reason"})
-        if _chapter_engagement_status(chapter) == "legacy" and not chapter_kind:
+        if _chapter_engagement_status(chapter) == "invalid":
             for field_name in _chapter_engagement_missing_fields(chapter):
                 findings.append({"code": "chapter.engagement-missing", "severity": "blocking", "chapter": chapter_id, "field": field_name, "message": f"{chapter_id} is missing {field_name}"})
+        beats = chapter.get("beats")
+        if isinstance(beats, list):
+            for beat in beats:
+                if len(str(beat)) > _MAX_BEAT_CHARACTERS:
+                    findings.append({
+                        "code": "chapter.beat-too-long",
+                        "severity": "blocking",
+                        "chapter": chapter_id,
+                        "message": f"{chapter_id} has a beat longer than {_MAX_BEAT_CHARACTERS} characters: {str(beat)[:90]!r}",
+                    })
+            want_count = len(_BEAT_WANT.findall("\n".join(str(beat) for beat in beats)))
+            if want_count > 1:
+                findings.append({
+                    "code": "chapter.wants-in-beats",
+                    "severity": "blocking",
+                    "chapter": chapter_id,
+                    "message": f"{chapter_id} uses want {want_count} times in its beats",
+                })
+        for terms_problem in _new_terms_problems(chapter.get("new_terms")):
+            findings.append({"code": "chapter.new-terms", "severity": "blocking", "chapter": chapter_id, "message": f"{chapter_id}: {terms_problem}"})
         for problem in _beat_shape_problems(chapter.get("beats")):
             findings.append({"code": "chapter.beat-shape", "severity": "blocking", "chapter": chapter_id, "message": problem})
     index = rebuild_indexes(root)
@@ -5590,6 +5636,86 @@ def _book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) 
             contract["withheld"] = cut
         outputs[f"books/{book_id}/chapters/{chapter['id']}.json"] = _json_bytes(contract)
     return outputs
+
+
+def _outline_json_style(text: str, value: object) -> tuple[bool, bool, str]:
+    """The json.dumps settings that reproduce an outline file, or the default.
+
+    Projects wrote outline.yaml with different settings over time. Changing it
+    should not reformat every row, so the file's own settings are recovered by
+    re-serializing what was parsed and comparing the bytes."""
+    for ensure_ascii in (False, True):
+        for sort_keys in (True, False):
+            for newline in ("\n", ""):
+                candidate = json.dumps(value, indent=2, ensure_ascii=ensure_ascii, sort_keys=sort_keys) + newline
+                if candidate == text:
+                    return ensure_ascii, sort_keys, newline
+    return False, True, "\n"
+
+
+_OUTLINE_SYNCED_FIELDS = (
+    "beats",
+    "want",
+    "obstacle",
+    "turn",
+    "chapter_kind",
+    "exempt_reason",
+    "plants",
+    "obligations",
+)
+_OUTLINE_REMOVABLE_FIELDS = frozenset({"want", "obstacle", "turn", "chapter_kind", "exempt_reason"})
+
+
+def design_sync_outline(project: Path | str, book_id: str) -> dict[str, object]:
+    """Refresh a book's outline rows from its chapter contracts, with no model.
+
+    `outline.yaml` is a copy of the contract rows. A contract repaired on disk
+    leaves the copy stale, and the designer's next read sees the old answer.
+    Fields the contract no longer carries are removed from the row when they are
+    engagement fields; everything else is copied across. The file is written only
+    when a field changed, and in the JSON style it already used."""
+    root = _project_root(project)
+    if book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    path = root / "books" / book_id / "outline.yaml"
+    if not path.is_file():
+        raise BookForgeError(f"books/{book_id}/outline.yaml does not exist")
+    text = path.read_text(encoding="utf-8")
+    document = _read_json(path)
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        ensure_ascii, sort_keys, newline = False, True, "\n"
+    else:
+        ensure_ascii, sort_keys, newline = _outline_json_style(text, document)
+
+    contracts: dict[str, dict[str, object]] = {}
+    for contract_path in sorted((root / "books" / book_id / "chapters").glob("CH-*.json")):
+        contract = _read_json(contract_path)
+        contracts[str(contract.get("id") or contract_path.stem)] = contract
+
+    changed = 0
+    chapters = document.get("chapters")
+    if isinstance(chapters, list):
+        for row in chapters:
+            if not isinstance(row, dict):
+                continue
+            contract = contracts.get(str(row.get("id") or ""))
+            if contract is None:
+                continue
+            for field_name in _OUTLINE_SYNCED_FIELDS:
+                if field_name in contract:
+                    if field_name not in row or row[field_name] != contract[field_name]:
+                        row[field_name] = contract[field_name]
+                        changed += 1
+                elif field_name in _OUTLINE_REMOVABLE_FIELDS and field_name in row:
+                    del row[field_name]
+                    changed += 1
+
+    if changed:
+        rendered = json.dumps(document, indent=2, ensure_ascii=ensure_ascii, sort_keys=sort_keys) + newline
+        _write_bytes_atomic(path, rendered.encode("utf-8"))
+    return {"book": book_id, "changed": changed}
 
 
 def apply_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> dict[str, object]:
@@ -7064,6 +7190,9 @@ def _book_design_base_capsule(
                         "pov": "stable character ID",
                         "beats": ["causal beat"],
                         "want": "one sentence: what the POV character wants in this chapter",
+                        "new_terms": [
+                            {"term": "a coined word this chapter introduces", "definition": "one plain sentence defining it"}
+                        ],
                         "obstacle": "one sentence: what stands in the way",
                         "turn": {"kind": "decision|loss|danger|question|reveal", "text": "how the chapter ends"},
                         "chapter_kind": None,
@@ -7462,17 +7591,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
             {"schema": 1, "book": book_id, "round": round_number, "advisors": advisors},
         )
         proposal = {**proposal, "chapters": [rewritten.get(str(row.get("id")), row) for row in proposal.get("chapters", [])]}
-        # A chapter that was already on disk before the three fields existed is
-        # allowed to stay legacy; a chapter this round rewrote is a fresh answer
-        # and meets the same gate as a new design.
-        legacy_ids = {
-            str(row.get("id"))
-            for row in proposal.get("chapters", [])
-            if isinstance(row, dict)
-            and str(row.get("id")) not in rewritten
-            and (_chapter_engagement_status(row) == "legacy" or _beat_shape_problems(row.get("beats")))
-        }
-        blocking_findings = [row for row in validate_book_design(root, book_id, proposal, legacy_ids=legacy_ids) if row["severity"] == "blocking"]
+        blocking_findings = [row for row in validate_book_design(root, book_id, proposal) if row["severity"] == "blocking"]
         if blocking_findings:
             raise BookForgeError(f"Repaired design has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
         _write_book_design_outputs(root, book_id, proposal)
@@ -8909,6 +9028,7 @@ def advance_book(
     runner = provider or run_opencode_role
     if book_id not in {str(book["id"]) for book in list_books(root)}:
         raise BookForgeError(f"Unknown book: {book_id}")
+    _assert_engagement_contracts_ready(root, book_id)
     wanted = ADVANCE_STAGES[: ADVANCE_STAGES.index(until) + 1]
     done: dict[str, object] = {"book": book_id, "stages": [], "chapters": 0, "halted": None}
     lock = _advance_lock(root, book_id)
@@ -9053,6 +9173,35 @@ def _log_receipt(done: dict[str, object]) -> None:
     )
 
 
+def _assert_engagement_contracts_ready(root: Path, book_id: str) -> None:
+    """Stop a run at the contracts that cannot be written yet.
+
+    The gate reads the contracts on disk, not the outline copy: a designer may
+    have repaired a row without syncing the outline, and the writer is handed the
+    contract. A contract without a valid exemption and the three engagement
+    fields is refused before a model is called."""
+    problems: list[str] = []
+    for chapter_id, row in _engagement_chapter_entries(root, book_id):
+        if _chapter_engagement_status(row) != "invalid":
+            continue
+        parts: list[str] = []
+        missing = _chapter_engagement_missing_fields(row)
+        if missing:
+            parts.append("missing " + ", ".join(missing))
+        chapter_kind = row.get("chapter_kind")
+        if chapter_kind and chapter_kind not in CHAPTER_EXEMPT_KINDS:
+            parts.append(f"has unknown chapter_kind {chapter_kind!r}")
+        elif chapter_kind and not str(row.get("exempt_reason") or "").strip():
+            parts.append(f"has chapter_kind {chapter_kind!r} without an exempt_reason")
+        problems.append(f"{chapter_id} {' and '.join(parts) if parts else 'is invalid'}")
+    if problems:
+        raise BookForgeError(
+            "Chapter contracts cannot run: "
+            + "; ".join(problems)
+            + f". Repair the contracts under books/{book_id}/chapters before running."
+        )
+
+
 def run_next(
     project: Path | str,
     *,
@@ -9071,6 +9220,7 @@ def run_next(
         books = [book for book in books if book["id"] == book_id]
         if not books:
             raise BookForgeError(f"Unknown book: {book_id}")
+        _assert_engagement_contracts_ready(root, book_id)
     for book in sorted(books, key=lambda row: (int(row.get("order", 0)), str(row["id"]))):
         for contract_path in sorted((root / "books" / str(book["id"]) / "chapters").glob("CH-*.json")):
             contract = _read_json(contract_path)
@@ -13655,7 +13805,7 @@ _ENGAGEMENT_CLOCK = re.compile(
     r"\b(deadline|days?|nights?|hours?|minutes?|cycles?|weeks?|countdown|clock|vote|window|due|before dawn|until)\b",
     re.IGNORECASE,
 )
-_ENGAGEMENT_WANT = re.compile(r"\bwant(s|ed|ing)?\b", re.IGNORECASE)
+_ENGAGEMENT_WANT = _BEAT_WANT
 
 
 def _engagement_chapter_entries(root: Path, book_id: str) -> list[tuple[str, dict[str, object]]]:
@@ -13729,7 +13879,7 @@ def audit_engagement(project: Path | str, book_id: str) -> dict[str, object]:
         ))
 
     for chapter_id, row, status in rows:
-        if status == "legacy":
+        if status == "invalid":
             for field_name in _chapter_engagement_missing_fields(row):
                 add("engagement.missing-field", "blocking", chapter_id, f"{chapter_id} is missing {field_name}")
             if row.get("chapter_kind"):
@@ -13741,6 +13891,24 @@ def audit_engagement(project: Path | str, book_id: str) -> dict[str, object]:
                 )
         for problem in _beat_shape_problems(row.get("beats")):
             add("engagement.beat-shape", "blocking", chapter_id, f"{chapter_id}: {problem}")
+        beats = row.get("beats")
+        if isinstance(beats, list):
+            long_beats = [beat for beat in beats if len(str(beat)) > _MAX_BEAT_CHARACTERS]
+            if long_beats:
+                add(
+                    "engagement.long-beat",
+                    "warning",
+                    chapter_id,
+                    f"{chapter_id} has {len(long_beats)} beat(s) longer than {_MAX_BEAT_CHARACTERS} characters",
+                )
+        terms_problems = _new_terms_problems(row.get("new_terms"))
+        if terms_problems:
+            add(
+                "engagement.too-many-terms",
+                "warning",
+                chapter_id,
+                f"{chapter_id}: " + "; ".join(terms_problems),
+            )
 
     non_exempt = [(chapter_id, row) for chapter_id, row, status in rows if status != "exempt"]
     for index in range(2, len(non_exempt)):
@@ -13794,7 +13962,7 @@ def audit_engagement(project: Path | str, book_id: str) -> dict[str, object]:
 
     raw_findings.sort(key=lambda item: (item[0], item[1], item[2]))
     findings = [finding for _position, _code, _sequence, finding in raw_findings]
-    summary = {"blocking": 0, "warning": 0, "ok": 0, "exempt": 0, "legacy": 0}
+    summary = {"blocking": 0, "warning": 0, "ok": 0, "exempt": 0, "invalid": 0}
     for finding in findings:
         summary[str(finding["severity"])] += 1
     for _chapter_id, _row, status in rows:
@@ -15373,7 +15541,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--locale")
     status.add_argument("--repair-view", action="store_true")
     design = commands.add_parser("design")
-    design.add_argument("scope", choices=("universe", "book"))
+    design.add_argument("scope", choices=("universe", "book", "sync-outline"))
     design.add_argument("--book")
     design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
     design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
@@ -15492,6 +15660,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.repair_view:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
+        elif args.command == "design" and args.scope == "sync-outline":
+            if not args.book:
+                raise BookForgeError("design sync-outline requires --book")
+            print(json.dumps(design_sync_outline(args.project, args.book), sort_keys=True))
         elif args.command == "design" and args.scope == "universe":
             print(json.dumps(execute_universe_design(args.project, chorus_models=args.chorus_models, no_chorus=args.no_chorus, no_post_chorus=args.no_post_chorus, with_chorus_context=args.with_chorus_context, refresh=args.refresh, skip_brief=args.skip_brief), sort_keys=True))
         elif args.command == "design" and args.scope == "book":

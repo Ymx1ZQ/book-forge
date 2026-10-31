@@ -102,10 +102,10 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("A definite article on something", prompt)
         self.assertIn("may be longer than the original", prompt)
 
-    def test_the_designer_requires_a_person_with_a_want_in_each_beat(self):
+    def test_the_designer_requires_a_person_in_each_beat(self):
         prompt = self.read("designer.md")
-        self.assertIn("who wants what, what stands in the way, and what has changed at its end", prompt)
-        self.assertIn("a mechanism, an institution or an object may not be the subject of a beat", prompt)
+        self.assertIn("a beat is one thing that happens on the page, in one or two sentences, with a person as its subject", prompt.lower())
+        self.assertIn("a mechanism, an institution or an object may not be the subject of a beat", prompt.lower())
 
     def test_the_technical_editor_rates_a_wrong_number_as_a_note(self):
         prompt = self.read("technical-editor.md")

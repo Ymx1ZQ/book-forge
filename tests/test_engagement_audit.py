@@ -17,7 +17,7 @@ def load_module():
     return module
 
 
-def row(index, beats, *, turn_kind="decision", want="Mara wants the log.", obstacle="The warden blocks her.", fields=True):
+def row(index, beats, *, turn_kind="decision", want="Mara wants the log.", obstacle="The warden blocks her.", fields=True, **extra):
     value = {
         "id": f"CH-{index:04d}",
         "order": index,
@@ -35,6 +35,7 @@ def row(index, beats, *, turn_kind="decision", want="Mara wants the log.", obsta
         value["want"] = want
         value["obstacle"] = obstacle
         value["turn"] = {"kind": turn_kind, "text": "She chooses the sea."}
+    value.update(extra)
     return value
 
 
@@ -57,7 +58,17 @@ def faulty_book():
 
 def clean_book():
     return [
-        row(1, ["Mara forces the harbour door."], turn_kind="decision", want="Mara wants the log before dawn."),
+        row(
+            1,
+            ["Mara forces the harbour door."],
+            turn_kind="decision",
+            want="Mara wants the log before dawn.",
+            new_terms=[
+                {"term": "tide", "definition": "The sea's daily rise."},
+                {"term": "warden", "definition": "The keeper of the harbour door."},
+                {"term": "log", "definition": "The harbour's record of arrivals."},
+            ],
+        ),
         row(2, ["The warden counts the hours."], turn_kind="loss", obstacle="The tide turns in two hours."),
         row(3, ["A gull steals the key."], turn_kind="danger", obstacle="The vote closes at dusk."),
         row(4, ["The keeper lights the lamp."], turn_kind="question"),
@@ -105,7 +116,7 @@ class EngagementAuditTests(unittest.TestCase):
             ["CH-0012", "CH-0012", "CH-0012"],
         )
         self.assertEqual(result["findings"][1]["message"], "CH-0004, CH-0005 and CH-0006 all turn on decision")
-        self.assertEqual(result["summary"], {"blocking": 5, "warning": 3, "ok": 11, "exempt": 0, "legacy": 1})
+        self.assertEqual(result["summary"], {"blocking": 5, "warning": 3, "ok": 11, "exempt": 0, "invalid": 1})
         self.assertEqual(
             [(chapter["id"], chapter["status"], chapter["turn_kind"]) for chapter in result["chapters"][:3]],
             [("CH-0001", "ok", "decision"), ("CH-0002", "ok", "loss"), ("CH-0003", "ok", "danger")],
@@ -117,7 +128,32 @@ class EngagementAuditTests(unittest.TestCase):
         result = self.bf.audit_engagement(self.project, self.book)
 
         self.assertEqual(result["findings"], [])
-        self.assertEqual(result["summary"], {"blocking": 0, "warning": 0, "ok": 4, "exempt": 0, "legacy": 0})
+        self.assertEqual(result["summary"], {"blocking": 0, "warning": 0, "ok": 4, "exempt": 0, "invalid": 0})
+
+    def test_a_long_beat_is_reported_once_per_chapter_with_its_count(self):
+        self.write_book([row(1, ["The storm " * 60, "A gull falls."])])
+
+        result = self.bf.audit_engagement(self.project, self.book)
+
+        codes = [finding["code"] for finding in result["findings"]]
+        self.assertIn("engagement.long-beat", codes)
+        finding = next(finding for finding in result["findings"] if finding["code"] == "engagement.long-beat")
+        self.assertEqual(finding["severity"], "warning")
+        self.assertEqual(finding["chapter"], "CH-0001")
+        self.assertIn("1", finding["message"])
+
+    def test_too_many_or_malformed_terms_are_reported(self):
+        for terms in ("the tide", [{"term": "tide"}], [{"term": "tide", "definition": "The sea rises."}] * 4):
+            with self.subTest(terms=terms):
+                self.write_book([row(1, ["The tide turns at noon."], new_terms=terms)])
+
+                result = self.bf.audit_engagement(self.project, self.book)
+
+                codes = [finding["code"] for finding in result["findings"]]
+                self.assertIn("engagement.too-many-terms", codes)
+                finding = next(finding for finding in result["findings"] if finding["code"] == "engagement.too-many-terms")
+                self.assertEqual(finding["severity"], "warning")
+                self.assertEqual(finding["chapter"], "CH-0001")
 
     def test_the_continuity_audit_still_parses_without_a_kind(self):
         parser = self.bf.build_parser()
