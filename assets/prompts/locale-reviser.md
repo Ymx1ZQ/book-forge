@@ -18,6 +18,8 @@ What that question catches, in any book and any pair of languages:
 - an adjective standing where your language needs a noun, or the reverse
 - a technical word borrowed from the wrong trade, correct in its own field and wrong in this one
 - a measure, a unit or a date written another language's way
+- a subject the reader cannot attribute because two characters act in adjacent sentences and the verb forms do not tell them apart
+- a definite article or a demonstrative on a noun the passage never introduced, where a possessive or an indefinite would say whose or which
 
 You are not hunting mistakes. Most of these sentences are correct. They are correct and foreign, and that is the thing to remove.
 
@@ -28,6 +30,8 @@ You are not hunting mistakes. Most of these sentences are correct. They are corr
 **The names the glossary fixes.** Those strings are the book's, already decided, and not yours to improve. The glossary is a list of names, not a licence for how to build a sentence around them: keep the strings, write everything else freely.
 
 **The register the house style sets**, and the shape of the prose — where the sentences are short they stay short, where a repetition is deliberate it repeats, where a paragraph ends on a gesture it still does.
+
+**The punctuation for speech, interruption and suspension follows the house style file**, never the source's marks, and where the file is silent, the convention native to the language.
 
 ## Evidence from a reader
 

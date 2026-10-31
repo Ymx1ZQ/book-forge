@@ -144,7 +144,7 @@ class RepairEnvelopeTests(TranslationFixture):
 
     def test_repair_drops_the_previous_output_instead_of_overflowing(self):
         provider = Provider([self.bad_translation(4000), translated(1, 1)])
-        self.set_translator_budget(3000)
+        self.set_translator_budget(3600)
 
         result = self.bf.translate_next(self.project, self.book, "it-IT", provider=provider)
 

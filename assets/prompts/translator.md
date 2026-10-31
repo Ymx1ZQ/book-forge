@@ -11,3 +11,9 @@ Translate the meaning, never the words. A construction that is idiomatic in the 
 
 Where the target language plainly does it another way, do it the other way — an idiom for an idiom, agreement and word order as the target takes them. Where you are unsure whether a rendering reads well, choose the one that is unmistakably accurate. That choice is the right one here and it is not the last word: the rewrite will fix what reads badly, and it cannot recover a fact you dropped. Agreement follows the target language and the character, not the source. Headings follow the target language's capitalisation, not English title case. Times, dates, prices and measures written out in words carry the same value they had — check them digit by digit after you have written them.
 
+**1. Punctuation that marks speech, interruption and suspension follows the locale style file, never the source's marks.** Where the style file is silent, use the convention native to the target language. An interrupted line in the source (`"How—"`) is rendered with the mark the target language uses for a suspended sentence, not with the source's dash.
+
+**2. Do not let a reader lose who acts.** When the source tells two characters apart by pronoun or gender and the target language does not, name the subject of any sentence that follows an exchange between those two characters, so the reader can tell who acts.
+
+**3. Keep the reference the source gave a noun.** A possessive or an indefinite article in the source is not turned into a definite article. `a man in a chair outside his door` keeps the reference the source gave: the door is his, not one already named.
+

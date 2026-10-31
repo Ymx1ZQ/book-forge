@@ -6415,6 +6415,53 @@ Done 2026-10-31: `_block_content` prefixes an imported block with its entity hea
 
 Done 2026-10-31: cold-reader `undefined_terms` rule and `_SIMILE_LIKE`; full suite green (1074).
 
+### M75 — The translator keeps the source's references and localizes its punctuation ✅
+
+**Why:** A reader of the Italian edition of a translated book (2026-10-31) named
+three defects, each traced to the source in the project.
+- The source writes an interrupted line as `"How—"`; the translation copied it as
+  `«Come—»`. Italian marks a suspended sentence with «…», and no prompt tells the
+  translator that punctuation conventions belong to the target language.
+- `She asked the way. He pointed ... Then he went back inside, and she heard him
+  dial` became `Chiese la strada. Gliela indicò ... Poi rientrò, e lei lo sentì`.
+  English separates the two characters by pronoun, Italian drops both subjects,
+  and the reader cannot tell who acts.
+- `A man in a chair outside his door` became `davanti alla porta`. The possessive
+  was replaced by a definite article, so the door reads as one already named.
+
+The rules for one language (which mark is the suspension, which words are
+forbidden) belong to the project: `translations/<locale>/style.md` and
+`checks.yaml`. The skill carries only the language-neutral rule.
+
+- [x] `P/translator.md`, `P/locale-reviser.md`, `P/passage-translator.md`: three
+  rules. (1) Punctuation that marks speech, interruption and suspension follows
+  the locale style file, not the source's marks; where the style file is silent,
+  use the convention native to the target language. (2) When the source tells two
+  characters apart by pronoun or gender and the target language does not, name
+  the subject of the sentence that follows an exchange between them. (3) A
+  possessive or an indefinite article in the source is not turned into a definite
+  article; the noun keeps the reference the source gave it.
+- [x] `P/locale-reader.md`: a subject the reader cannot attribute, or a definite
+  noun the text never introduced, is a `warning` stumble.
+- [x] `references/translate.md`: `checks.yaml` example for the suspension mark,
+  with a `forbidden` pattern, so a project can refuse it mechanically.
+- [x] Tests: each prompt carries its rule text; `_forbidden_form_problems` refuses
+  `«Come—»` under the documented pattern and accepts `«Come… »` and a dash that
+  opens an inciso.
+
+### M76 — A README for the skill ✅
+
+**Why:** The repository has `SKILL.md` for the agent and no document for a person
+installing it.
+
+- [x] `README.md`: what the skill does, requirements (OpenCode version, Python),
+  install and update (`./install.sh`, `--force`, `--check`), the first project
+  (`init`, `runtime sync`), the main commands with one line each (`run`,
+  `translate`, `export`, `reset`, `status`), where a project keeps its files,
+  and where to read next (`SKILL.md`, `references/`). No client or project names.
+
+Done 2026-10-31: three rules in `translator.md` and `passage-translator.md`, two defect classes in `locale-reviser.md` and `locale-reader.md`, a `checks.yaml` example in `references/translate.md`, `README.md`, `tests/test_translation_prompts.py`. `test_release_surface` required that no `README.md` exist; it now requires one. The repair-envelope test's budget went from 3000 to 3600 because the translator prompt grew. The suspension mark itself is each project's `checks.yaml` and `style.md`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

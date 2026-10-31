@@ -33,7 +33,7 @@ Report each in `unidentified`, with the name exactly as written, the sentence yo
 **The grade describes the defect, not how much time it cost you.** This matters: a sentence built the way another language builds sentences reads perfectly smoothly, and grading by your reading speed sorts the worst defect in the book into the grade that means "ignore this".
 
 - `blocking` — you could not recover what the sentence says.
-- `warning` — a writer of this language would not have written it. It parses, and it is not how the language does this. Everything you answered `natural: false` for is at least this.
+- `warning` — a writer of this language would not have written it. It parses, and it is not how the language does this. Everything you answered `natural: false` for is at least this. A subject the reader cannot attribute because two characters act in adjacent sentences, and a definite noun the text never introduced, are at least this too.
 - `note` — you would have chosen a different word. Nothing is wrong with it.
 
 ## How to report

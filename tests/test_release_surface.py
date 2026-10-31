@@ -44,8 +44,8 @@ class ReleaseSurfaceTests(unittest.TestCase):
             self.assertFalse(any(path.name.upper() == "CLAUDE.MD" for path in project.rglob("*")))
             self.assertFalse(any(path.suffix == ".sh" for path in project.rglob("*")))
 
-    def test_skill_and_routes_expose_complete_usage_surface_without_auxiliary_docs(self):
-        self.assertFalse((ROOT / "README.md").exists())
+    def test_skill_and_routes_expose_complete_usage_surface(self):
+        self.assertTrue((ROOT / "README.md").is_file())
         guidance = (ROOT / "SKILL.md").read_text() + "\n" + "\n".join(
             (ROOT / "references" / name).read_text()
             for name in ("init.md", "design.md", "run.md", "translate.md", "export.md")

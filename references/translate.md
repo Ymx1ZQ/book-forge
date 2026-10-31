@@ -21,6 +21,14 @@ A translation used to be one call that nobody read, while the prose had a cold r
 
 Half of it costs nothing. The glossary is machine-readable, so a term the source uses whose agreed rendering never reaches the translation is an exact finding — no model is asked. `translations/<locale>/checks.yaml` carries what the locale can state as a rule: `forbidden` is a list of `{pattern, reason}`, checked against the delivered translation before it is accepted, so a form the locale bans sends the chapter back for repair the way a wrong number already does. A pattern ignores case unless its row adds `case_sensitive: true`: `stette` must also catch the `Stette` that opens a sentence, but a rule such as `\b(a|da|di)\s+(il|lo)\b` then also matches the `A lo` in `Settore 7-A lo accolse`, so write a rule that capitals would break as case-sensitive. The refusal quotes each match, the sentence around it and the pattern with its case rule, and a number refusal names each number that differs and its sentence on both sides; the translator's next ask receives that text as its repair reason. An absent or empty file is legal; the locale is then checked by the glossary alone.
 
+The suspension mark is the project's rule, because the mark belongs to the language:
+
+```yaml
+forbidden:
+  - pattern: '—[»”"]'
+    reason: a suspended sentence takes the locale's suspension mark, not a dash
+```
+
 The other half is the `translation-critic` role: source and translation side by side, plus the style and the glossary, returning findings that each cite the source text, the translated text and the rule broken. A finding citing nothing is set aside and recorded — it names nothing a repair could substitute. Findings at `warning` or `blocking` drive one repair call to the translator, and the repair is held to the same validation the translation was: if it does not pass, the translation that did is kept.
 
 **The critic never runs on the translator's model.** A model rereading its own rendering shares the blind spots that produced it and approves them. `roles.translation-critic` naming the translator's model is refused when the config is read. Left unset, it resolves to the catalogue's judge-grade model, and to another model if the translator already holds that one.
