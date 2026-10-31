@@ -6486,10 +6486,14 @@ Done 2026-10-31: `ENGAGEMENT_TURN_KINDS`, `CHAPTER_EXEMPT_KINDS`, `_beat_shape_p
 
 Done 2026-10-31: `audit_engagement` and `--kind engagement` on `audit`, `tests/test_engagement_audit.py`, a section in `references/audit.md`. Full suite green (1096).
 
-**Step B2: the story editor**
-- [ ] Role `story-editor` (`P/story-editor.md`) and `audit --kind engagement --editor`: reads the outline and contracts in act-sized chunks and reports per chapter whether `want`, `obstacle` and `turn` hold against the beats, then flags FLAT (no event or no cost), TALK (people explaining, a meeting, an analysis, a log), runs of three and repeated scene shapes. The engine adds blocking findings for a FLAT chapter and a run of three, and schedules a contract repair of the flagged chapters only.
-- [ ] `design` for a book does not report the book as designed while an engagement finding is blocking.
-- [ ] Tests with a fixture outline that has a flat run.
+**Step B2: the post-design chorus reads for engagement ✅**
+
+The skill already has an advisory reader of the designed book, `chorus-bestseller`, and the post-design chorus blocks `design` on a `blocking` or `warning` finding. Its prompt asks for "weak hooks, low-stakes turns, passive protagonists" in general terms and has never named the faults found on 2026-10-31. No new role is needed.
+- [x] `P/chorus-bestseller.md`: the reader is given each chapter's `want`, `obstacle`, `turn` and beats and judges against the engagement rules (the seven in `designer.md`): a chapter with no filmable event or no cost is a `warning` finding with code prefix `FLAT`, one that is mainly people explaining, a meeting, an analysis or a log is a `warning` with prefix `TALK`, three consecutive chapters in a thread without a turn or new danger are a `blocking` finding `RUN`, a scene shape used a third time is a `warning` `SHAPE`, an opening without want and clock is `blocking` `OPEN`, no named opposing party by the end of the first third is `blocking` `ANTAGONIST`, more than one consequence chapter after the climax is `warning` `TAIL`, a reveal stated outright twice before its reveal chapter is `blocking` `SPOIL`. Each finding names the chapter ids and quotes the contract field it rests on, and proposes a change to those chapters' beats.
+- [x] The envelope that feeds the post-design chorus carries `want`, `obstacle` and `turn` for each chapter (check what it carries today and add them if the chapter rows are projected).
+- [x] Tests: the prompt carries each finding code and its severity; the post-design envelope of a fixture book contains the three fields.
+
+Done 2026-10-31: `chorus-bestseller.md` carries the seven rules and the finding codes; the post-design scope carries the whole chapter row, so the three fields reach the advisor without an engine change; `tests/test_chorus_engagement.py`. Full suite green (1098).
 
 **Step C: existing projects**
 - [ ] `audit --kind engagement --fill`: for a chapter that lacks the three fields, the story-editor proposes them from the beats and the engine writes them into the contract through the control plane; the author reviews the diff.
