@@ -64,6 +64,7 @@ def book_proposal():
             "order": 1,
             "pov": "CHR-0001",
             "beats": ["Mara chooses to open the archive"],
+            "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
             "plants": [],
             "reveals": [],
             "target_words": 700,

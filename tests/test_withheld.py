@@ -19,10 +19,10 @@ def load_module():
 
 def proposal(withheld=None):
     chapters = [
-        {"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["A choice opens the conflict"], "plants": ["the sky hums and nobody says why"], "reveals": [], "target_words": 1800, "imports": ["UNI-0001#kernel"], "pivotal": None},
-        {"id": "CH-0002", "order": 2, "pov": "CHR-0001", "beats": ["The choice costs an ally"], "plants": ["a word in a language nobody speaks"], "reveals": [], "target_words": 2000, "imports": ["UNI-0001#kernel"], "pivotal": None},
-        {"id": "CH-0003", "order": 3, "pov": "CHR-0001", "beats": ["Someone who knows finally says it"], "plants": [], "reveals": ["the arrival is told"], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": None},
-        {"id": "CH-0004", "order": 4, "pov": "CHR-0001", "beats": ["Agency resolves the dilemma"], "plants": [], "reveals": [], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": None},
+        {"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["A choice opens the conflict"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": ["the sky hums and nobody says why"], "reveals": [], "target_words": 1800, "imports": ["UNI-0001#kernel"], "pivotal": None},
+        {"id": "CH-0002", "order": 2, "pov": "CHR-0001", "beats": ["The choice costs an ally"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": ["a word in a language nobody speaks"], "reveals": [], "target_words": 2000, "imports": ["UNI-0001#kernel"], "pivotal": None},
+        {"id": "CH-0003", "order": 3, "pov": "CHR-0001", "beats": ["Someone who knows finally says it"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": [], "reveals": ["the arrival is told"], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": None},
+        {"id": "CH-0004", "order": 4, "pov": "CHR-0001", "beats": ["Agency resolves the dilemma"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": [], "reveals": [], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": None},
     ]
     value = {
         "premise": "A warden must decide what a light is worth.",
@@ -203,7 +203,9 @@ class WithheldIsItsOwnCallTests(unittest.TestCase):
                     payload = {"chapters": [
                         {
                             "id": f"CH-{i:04d}", "order": i, "title": "The Dawn Warden", "pov": "CHR-0001",
-                            "beats": ["She counts the light and the ledger is short"], "plants": [], "reveals": [],
+                            "beats": ["She counts the light and the ledger is short"],
+                            "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
+                            "plants": [], "reveals": [],
                             "target_words": 900, "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None,
                         }
                         for i in range(int(chunk["first_order"]), int(chunk["last_order"]) + 1)

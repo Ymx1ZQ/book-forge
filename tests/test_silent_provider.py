@@ -25,7 +25,8 @@ def proposal(chapter_count=6):
         "chapters": [
             {
                 "id": f"CH-{order:04d}", "order": order, "title": f"Tide {order}", "pov": "CHR-0001",
-                "beats": ["A choice opens the conflict"], "plants": [], "reveals": [],
+                "beats": ["A choice opens the conflict"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
+                "plants": [], "reveals": [],
                 "target_words": 1800, "imports": ["UNI-0001#kernel"],
                 "pivotal": "opener" if order == 1 else ("finale" if order == chapter_count else None),
             }

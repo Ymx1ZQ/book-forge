@@ -80,6 +80,7 @@ class PovVoiceFixture(unittest.TestCase):
                 {
                     "id": f"CH-{order:04d}", "order": order, "title": f"Tide {order}", "pov": pov,
                     "beats": ["Someone wants a thing and is refused"],
+                    "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
                     "plants": [], "reveals": [], "target_words": 900,
                     "imports": ["UNI-0001#kernel", f"{pov}#summary"], "obligations": [], "pivotal": None,
                 }

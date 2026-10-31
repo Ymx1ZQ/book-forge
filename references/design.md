@@ -13,6 +13,10 @@ Use this route only for `design`.
 - If validation or the independent audit blocks, report the evidence and stop.
   Never fabricate a clean audit or directly repair canonical files.
 
+## Chapter engagement fields
+
+Every chapter row of a new book carries `want` (what the POV character wants in the chapter), `obstacle` (what stands in the way) and `turn` (`{"kind":"decision|loss|danger|question|reveal","text":"..."}`, how the chapter ends); a `prologue`, `interlude` or `epilogue` may set `chapter_kind` and a non-empty `exempt_reason` instead, and a `chapter_kind` without a reason is refused. A contract written before these fields existed is reported as legacy by `_chapter_engagement_status` and still loads and runs, while a new design that omits them is refused with the chapter and the missing field named.
+
 ## Author brief is mandatory for books
 
 `design book` fails closed without `books/<book>/book-brief.json`. Create it

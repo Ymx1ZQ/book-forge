@@ -25,6 +25,7 @@ def chapter(index):
     return {
         "id": f"CH-{index:04d}", "order": index, "title": f"The Ninth Tide {index}",
         "pov": "CHR-0001", "beats": ["She wants the log and the warden will not open it"],
+        "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
         "plants": [f"the warden keeps a key for {index}"], "reveals": [f"the key opens door {index}"],
         "target_words": 3000, "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None,
     }

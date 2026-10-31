@@ -62,7 +62,8 @@ class CountingProvider:
         return self._ok(envelope, {"chapters": [
             {
                 "id": f"CH-{i:04d}", "order": i, "title": "The Dawn Warden", "pov": "CHR-0001",
-                "beats": ["She counts the light and the ledger is short"], "plants": [], "reveals": [],
+                "beats": ["She counts the light and the ledger is short"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
+                "plants": [], "reveals": [],
                 "target_words": 900, "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None,
             }
             for i in range(first, last + 1)

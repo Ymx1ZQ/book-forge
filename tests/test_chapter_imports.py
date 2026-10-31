@@ -50,6 +50,7 @@ class ChapterImportTests(unittest.TestCase):
             "chapters": [{
                 "id": "CH-0001", "order": 1, "title": "The Ninth Tide", "pov": "CHR-0001",
                 "beats": ["Mara wants the log and the warden will not open it"],
+                "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
                 "plants": [], "reveals": [], "target_words": 900,
                 "imports": imports, "obligations": [], "pivotal": None,
             }],

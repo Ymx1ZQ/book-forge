@@ -21,9 +21,9 @@ ROLE_VARIANTS = {name: spec[1] for name, spec in load_module().ROLE_SPECS.items(
 
 def proposal(obligation=None):
     chapters = [
-        {"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["A choice opens the conflict"], "plants": ["signal"], "reveals": [], "target_words": 1800, "imports": ["UNI-0001#kernel"], "pivotal": "opener"},
-        {"id": "CH-0002", "order": 2, "pov": "CHR-0001", "beats": ["The choice costs an ally"], "plants": [], "reveals": ["signal"], "target_words": 2000, "imports": ["UNI-0001#kernel"], "pivotal": None},
-        {"id": "CH-0003", "order": 3, "pov": "CHR-0001", "beats": ["Agency resolves the dilemma"], "plants": [], "reveals": [], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": "finale"},
+        {"id": "CH-0001", "order": 1, "pov": "CHR-0001", "beats": ["A choice opens the conflict"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": ["signal"], "reveals": [], "target_words": 1800, "imports": ["UNI-0001#kernel"], "pivotal": "opener"},
+        {"id": "CH-0002", "order": 2, "pov": "CHR-0001", "beats": ["The choice costs an ally"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": [], "reveals": ["signal"], "target_words": 2000, "imports": ["UNI-0001#kernel"], "pivotal": None},
+        {"id": "CH-0003", "order": 3, "pov": "CHR-0001", "beats": ["Agency resolves the dilemma"], "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."}, "plants": [], "reveals": [], "target_words": 2200, "imports": ["UNI-0001#kernel"], "pivotal": "finale"},
     ]
     if obligation:
         chapters[1]["obligations"] = [obligation]

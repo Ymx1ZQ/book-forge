@@ -70,6 +70,7 @@ class RecordingProvider:
             {
                 "id": f"CH-{i:04d}", "order": i, "title": f"The Ninth Tide {i}", "pov": "CHR-0001",
                 "beats": ["She wants the log and the warden will not open it"],
+                "want": "Mara wants the log.", "obstacle": "The warden will not open it.", "turn": {"kind": "decision", "text": "She opens it herself."},
                 "plants": [f"the warden keeps a key for {i}"], "reveals": [f"the key opens door {i}"],
                 "target_words": 3000, "imports": ["UNI-0001#kernel"], "obligations": [], "pivotal": None,
             }

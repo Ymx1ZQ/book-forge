@@ -5319,11 +5319,85 @@ def _book_obligations(root: Path, book_id: str) -> tuple[dict[str, dict[str, obj
     return obligations, sorted(set(imports))
 
 
-def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, object]) -> list[dict[str, object]]:
+ENGAGEMENT_TURN_KINDS = frozenset({"decision", "loss", "danger", "question", "reveal"})
+CHAPTER_EXEMPT_KINDS = frozenset({"prologue", "interlude", "epilogue"})
+
+_BEAT_BOOKKEEPING_PATTERNS = (
+    re.compile(r"refs?:", re.IGNORECASE),
+    re.compile(r"\bplants?\b\s*(?:#|\d)", re.IGNORECASE),
+    re.compile(r"\bB[123]\s*Ch", re.IGNORECASE),
+    re.compile(r"\bCh\.\s?\d", re.IGNORECASE),
+    re.compile(r"writing-notes", re.IGNORECASE),
+    re.compile(r"\bCHORUS\b", re.IGNORECASE),
+)
+
+
+def _beat_shape_problems(beats: object) -> list[str]:
+    """Bookkeeping that belongs in the design's notes, not in a beat.
+
+    A beat is staged by the writer, so a `Refs:` line, a plant number, a chapter
+    reference or a note about `writing-notes` is invisible work: it tells the
+    writer nothing to put on the page. Quoting the opening of the beat is enough
+    for the designer to find the row again."""
+    if not isinstance(beats, list):
+        return []
+    problems: list[str] = []
+    for beat in beats:
+        text_value = str(beat)
+        quote = text_value[:90]
+        if len(text_value) > 900:
+            problems.append(f"beat is longer than 900 characters: {quote!r}")
+            continue
+        if any(pattern.search(text_value) for pattern in _BEAT_BOOKKEEPING_PATTERNS):
+            problems.append(f"beat carries bookkeeping: {quote!r}")
+    return problems
+
+
+def _chapter_engagement_missing_fields(row: dict[str, object]) -> list[str]:
+    missing: list[str] = []
+    if not isinstance(row.get("want"), str) or not str(row.get("want")).strip():
+        missing.append("want")
+    if not isinstance(row.get("obstacle"), str) or not str(row.get("obstacle")).strip():
+        missing.append("obstacle")
+    turn = row.get("turn")
+    if (
+        not isinstance(turn, dict)
+        or turn.get("kind") not in ENGAGEMENT_TURN_KINDS
+        or not isinstance(turn.get("text"), str)
+        or not str(turn.get("text")).strip()
+    ):
+        missing.append("turn")
+    return missing
+
+
+def _chapter_engagement_status(row: dict[str, object]) -> str:
+    """Whether a chapter row carries what a reader needs from it.
+
+    `ok` is a row with a want, an obstacle and a turn. `exempt` is a prologue,
+    interlude or epilogue that says why it stands outside the spine. `legacy` is
+    any other row without the three fields: it was written before they were
+    required, so it still loads and runs. A new design refuses it."""
+    if row.get("chapter_kind"):
+        if row.get("chapter_kind") in CHAPTER_EXEMPT_KINDS and str(row.get("exempt_reason") or "").strip():
+            return "exempt"
+        return "legacy"
+    if _chapter_engagement_missing_fields(row):
+        return "legacy"
+    return "ok"
+
+
+def validate_book_design(
+    project: Path | str,
+    book_id: str,
+    proposal: dict[str, object],
+    *,
+    legacy_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
     root = _project_root(project)
     if book_id not in {str(book["id"]) for book in list_books(root)}:
         raise BookForgeError(f"Unknown book: {book_id}")
     findings: list[dict[str, object]] = []
+    legacy = {str(value) for value in (legacy_ids or set())}
     chapters = proposal.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         return [{"code": "chapters.empty", "severity": "blocking"}]
@@ -5340,6 +5414,19 @@ def validate_book_design(project: Path | str, book_id: str, proposal: dict[str, 
             findings.append({"code": "chapter.target-words", "severity": "blocking", "chapter": chapter.get("id")})
         if _title_is_beat_prefix(chapter):
             findings.append({"code": "chapter.title-from-beat", "severity": "warning", "chapter": chapter.get("id"), "title": chapter.get("title")})
+        chapter_id = str(chapter.get("id") or "")
+        if chapter_id in legacy:
+            continue
+        chapter_kind = chapter.get("chapter_kind")
+        if chapter_kind and chapter_kind not in CHAPTER_EXEMPT_KINDS:
+            findings.append({"code": "chapter.chapter-kind", "severity": "blocking", "chapter": chapter_id, "chapter_kind": chapter_kind, "message": f"{chapter_id} has an unknown chapter_kind {chapter_kind!r}"})
+        elif chapter_kind and not str(chapter.get("exempt_reason") or "").strip():
+            findings.append({"code": "chapter.exempt-reason", "severity": "blocking", "chapter": chapter_id, "field": "exempt_reason", "message": f"{chapter_id} names a chapter_kind but has no exempt_reason"})
+        if _chapter_engagement_status(chapter) == "legacy" and not chapter_kind:
+            for field_name in _chapter_engagement_missing_fields(chapter):
+                findings.append({"code": "chapter.engagement-missing", "severity": "blocking", "chapter": chapter_id, "field": field_name, "message": f"{chapter_id} is missing {field_name}"})
+        for problem in _beat_shape_problems(chapter.get("beats")):
+            findings.append({"code": "chapter.beat-shape", "severity": "blocking", "chapter": chapter_id, "message": problem})
     index = rebuild_indexes(root)
     known_blocks = set(index["blocks"])
     known_characters = {value.split("#", 1)[0] for value in known_blocks if value.startswith("CHR-")}
@@ -6976,6 +7063,11 @@ def _book_design_base_capsule(
                         "title": "two to six words naming what the chapter is about; never the opening words of a beat, never a truncated sentence, never a chapter number or numeral prefix (order carries the sequence)",
                         "pov": "stable character ID",
                         "beats": ["causal beat"],
+                        "want": "one sentence: what the POV character wants in this chapter",
+                        "obstacle": "one sentence: what stands in the way",
+                        "turn": {"kind": "decision|loss|danger|question|reveal", "text": "how the chapter ends"},
+                        "chapter_kind": None,
+                        "exempt_reason": None,
                         "plants": [],
                         "reveals": [],
                         "target_words": 2000,
@@ -7370,7 +7462,17 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
             {"schema": 1, "book": book_id, "round": round_number, "advisors": advisors},
         )
         proposal = {**proposal, "chapters": [rewritten.get(str(row.get("id")), row) for row in proposal.get("chapters", [])]}
-        blocking_findings = [row for row in validate_book_design(root, book_id, proposal) if row["severity"] == "blocking"]
+        # A chapter that was already on disk before the three fields existed is
+        # allowed to stay legacy; a chapter this round rewrote is a fresh answer
+        # and meets the same gate as a new design.
+        legacy_ids = {
+            str(row.get("id"))
+            for row in proposal.get("chapters", [])
+            if isinstance(row, dict)
+            and str(row.get("id")) not in rewritten
+            and (_chapter_engagement_status(row) == "legacy" or _beat_shape_problems(row.get("beats")))
+        }
+        blocking_findings = [row for row in validate_book_design(root, book_id, proposal, legacy_ids=legacy_ids) if row["severity"] == "blocking"]
         if blocking_findings:
             raise BookForgeError(f"Repaired design has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
         _write_book_design_outputs(root, book_id, proposal)
