@@ -2086,6 +2086,24 @@ def _task_needs_a_person(plan: dict[str, object]) -> list[str]:
     return sorted(unknown | {str(row["id"]) for row in plan["tasks"] if row.get("state") == "outcome_unknown"})
 
 
+def _return_blocked_run_to_running(root: Path, plan: dict[str, object]) -> None:
+    """A run blocked by tasks that no longer block anyone is running again.
+
+    `recover_before_dispatch` clears the recoverable tasks and `reset` drops the
+    rest; without this the run kept reporting a block whose cause was gone.
+    """
+    control = _control(root)
+    if not control.get("active_run"):
+        return
+    run_path = _run_path(root, str(control["active_run"]))
+    run = _read_json(run_path)
+    still_blocked = [row for row in plan["tasks"] if row.get("state") == "blocked"]
+    if run.get("state") == "blocked" and not still_blocked and not _task_needs_a_person(plan):
+        run["state"] = "running"
+        run["desired_state"] = "running"
+        _write_json(run_path, run)
+
+
 def _last_failure(plan: dict[str, object], task_id: str) -> dict[str, object] | None:
     rows = [row for row in plan.get("attempts", []) if str(row.get("task")) == task_id and row.get("failure")]
     return rows[-1] if rows else None
@@ -2133,15 +2151,7 @@ def recover_before_dispatch(project: Path | str, *, task_id: str | None = None, 
         render_plan(root)
     if recovered:
         print(f"[recover] returned to pending after a recoverable failure: {', '.join(recovered)}", file=sys.stderr)
-    control = _control(root)
-    if control.get("active_run"):
-        run_path = _run_path(root, str(control["active_run"]))
-        run = _read_json(run_path)
-        still_blocked = [row for row in plan["tasks"] if row.get("state") == "blocked"]
-        if run.get("state") == "blocked" and not still_blocked and not _task_needs_a_person(plan):
-            run["state"] = "running"
-            run["desired_state"] = "running"
-            _write_json(run_path, run)
+    _return_blocked_run_to_running(root, plan)
     return {
         "recovered": sorted(set(recovered) | set(_task_of(plan, stale["orphaned"]))),
         "exhausted": exhausted,
@@ -14824,6 +14834,7 @@ def reset_book(project: Path | str, book_id: str, *, scope: str = "prose", confi
         # longer in the plan.
         task["deps"] = [dep for dep in task.get("deps", []) if str(dep) not in gone]
     _save_plan(root, plan)
+    _return_blocked_run_to_running(root, plan)
 
     locales = []
     if scope == "translation" and chapter:

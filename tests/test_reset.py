@@ -129,6 +129,39 @@ class ProseResetTests(ResetFixture):
         self.assertIn(control["plan_hash"], rendered)
 
 
+class ResetBlockedRunTests(ResetFixture):
+    """M78: a run parked on `outcome_unknown` stayed blocked after the reset
+    dropped the only task that could resolve it, and `status` kept reporting a
+    block whose cause was gone."""
+
+    def block_run_on(self, task_id):
+        plan = self.bf._load_plan(self.project)
+        for task in plan["tasks"]:
+            if str(task["id"]) == task_id:
+                task["state"] = "outcome_unknown"
+        plan["attempts"] = [{"id": "ATT-0001", "task": task_id, "state": "outcome_unknown"}]
+        self.bf._save_plan(self.project, plan)
+        run = self.bf.start_run(self.project)
+        run["state"] = "blocked"
+        run["desired_state"] = "blocked"
+        self.bf._write_json(self.bf._run_path(self.project, str(run["id"])), run)
+        return run
+
+    def run_state(self, run):
+        return self.bf._read_json(self.bf._run_path(self.project, str(run["id"])))
+
+    def test_a_run_blocked_by_a_dropped_outcome_unknown_task_returns_to_running(self):
+        run = self.block_run_on(f"DRAFT-{self.book}-CH-0001")
+        self.bf.reset_book(self.project, self.book, confirm=True)
+        self.assertEqual(self.run_state(run)["state"], "running")
+        self.assertEqual(self.run_state(run)["desired_state"], "running")
+
+    def test_a_run_blocked_by_an_outcome_unknown_task_the_reset_keeps_stays_blocked(self):
+        run = self.block_run_on(f"DESIGN-{self.book}")
+        self.bf.reset_book(self.project, self.book, confirm=True)
+        self.assertEqual(self.run_state(run)["state"], "blocked")
+
+
 class DesignResetTests(ResetFixture):
     def test_the_beats_and_the_design_go_too(self):
         self.bf.reset_book(self.project, self.book, scope="design", confirm=True)

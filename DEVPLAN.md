@@ -6508,6 +6508,11 @@ Measured with the engagement audit on 2026-10-31: the verb "want" appears in the
 - [x] `audit --kind engagement`: `engagement.long-beat` and `engagement.wants-in-beats` (already there) report the same limits as warnings on contracts already on disk; `engagement.too-many-terms` is a warning.
 - [x] Tests for each; `references/design.md` describes `new_terms`.
 
+**M78: `reset` clears a stale blocked run** ✅
+After `reset`, a run that an `outcome_unknown` task had put in `blocked` still reads `blocked` when the tasks that caused it are gone, and `status` reports a block that no longer exists (measured 2026-10-31 on a project whose tasks were all `succeeded`).
+- [x] `reset_book`: after the plan is saved, a run in state `blocked` with no task in `blocked` or `outcome_unknown` returns to `running`, as `recover_before_dispatch` already does before a dispatch.
+- [x] Test in `tests/test_reset.py`: a run blocked by an `outcome_unknown` task that the reset drops reads `running` afterwards; a run still holding an `outcome_unknown` task outside the reset scope stays `blocked`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
