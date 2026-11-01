@@ -8538,29 +8538,50 @@ def rewrite_bakeoff(  # noqa: PLR0913 - a comparison names its book, chapter, lo
             pieces, changed, cost = [], [], 0.0
             for first, last, passage in slices:
                 task_id = f"BAKEREW-{slug}-{book_id}-{chapter_id}-{locale}"
-                if not any(t["id"] == task_id for t in _load_plan(root)["tasks"]):
-                    add_task(root, task_id, role, priority=40, outputs=[])
-                else:
-                    _reopen_task(root, task_id)
-                envelope = build_envelope(
-                    root, role=role, prompt_role="locale-reviser",
-                    task_capsule=_locale_reviser_capsule(
-                        chapter_id, passage, style, glossary, [], first=first, last=last, of=len(slices),
-                    ),
-                    imports=[], state={}, tools=[],
-                    max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
-                )
-                claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
-                result = runner(role, envelope, Path(claim["capsule"]).parent)
-                mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
-                answer = _parse_contract_json(str(result["text"]))
-                piece = str(answer.get("revised_markdown") or "")
-                if not piece.strip() or len(piece.split("\n\n")) != len(passage.split("\n\n")):
-                    piece = passage
-                pieces.append(piece)
-                changed.extend(answer.get("changed") or [])
-                cost += float(result.get("cost") or 0.0)
-                _release_claim(root, claim["attempt"], note="bake-off passage")
+                for attempt_number in (1, 2):
+                    if not any(t["id"] == task_id for t in _load_plan(root)["tasks"]):
+                        add_task(root, task_id, role, priority=40, outputs=[])
+                    else:
+                        _reopen_task(root, task_id)
+                    claim = None
+                    try:
+                        envelope = build_envelope(
+                            root, role=role, prompt_role="locale-reviser",
+                            task_capsule=_locale_reviser_capsule(
+                                chapter_id, passage, style, glossary, [], first=first, last=last, of=len(slices),
+                            ),
+                            imports=[], state={}, tools=[],
+                            max_output_tokens=ROLE_BUDGETS["locale-reviser"][1],
+                        )
+                        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+                        result = runner(role, envelope, Path(claim["capsule"]).parent)
+                        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+                        answer = _parse_contract_json(str(result["text"]))
+                        piece = str(answer.get("revised_markdown") or "")
+                        if not piece.strip() or len(piece.split("\n\n")) != len(passage.split("\n\n")):
+                            piece = passage
+                        attempt_changed = answer.get("changed") or []
+                        attempt_cost = float(result.get("cost") or 0.0)
+                        _release_claim(root, claim["attempt"], note="bake-off passage")
+                        pieces.append(piece)
+                        changed.extend(attempt_changed)
+                        cost += attempt_cost
+                        break
+                    except Exception as error:  # noqa: BLE001 - one passage failing is data, not a stop
+                        if claim is not None:
+                            try:
+                                _set_attempt_failure(
+                                    root, claim["attempt"], block=False, reason=str(error)[:200],
+                                )
+                            except BookForgeError:
+                                pass
+                        if attempt_number == 1:
+                            print(
+                                f"[rewrite-bakeoff] {slug} failed a passage, asking again: {str(error)[:200]}",
+                                file=sys.stderr,
+                            )
+                            continue
+                        raise
             rewritten = "\n\n".join(pieces)
             _write_bytes_atomic(root / prefix / slug / "rewrite.md", rewritten.encode("utf-8"))
             words = len(re.findall(WORD_RE, rewritten, re.UNICODE))

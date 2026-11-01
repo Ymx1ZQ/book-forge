@@ -6550,6 +6550,11 @@ The catalogue pins `deepseek/deepseek-v4.1-flash-1017` to the vendor's own endpo
 - [x] `CHORUS_MODEL_CONFIGS["openrouter/deepseek/deepseek-v4.1-flash-1017"]["provider"]`: `order` alibaba, together, fireworks, deepseek; `only` the same four; `allow_fallbacks` true, so a refusal by one endpoint moves the call to the next instead of ending it.
 - [x] Tests that pin the old provider block follow it; `runtime sync` writes the new block into the generated OpenCode config.
 
+**M86: a failed rewrite bake-off passage no longer blocks the run** ✅
+`bakeoff --rewriters` claims one task per candidate and, when a passage answers with JSON that does not parse, raises before releasing the claim. The task is left `outcome_unknown`, the run turns `blocked`, and every later call of the project, including a translation running in the same run, is refused with `Run does not accept dispatch while blocked`. Seen on 2026-11-01 with DeepSeek 1017 on CH-0001; the next two chapters of the same bake-off ended in 0.5 s. The translator bake-off already sets the attempt to failed and asks again once.
+- [x] `rewrite_bakeoff` (the loop around `claim_task` in `scripts/book_forge.py`): per passage, up to two attempts; on an exception after the claim, `_set_attempt_failure(root, claim["attempt"], block=False, reason=...)` as `_bakeoff_translation` does; after the second failure the candidate is `unusable` with the reason, as before.
+- [x] Test in `tests/test_rewrite_bakeoff.py`: a runner that answers non-JSON once then valid JSON gives a `written` candidate; a runner that never answers valid JSON gives `unusable`, and in both cases the plan holds no `outcome_unknown` task and the run is not `blocked`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
