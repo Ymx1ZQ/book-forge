@@ -6555,6 +6555,11 @@ The catalogue pins `deepseek/deepseek-v4.1-flash-1017` to the vendor's own endpo
 - [x] `rewrite_bakeoff` (the loop around `claim_task` in `scripts/book_forge.py`): per passage, up to two attempts; on an exception after the claim, `_set_attempt_failure(root, claim["attempt"], block=False, reason=...)` as `_bakeoff_translation` does; after the second failure the candidate is `unusable` with the reason, as before.
 - [x] Test in `tests/test_rewrite_bakeoff.py`: a runner that answers non-JSON once then valid JSON gives a `written` candidate; a runner that never answers valid JSON gives `unusable`, and in both cases the plan holds no `outcome_unknown` task and the run is not `blocked`.
 
+**M87: a blind judge that returns no JSON no longer blocks the run** ✅
+In `produce_pivotal_chapter` the judge call is claimed, then `_parse_contract_json` runs on its answer with the claim still open. On 2026-11-01 the judge of a pivotal chapter answered with no JSON object (its output budget is 2000 tokens and the model reasons first), the task stayed `outcome_unknown`, the run turned `blocked` and every later dispatch of the project was refused.
+- [x] The judge call: up to two attempts; on an exception after the claim, `_set_attempt_failure(root, claim["attempt"], block=False, reason=...)` and ask again; the second failure raises as today. `max_output_tokens` for the judge goes from 2000 to 6000 so the reasoning does not use the whole answer.
+- [x] Test in `tests/test_pivotal.py`: a judge runner that answers with no JSON once and a valid ranking afterwards completes the chapter; one that never answers raises, and in both cases the plan holds no `outcome_unknown` task.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

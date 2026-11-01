@@ -54,6 +54,24 @@ class PivotalProvider:
         return {"text": json.dumps(payload), "provider": "openrouter", "model": MODEL, "variant": variants[role], "session_id": f"ses-{number}", "tokens": {"input": envelope["estimated_input_tokens"], "output": 300}, "cost": .001, "latency_ms": 10, "finish": "stop"}
 
 
+class JudgeRetryProvider(PivotalProvider):
+    """Answers the judge with the next scripted text; `None` is the valid ranking."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = list(answers)
+        self.judge_calls = 0
+
+    def __call__(self, role, envelope, attempt_dir):
+        result = super().__call__(role, envelope, attempt_dir)
+        if role == "judge":
+            answer = self.answers[self.judge_calls] if self.judge_calls < len(self.answers) else None
+            self.judge_calls += 1
+            if answer is not None:
+                result["text"] = answer
+        return result
+
+
 class PivotalTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
@@ -124,6 +142,27 @@ class PivotalTests(unittest.TestCase):
         self.assertEqual(result["calls"], 4)
         self.assertEqual(result["state"], "closed")
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
+
+    def test_judge_that_answers_no_json_once_is_asked_again(self):
+        provider = JudgeRetryProvider(["no json here"])
+        self.bf.produce_pivotal_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(provider.calls.count("judge"), 2)
+        self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
+        self.assert_the_run_was_not_blocked()
+
+    def test_judge_that_never_answers_json_raises_without_blocking(self):
+        provider = JudgeRetryProvider(["no json here", "still no json"])
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf.produce_pivotal_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(provider.calls.count("judge"), 2, "the second failure must not buy a third call")
+        self.assert_the_run_was_not_blocked()
+
+    def assert_the_run_was_not_blocked(self):
+        tasks = self.bf._load_plan(self.project)["tasks"]
+        self.assertEqual([task for task in tasks if task["state"] == "outcome_unknown"], [])
+        run = self.bf.status_project(self.project)["run"]
+        self.assertIsNotNone(run)
+        self.assertNotEqual(run["state"], "blocked")
 
     def test_rejects_unmarked_chapter(self):
         contract_path = self.project / f"books/{self.book}/chapters/CH-0001.json"

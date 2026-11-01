@@ -3759,7 +3759,7 @@ ROLE_BUDGETS = {
     # It returns the whole chapter and a record of every sentence it rewrote, so its
     # allowance is the translator's with room for the record.
     "locale-reviser": (16000, 7000),
-    "judge": (10000, 2000),
+    "judge": (10000, 6000),
 }
 # Chorus advisors reuse designer/auditor budgets (advisory, same context).
 for _adv in list(CHORUS_ADVISOR_SPECS):
@@ -10941,17 +10941,36 @@ def produce_pivotal_chapter(
         imports=list(contract.get("imports", [])),
         state={},
         tools=[],
-        max_output_tokens=2000,
+        max_output_tokens=6000,
     )
-    judge_claim = claim_task(root, judge_id, request_hash=str(judge_envelope["hash"]))
-    judge_result = runner("judge", judge_envelope, Path(judge_claim["capsule"]).parent)
-    mark_provider_accepted(root, judge_claim["attempt"], str(judge_result["session_id"]))
-    decision = _parse_contract_json(str(judge_result["text"]))
-    ranking = decision.get("ranking")
-    if not isinstance(ranking, list) or len(ranking) != 2 or set(ranking) != set(candidates):
-        raise BookForgeError("Blind judge did not rank every anonymous candidate exactly once")
-    if not isinstance(decision.get("evidence"), list):
-        raise BookForgeError("Blind judge supplied no rank evidence")
+    for attempt_number in (1, 2):
+        if attempt_number > 1:
+            _reopen_task(root, judge_id)
+        judge_claim = None
+        try:
+            judge_claim = claim_task(root, judge_id, request_hash=str(judge_envelope["hash"]))
+            judge_result = runner("judge", judge_envelope, Path(judge_claim["capsule"]).parent)
+            mark_provider_accepted(root, judge_claim["attempt"], str(judge_result["session_id"]))
+            decision = _parse_contract_json(str(judge_result["text"]))
+            ranking = decision.get("ranking")
+            if not isinstance(ranking, list) or len(ranking) != 2 or set(ranking) != set(candidates):
+                raise BookForgeError("Blind judge did not rank every anonymous candidate exactly once")
+            if not isinstance(decision.get("evidence"), list):
+                raise BookForgeError("Blind judge supplied no rank evidence")
+            break
+        except Exception as error:  # noqa: BLE001 - one judge answer failing is data, not a stop
+            if judge_claim is not None:
+                try:
+                    _set_attempt_failure(root, judge_claim["attempt"], block=False, reason=str(error)[:200])
+                except BookForgeError:
+                    pass
+            if attempt_number == 1:
+                print(
+                    f"[judge] {chapter_id} failed, asking again: {str(error)[:200]}",
+                    file=sys.stderr,
+                )
+                continue
+            raise
     winner_label = str(ranking[0])
     winner = candidates[winner_label]
     decision_record = {
