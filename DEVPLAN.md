@@ -6560,6 +6560,11 @@ In `produce_pivotal_chapter` the judge call is claimed, then `_parse_contract_js
 - [x] The judge call: up to two attempts; on an exception after the claim, `_set_attempt_failure(root, claim["attempt"], block=False, reason=...)` and ask again; the second failure raises as today. `max_output_tokens` for the judge goes from 2000 to 6000 so the reasoning does not use the whole answer.
 - [x] Test in `tests/test_pivotal.py`: a judge runner that answers with no JSON once and a valid ranking afterwards completes the chapter; one that never answers raises, and in both cases the plan holds no `outcome_unknown` task.
 
+**M88: the writer and the locale roles get the same reasoning room as the technical editor** ✅
+`REASONING_ROOM` gives only `technical-editor` 64,000 tokens above the provider default. On 2026-11-01 the writer pinned to DeepSeek V4.1 Flash 1017 at `high` spent the whole 38,000-token cap on reasoning twice in a row on one chapter (`finish: length`, output 0, 38,000 reasoning), so the draft failed with "Model output contains no JSON object" and the chapter did not close.
+- [x] `REASONING_ROOM` in `scripts/book_forge.py`: add `writer`, `translator`, `locale-reader` and `locale-reviser` at 64,000, with a sentence in the comment above it naming this measurement.
+- [x] Test in `tests/test_roles.py` or a new `tests/test_reasoning_room.py`: the override env value written for each of those roles is 64,000 plus the role's output budget, like the technical editor's.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

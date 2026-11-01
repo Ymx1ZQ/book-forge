@@ -3739,7 +3739,8 @@ OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
 # envelope: at `medium` it reasoned 31,607 and 34,203 tokens and answered both
 # times under 64,000 + 3,000; under 32,000 + 3,000 it spent all 35,000 three times
 # in three, and at `low` once in two.
-REASONING_ROOM = {"technical-editor": 64000}
+# On 2026-11-01 a writer on DeepSeek V4.1 Flash 1017 at `high` used all 38,000 tokens on reasoning and returned no answer, twice, on one chapter.
+REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000}
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),

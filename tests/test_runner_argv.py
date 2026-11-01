@@ -116,7 +116,7 @@ class RunnerArgvTests(unittest.TestCase):
         self.assertEqual(self._cap("technical-editor"), 64000 + 3000)
 
     def test_other_roles_keep_the_provider_default(self):
-        self.assertEqual(self._cap("writer"), self.bf.OPENCODE_OUTPUT_TOKEN_MAX + 3000)
+        self.assertEqual(self._cap("cold-reader"), self.bf.OPENCODE_OUTPUT_TOKEN_MAX + 3000)
 
 
 if __name__ == "__main__":
