@@ -10711,6 +10711,17 @@ def review_and_close_chapter(
                 file=sys.stderr,
             )
             continue
+        if rejected and isinstance(value.get("dispositions"), list):
+            # A rejected verification finding is context for the repair, not one of
+            # the findings owed a disposition: a reviser that answers it anyway must
+            # not block on its own context.
+            rejected_ids = {str(finding.get("id")) for finding in rejected.get("findings", []) if isinstance(finding, dict)}
+            raised_ids = {str(finding["id"]) for finding in findings}
+            stray_ids = rejected_ids - raised_ids
+            value["dispositions"] = [
+                row for row in value["dispositions"]
+                if not (isinstance(row, dict) and str(row.get("finding")) in stray_ids)
+            ]
         try:
             validated = _validate_revision(contract, value, findings, list(technical["consequences"]))
         except BookForgeError as exc:

@@ -6528,6 +6528,11 @@ Every `opencode` start extracts a native library of about 5 MB into the system t
 - [x] `_closed_style_pending`: the review counts as done when any `style-*.json` exists in the chapter's `reviews/` directory, whichever model wrote it.
 - [x] Test: a closed chapter whose only style file is `style-grok-4-6.json` is not pending; one with none is.
 
+**M82: a reviser that answers a rejected verification finding does not block the chapter** ✅
+After a verifier refuses a revision, the retried reviser is handed that finding as `rejected_verification` context. The reviser sometimes lists it among its dispositions, and `_validate_revision` blocks the task with `Revision dispositions a finding that was not raised: F-0001`; every retry meets the same result and the chapter never closes (measured 2026-11-01, chapter 4 of a project).
+- [x] In `review_and_close_chapter`'s reviser loop: dispositions whose `finding` id appears only in the `rejected_verification` findings (not in the findings owed) are dropped from the answer before `_validate_revision`; any other unknown id still blocks.
+- [x] Test: an answer that dispositions a rejected-verification id besides the owed ones passes; an answer with an id from neither list is still refused.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
