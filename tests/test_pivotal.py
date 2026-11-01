@@ -54,6 +54,15 @@ class PivotalProvider:
         return {"text": json.dumps(payload), "provider": "openrouter", "model": MODEL, "variant": variants[role], "session_id": f"ses-{number}", "tokens": {"input": envelope["estimated_input_tokens"], "output": 300}, "cost": .001, "latency_ms": 10, "finish": "stop"}
 
 
+class ReviewOnlyProvider(PivotalProvider):
+    """Fails the test if the dispatch reaches for the judge or the writer again."""
+
+    def __call__(self, role, envelope, attempt_dir):
+        if role in {"writer", "judge"}:
+            raise AssertionError(f"{role} must not be called when the draft already exists")
+        return super().__call__(role, envelope, attempt_dir)
+
+
 class JudgeRetryProvider(PivotalProvider):
     """Answers the judge with the next scripted text; `None` is the valid ranking."""
 
@@ -140,6 +149,62 @@ class PivotalTests(unittest.TestCase):
         self.assertNotIn("writer", provider.calls)
         self.assertEqual(provider.calls.count("judge"), 1)
         self.assertEqual(result["calls"], 4)
+        self.assertEqual(result["state"], "closed")
+        self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
+
+    def test_pivotal_draft_resumes_at_review_without_judge_or_writer(self):
+        contract_path = self.project / f"books/{self.book}/chapters/CH-0001.json"
+        contract = json.loads(contract_path.read_text())
+        contract.update({"want": "Mara wants the truth.", "obstacle": "The truth costs her the life she has.", "turn": {"kind": "decision", "text": "Mara chooses."}})
+        contract_path.write_text(json.dumps(contract))
+        variants = self.project / f"books/{self.book}/work/CH-0001/variants"
+        for label, word in (("A", "glass"), ("B", "tide")):
+            prefix = f"books/{self.book}/work/CH-0001/variants/{label}"
+            self.bf.add_task(
+                self.project,
+                f"PIVOT-{label}-{self.book}-CH-0001",
+                "writer",
+                priority=45,
+                outputs=[f"{prefix}/draft.md", f"{prefix}/beat-map.json", f"{prefix}/consequences.json"],
+            )
+            target = variants / label
+            target.mkdir(parents=True)
+            (target / "draft.md").write_text(prose(word) + "\n")
+            (target / "beat-map.json").write_text(json.dumps({"schema": 1, "beats": [{"beat": "Choose", "evidence": "chosen"}]}))
+            (target / "consequences.json").write_text(json.dumps({"schema": 1, "consequences": []}))
+        self.bf.add_task(
+            self.project,
+            f"JUDGE-{self.book}-CH-0001",
+            "judge",
+            deps=[f"PIVOT-A-{self.book}-CH-0001", f"PIVOT-B-{self.book}-CH-0001"],
+            priority=50,
+            outputs=[f"books/{self.book}/reviews/CH-0001/judgement.json"],
+        )
+        reviews = self.project / f"books/{self.book}/reviews/CH-0001"
+        reviews.mkdir(parents=True)
+        (reviews / "judgement.json").write_text(json.dumps({"schema": 1, "chapter": "CH-0001", "ranking": ["tide", "glass"], "evidence": [], "winner": "tide", "anchors": []}))
+        work = self.project / f"books/{self.book}/work/CH-0001"
+        self.bf.add_task(
+            self.project,
+            f"DRAFT-{self.book}-CH-0001",
+            "writer",
+            deps=[f"JUDGE-{self.book}-CH-0001"],
+            priority=55,
+            outputs=[f"books/{self.book}/work/CH-0001/draft.md", f"books/{self.book}/work/CH-0001/beat-map.json", f"books/{self.book}/work/CH-0001/consequences.json"],
+        )
+        (work / "draft.md").write_text(prose("tide") + "\n")
+        (work / "beat-map.json").write_text(json.dumps({"schema": 1, "chapter": "CH-0001", "beats": [{"beat": "Choose", "evidence": "chosen"}]}))
+        (work / "consequences.json").write_text(json.dumps({"schema": 1, "chapter": "CH-0001", "consequences": []}))
+        plan = self.bf._load_plan(self.project)
+        for task in plan["tasks"]:
+            if task["id"].startswith(("PIVOT-", "JUDGE-", "DRAFT-")):
+                task["state"] = "succeeded"
+        self.bf._save_plan(self.project, plan)
+        provider = ReviewOnlyProvider()
+        result = self.bf.run_next(self.project, book_id=self.book, provider=provider)
+        self.assertNotIn("judge", provider.calls)
+        self.assertNotIn("writer", provider.calls)
+        self.assertIn("cold-reader", provider.calls)
         self.assertEqual(result["state"], "closed")
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
 

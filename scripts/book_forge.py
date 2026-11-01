@@ -9274,11 +9274,11 @@ def run_next(
                 if _closed_style_pending(root, str(book["id"]), str(contract["id"])):
                     return recheck_style_closed_chapter(root, str(book["id"]), str(contract["id"]), contract, provider or run_opencode_role)
                 continue
-            if contract.get("pivotal"):
+            if contract.get("pivotal") and not draft_path.exists():
                 return produce_pivotal_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
-            if draft_path.exists() and not contract.get("pivotal"):
+            if draft_path.exists():
                 return review_and_close_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
-            if not draft_path.exists() and not contract.get("pivotal"):
+            if not draft_path.exists():
                 return draft_chapter(root, str(book["id"]), str(contract["id"]), provider=provider)
     raise BookForgeError("No ordinary chapter draft is ready; design a book or use the pivotal workflow")
 

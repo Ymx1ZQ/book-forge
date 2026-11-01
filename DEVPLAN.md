@@ -6565,6 +6565,11 @@ In `produce_pivotal_chapter` the judge call is claimed, then `_parse_contract_js
 - [x] `REASONING_ROOM` in `scripts/book_forge.py`: add `writer`, `translator`, `locale-reader` and `locale-reviser` at 64,000, with a sentence in the comment above it naming this measurement.
 - [x] Test in `tests/test_roles.py` or a new `tests/test_reasoning_room.py`: the override env value written for each of those roles is 64,000 plus the role's output budget, like the technical editor's.
 
+**M89: a pivotal chapter whose draft exists resumes at the review** ✅
+`run` sends every pivotal chapter without a manuscript to `produce_pivotal_chapter`, which redoes the judge and the draft even when `work/<chapter>/draft.md` is already there and only the review is pending. On 2026-11-01 Margherita's CH-0003 was blocked in `REVISE`, was unblocked with `resume --resolve-blocked`, and every later `run` failed with `Task is not ready: JUDGE-...` and `Design task cannot accept outputs while succeeded`, because the judge and the draft had already succeeded.
+- [x] The dispatch in `run` (the loop over `chapters/CH-*.json` in `scripts/book_forge.py`, near `return produce_pivotal_chapter(`): when the contract is pivotal and `draft.md` exists, go to `review_and_close_chapter` as for a non-pivotal chapter; `produce_pivotal_chapter` only when there is no draft.
+- [x] Test in `tests/test_pivotal.py`: a pivotal chapter with `draft.md` present and its pivot, judge and draft tasks `succeeded` is routed to `review_and_close_chapter` and calls neither the judge nor the writer.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
