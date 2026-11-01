@@ -84,6 +84,47 @@ class PivotalTests(unittest.TestCase):
         self.assertLessEqual(len(decision["anchors"]), 2)
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
 
+    def test_succeeded_variants_resume_at_the_judge(self):
+        contract_path = self.project / f"books/{self.book}/chapters/CH-0001.json"
+        contract = json.loads(contract_path.read_text())
+        contract.update({"want": "Mara wants the truth.", "obstacle": "The truth costs her the life she has.", "turn": {"kind": "decision", "text": "Mara chooses."}})
+        contract_path.write_text(json.dumps(contract))
+        variants = self.project / f"books/{self.book}/work/CH-0001/variants"
+        for label, word in (("A", "glass"), ("B", "tide")):
+            prefix = f"books/{self.book}/work/CH-0001/variants/{label}"
+            self.bf.add_task(
+                self.project,
+                f"PIVOT-{label}-{self.book}-CH-0001",
+                "writer",
+                priority=45,
+                outputs=[f"{prefix}/draft.md", f"{prefix}/beat-map.json", f"{prefix}/consequences.json"],
+            )
+            target = variants / label
+            target.mkdir(parents=True)
+            (target / "draft.md").write_text(prose(word) + "\n")
+            (target / "beat-map.json").write_text(json.dumps({"schema": 1, "beats": [{"beat": "Choose", "evidence": "chosen"}]}))
+            (target / "consequences.json").write_text(json.dumps({"schema": 1, "consequences": []}))
+        plan = self.bf._load_plan(self.project)
+        for task in plan["tasks"]:
+            if task["id"].startswith("PIVOT-"):
+                task["state"] = "succeeded"
+        self.bf._save_plan(self.project, plan)
+        self.bf.add_task(
+            self.project,
+            f"JUDGE-{self.book}-CH-0001",
+            "judge",
+            deps=[f"PIVOT-A-{self.book}-CH-0001", f"PIVOT-B-{self.book}-CH-0001"],
+            priority=50,
+            outputs=[f"books/{self.book}/reviews/CH-0001/judgement.json"],
+        )
+        provider = PivotalProvider()
+        result = self.bf.run_next(self.project, book_id=self.book, provider=provider)
+        self.assertNotIn("writer", provider.calls)
+        self.assertEqual(provider.calls.count("judge"), 1)
+        self.assertEqual(result["calls"], 4)
+        self.assertEqual(result["state"], "closed")
+        self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
+
     def test_rejects_unmarked_chapter(self):
         contract_path = self.project / f"books/{self.book}/chapters/CH-0001.json"
         contract = json.loads(contract_path.read_text())

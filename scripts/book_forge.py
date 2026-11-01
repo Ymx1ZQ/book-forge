@@ -10803,6 +10803,7 @@ def produce_pivotal_chapter(
     if contract.get("pivotal") not in {"opener", "midpoint", "climax", "finale", "user-selected"}:
         raise BookForgeError("Chapter is not explicitly pivotal")
     task_specs = []
+    disk_candidates = {}
     for label, brief in (
         ("A", "Favor intimate restraint, subtext, and a precise interior turn."),
         ("B", "Favor external pressure, irreversible action, and dramatic contrast."),
@@ -10810,7 +10811,8 @@ def produce_pivotal_chapter(
         task_id = f"PIVOT-{label}-{book_id}-{chapter_id}"
         output_prefix = f"books/{book_id}/work/{chapter_id}/variants/{label}"
         plan = _load_plan(root)
-        if not any(task["id"] == task_id for task in plan["tasks"]):
+        existing = next((task for task in plan["tasks"] if task["id"] == task_id), None)
+        if existing is None:
             add_task(
                 root,
                 task_id,
@@ -10818,6 +10820,18 @@ def produce_pivotal_chapter(
                 priority=45,
                 outputs=[f"{output_prefix}/draft.md", f"{output_prefix}/beat-map.json", f"{output_prefix}/consequences.json"],
             )
+        variant_outputs = ("draft.md", "beat-map.json", "consequences.json")
+        if (
+            existing is not None
+            and existing["state"] == "succeeded"
+            and all((root / output_prefix / name).is_file() for name in variant_outputs)
+        ):
+            disk_candidates[label] = {
+                "prose_markdown": (root / output_prefix / "draft.md").read_text(encoding="utf-8").rstrip(),
+                "beat_map": _read_json(root / output_prefix / "beat-map.json")["beats"],
+                "consequences": _read_json(root / output_prefix / "consequences.json")["consequences"],
+            }
+            continue
         capsule = {**contract, "variant_brief": brief, "anonymous": True}
         envelope = build_envelope(
             root,
@@ -10835,33 +10849,37 @@ def produce_pivotal_chapter(
             executor.submit(runner, "writer", envelope, attempt_dir): (label, task_id, output_prefix, envelope, claim)
             for label, task_id, output_prefix, envelope, claim, attempt_dir in task_specs
         }
-        variant_results = []
+        fresh_results = {}
         for future, metadata in futures.items():
-            variant_results.append((*metadata, future.result()))
+            fresh_results[metadata[0]] = (*metadata, future.result())
     candidates = {}
     source_labels = {}
-    for label, task_id, output_prefix, envelope, claim, result in variant_results:
-        mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
-        value = validate_writer_output(contract, str(result["text"]))
+    for label in ("A", "B"):
+        if label in disk_candidates:
+            value = disk_candidates[label]
+        else:
+            label, task_id, output_prefix, envelope, claim, result = fresh_results[label]
+            mark_provider_accepted(root, claim["attempt"], str(result["session_id"]))
+            value = validate_writer_output(contract, str(result["text"]))
+            outputs = {
+                f"{output_prefix}/draft.md": str(value["prose_markdown"]).rstrip() + "\n",
+                f"{output_prefix}/beat-map.json": _json_bytes({"schema": 1, "beats": value["beat_map"]}),
+                f"{output_prefix}/consequences.json": _json_bytes({"schema": 1, "consequences": value["consequences"]}),
+            }
+            manifest = stage_outputs(root, claim["attempt"], outputs)
+            record_execution(
+                root,
+                claim["attempt"],
+                claim["fence"],
+                output_hash=_sha256_bytes(_json_bytes(manifest)),
+                telemetry=_provider_telemetry(result, envelope),
+            )
+            promote_task(root, claim["attempt"], claim["fence"])
         anonymous = f"candidate-{_sha256_bytes(str(value['prose_markdown']).encode())[:10]}"
         if anonymous in candidates:
             anonymous += f"-{label.lower()}"
         candidates[anonymous] = value
         source_labels[anonymous] = label
-        outputs = {
-            f"{output_prefix}/draft.md": str(value["prose_markdown"]).rstrip() + "\n",
-            f"{output_prefix}/beat-map.json": _json_bytes({"schema": 1, "beats": value["beat_map"]}),
-            f"{output_prefix}/consequences.json": _json_bytes({"schema": 1, "consequences": value["consequences"]}),
-        }
-        manifest = stage_outputs(root, claim["attempt"], outputs)
-        record_execution(
-            root,
-            claim["attempt"],
-            claim["fence"],
-            output_hash=_sha256_bytes(_json_bytes(manifest)),
-            telemetry=_provider_telemetry(result, envelope),
-        )
-        promote_task(root, claim["attempt"], claim["fence"])
     judge_id = f"JUDGE-{book_id}-{chapter_id}"
     judgement_path = f"books/{book_id}/reviews/{chapter_id}/judgement.json"
     plan = _load_plan(root)
@@ -10934,7 +10952,7 @@ def produce_pivotal_chapter(
         },
     )
     closure = review_and_close_chapter(root, book_id, chapter_id, provider=runner)
-    return {"state": closure["state"], "book": book_id, "chapter": chapter_id, "calls": 3 + int(closure["calls"]), "winner": winner_label}
+    return {"state": closure["state"], "book": book_id, "chapter": chapter_id, "calls": len(task_specs) + 1 + int(closure["calls"]), "winner": winner_label}
 
 
 def add_translation(project: Path | str, book_id: str, locale: str) -> dict[str, object]:

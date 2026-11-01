@@ -6518,6 +6518,11 @@ Every `opencode` start extracts a native library of about 5 MB into the system t
 - [x] `_run_opencode_process`: create a directory with `tempfile.mkdtemp`, pass it as `TMPDIR` to the subprocess, remove it with `shutil.rmtree(..., ignore_errors=True)` in a `finally`.
 - [x] Test in `tests/`: the subprocess environment carries a `TMPDIR` that exists during the call and is gone after it, including when the call times out.
 
+**M80: a pivotal chapter resumes at the judge** ✅
+`produce_pivotal_chapter` always re-claims `PIVOT-A` and `PIVOT-B`, so when both drafts succeeded and the judge then failed or was left `outcome_unknown` and retried, every later `run` answers `Task is not ready: PIVOT-A-...` and the chapter can never close (measured 2026-11-01 on a dark-romance project, chapter 3, after a judge retry).
+- [x] `produce_pivotal_chapter`: when a variant task is already `succeeded` and its three outputs exist, read the candidate from disk (prose, beat map, consequences) instead of claiming the task again; the judge, the regular draft and the closure run as before.
+- [x] Test in `tests/`: with both variants `succeeded` on disk and the judge `pending`, `run_next` calls the judge exactly once, not the writer, and closes the chapter.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
