@@ -6533,6 +6533,18 @@ After a verifier refuses a revision, the retried reviser is handed that finding 
 - [x] In `review_and_close_chapter`'s reviser loop: dispositions whose `finding` id appears only in the `rejected_verification` findings (not in the findings owed) are dropped from the answer before `_validate_revision`; any other unknown id still blocks.
 - [x] Test: an answer that dispositions a rejected-verification id besides the owed ones passes; an answer with an id from neither list is still refused.
 
+**M83: the number check reads thousands separators** ✅
+`_number_mismatch` reads `7,714` in the English source as the decimal 7.714 and a Ukrainian `7 714` or `7714` as other numbers, so a correct rendering is refused after two repairs and the chapter is left untranslated (measured 2026-11-01: «Cycle 7,714.» → «Цикл 7714.», chapter 2 of a book, Ukrainian). German `7.714` passes only by accident.
+- [x] `_number_mismatch`: a number written with groups of exactly three digits after the first group is read as one integer: in the source with `,` as separator; in the translation with `,`-free separators `.`, space, no-break space or narrow no-break space. A comma in the translation stays a decimal point. The comparison passes when the old normalisation or the new one gives equal lists, so a translation that keeps the source's comma still passes.
+- [x] Tests: `7,714` ↔ `7714`, `7 714` (no-break space), `7.714` pass; `7,714` ↔ `7,71` fails; `0.2` ↔ `0,2` still passes; `131` vs `1.31` still differ; count and order still checked.
+
+**M84: a translation with letters of a foreign script is refused** ✅
+A Ukrainian chapter was accepted with three CJK ideographs in the middle of a sentence (`к原作者кладав`), which later made the PDF export fall back to a CJK font and fail its font check (measured 2026-11-01). Nothing in `_translation_validation` looks at scripts.
+- [x] `_translation_validation`: a translated chapter that contains letters of a script that the source does not contain (CJK ideographs, kana, hangul, Arabic, Hebrew, Thai, Devanagari, and Latin letters inside a Cyrillic word or Cyrillic letters inside a Latin word) is refused with a reason that quotes the characters and the sentence around them. Latin and Cyrillic are each allowed in whole words (names, glossary terms kept in English).
+- [x] The same check runs on a passage rewrite from the locale reviser, if that path validates its output separately.
+- [x] Tests: the example sentence above is refused and the reason names the ideographs; a plain Ukrainian chapter with a Latin machine name passes; a source containing CJK allows CJK in the translation.
+- [x] A compound with a hyphen or apostrophe joining a Cyrillic part and a Latin part (`міні-PC`, `PC-шний`) is not a mixed word: the mixed-alphabet test applies to each part between hyphens, apostrophes and typographic apostrophes separately (found 2026-11-01 when it refused a correct Ukrainian chapter).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

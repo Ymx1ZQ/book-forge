@@ -11447,6 +11447,37 @@ def _glossary_self_contradictions(glossary: str) -> list[str]:
 _NUMBER_RE = re.compile(r"(?<!\w)\d+(?:[.,]\d+)?")
 NUMBER_MISMATCHES_NAMED = 3
 
+# M83: an English source writes «7,714» where a Ukrainian edition writes «7714» or
+# «7 714» and a German one «7.714». The old reading turned the source's comma into a
+# decimal point and refused every correct rendering. In the source a comma followed
+# by exactly one group of three digits is a thousands separator (so «7,71» is still
+# a decimal); in the translation a dot, a space, a no-break space or a narrow no-break
+# space between groups of three digits is one, and a comma stays a decimal point.
+# A gap only joins two groups when the second group is exactly three digits and is
+# not followed by another digit, so "7 and 714" stays two numbers.
+_SOURCE_GROUPED_NUMBER_RE = re.compile(r"(?<!\w)(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?)")
+_TRANSLATION_GROUPED_NUMBER_RE = re.compile(
+    r"(?<!\w)(?:\d{1,3}(?:[. \u00a0\u202f]\d{3}(?!\d))+(?:,\d+)?|\d+(?:[.,]\d+)?)"
+)
+
+
+def _grouped_source_numbers(text: str) -> list[str]:
+    """The source's numbers with thousands-separator commas dropped and decimal commas dotted."""
+    numbers = []
+    for match in _SOURCE_GROUPED_NUMBER_RE.finditer(text):
+        chunk = re.sub(r",(?=\d{3}(?!\d))", "", match.group(0))
+        numbers.append(chunk.replace(",", "."))
+    return numbers
+
+
+def _grouped_translation_numbers(text: str) -> list[str]:
+    """The translation's numbers with group separators dropped and decimal commas dotted."""
+    numbers = []
+    for match in _TRANSLATION_GROUPED_NUMBER_RE.finditer(text):
+        chunk = re.sub(r"[. \u00a0\u202f](?=\d{3}(?!\d))", "", match.group(0))
+        numbers.append(chunk.replace(",", "."))
+    return numbers
+
 
 def _sentence_around(text: str, start: int, end: int, *, limit: int = 160) -> str:
     """The sentence holding text[start:end], on one line and cut to `limit` characters."""
@@ -11475,7 +11506,10 @@ def _number_mismatch(source: str, translated: str) -> str | None:
     target_hits = list(_NUMBER_RE.finditer(translated))
     source_numbers = [hit.group(0).replace(",", ".") for hit in source_hits]
     target_numbers = [hit.group(0).replace(",", ".") for hit in target_hits]
-    if source_numbers == target_numbers:
+    equal = source_numbers == target_numbers
+    if not equal:
+        equal = _grouped_source_numbers(source) == _grouped_translation_numbers(translated)
+    if equal:
         return None
     named: list[str] = []
     matcher = difflib.SequenceMatcher(a=source_numbers, b=target_numbers, autojunk=False)
@@ -11509,6 +11543,81 @@ def _number_mismatch(source: str, translated: str) -> str | None:
     )
 
 
+# Scripts whose letters never make a translation foreign on their own: Latin and
+# Cyrillic trade whole words freely (names, glossary terms kept in the other
+# alphabet) and Greek sits beside both in quotations. Anything else — CJK, kana,
+# hangul, Arabic, Hebrew, Thai, Devanagari — is foreign unless the source itself
+# already uses that script.
+BASE_SCRIPTS = {"LATIN", "CYRILLIC", "GREEK"}
+
+
+def _letter_script(ch: str) -> str:
+    """The first word of the character's Unicode name, standing in for its script."""
+    try:
+        return unicodedata.name(ch).split()[0]
+    except ValueError:
+        return ""
+
+
+def _foreign_script_problem(source: str, translated: str) -> str | None:
+    """The letters of a foreign script the translation carries, named with their sentence.
+
+    A Ukrainian chapter came back with three CJK ideographs inside one word
+    (`к原作者кладав`), passed every gate, and then broke the PDF export's font
+    check. The reason quotes the characters and the sentence around them so the
+    repair ask can fix the word instead of searching the chapter. Latin-only
+    words in a Cyrillic text and the reverse are fine — names and glossary terms
+    live there — but a single word mixing both alphabets letter by letter
+    (`кaладав` with a Latin a) is a homoglyph glitch and is flagged too, unless
+    the source itself writes that word.
+    """
+    source_scripts = {_letter_script(ch) for ch in source if ch.isalpha()}
+    hits: list[str] = []
+
+    def _sentence_span(text: str, index: int) -> tuple[int, int]:
+        # The bounds _sentence_around reads, so every foreign letter in one
+        # sentence shares a single quoted sentence instead of one per character.
+        left = max(text.rfind(mark, 0, index) for mark in (". ", "! ", "? ", "\n", "\u2026 "))
+        left = 0 if left < 0 else left + 1
+        rights = [at for at in (text.find(mark, index + 1) for mark in (". ", "! ", "? ", "\n")) if at >= 0]
+        return left, min(rights) + 1 if rights else len(text)
+
+    grouped: dict[tuple[int, int], list[tuple[int, str]]] = {}
+    for index, ch in enumerate(translated):
+        if not ch.isalpha():
+            continue
+        script = _letter_script(ch)
+        if not script or script in BASE_SCRIPTS or script in source_scripts:
+            continue
+        grouped.setdefault(_sentence_span(translated, index), []).append((index, ch))
+    for _, found in grouped.items():
+        span_start = min(index for index, _ in found)
+        span_end = max(index for index, _ in found) + 1
+        named = ", ".join(dict.fromkeys(ch for _, ch in found))
+        hits.append(f"{named} in «{_sentence_around(translated, span_start, span_end)}»")
+    for match in re.finditer(WORD_RE, translated, re.UNICODE):
+        word = match.group(0)
+        if word in source:
+            continue
+        # A hyphen or apostrophe compound whose parts each sit in one alphabet
+        # (`міні-PC`) is fine; only a single part holding both alphabets
+        # (`кaладав` with a Latin a) is a homoglyph glitch.
+        for part in "".join(ch if ch.isalpha() else " " for ch in word).split():
+            scripts = {_letter_script(ch) for ch in part}
+            if "LATIN" in scripts and "CYRILLIC" in scripts:
+                hits.append(f"{word} mixes Latin and Cyrillic in «{_sentence_around(translated, *match.span())}»")
+                break
+    if not hits:
+        return None
+    more = len(hits) - 3
+    listed = "; ".join(hits[:3]) + (f"; and {more} more" if more > 0 else "")
+    return (
+        f"letters of a script the source does not use: {listed}. Write the chapter in the scripts the "
+        "source itself uses; keep a name or glossary term in the other alphabet as a whole word, never "
+        "as letters mixed into a translated word"
+    )
+
+
 def _translation_validation(source: str, value: dict[str, object], checks: dict[str, object] | None = None) -> list[str]:
     translated = value.get("translated_markdown")
     problems = []
@@ -11525,6 +11634,9 @@ def _translation_validation(source: str, value: dict[str, object], checks: dict[
     numbers = _number_mismatch(source, translated)
     if numbers:
         problems.append(numbers)
+    scripts = _foreign_script_problem(source, translated)
+    if scripts:
+        problems.append(scripts)
     source_headings = len(re.findall(r"(?m)^#{1,6}\s", source))
     translated_headings = len(re.findall(r"(?m)^#{1,6}\s", translated))
     if source_headings != translated_headings or source.count("\n***\n") != translated.count("\n***\n"):
@@ -12793,6 +12905,21 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
         }
         for index, problem in enumerate(_forbidden_form_problems(translated, _locale_checks(locale_root)), start=1)
     )
+    # A letter of a foreign script is as plain a machine finding as a forbidden form:
+    # the translation step now refuses it, and a translation written before that
+    # rule existed meets it here.
+    foreign_script = _foreign_script_problem(source, translated)
+    if foreign_script:
+        findings.append({
+            "id": "L-script",
+            "severity": "warning",
+            "kind": "style",
+            "rule": "the translation's script",
+            "issue": foreign_script,
+            "source": "",
+            "translated": "",
+            "fix": "",
+        })
     # Counted rather than read, because reading it is what fails: the two
     # monolingual roles cannot see an addition at all and the critic's four slots
     # are spent on meaning before they reach one.
