@@ -135,7 +135,14 @@ CHORUS_MODEL_CONFIGS: dict[str, dict[str, object]] = {
     # The ladder keeps `medium` because designer, locale-reader and locale-reviser pin
     # it, and a step absent from `variants` has nothing to resolve against.
     "openrouter/deepseek/deepseek-v4.1-flash-1017": {
-        "provider": {"order": ["deepseek"], "only": ["deepseek"], "allow_fallbacks": False},
+        # The vendor's own endpoint went to `Insufficient Balance` on 2026-11-01 and, pinned
+        # alone with fallbacks off, took every call of every role on this model with it.
+        # Three other endpoints serve the same weights; the vendor stays last.
+        "provider": {
+            "order": ["alibaba", "together", "fireworks", "deepseek"],
+            "only": ["alibaba", "together", "fireworks", "deepseek"],
+            "allow_fallbacks": True,
+        },
         "default_effort": "high",
         "variants": {"low": "low", "medium": "medium", "high": "high", "max": "max"},
         "limit": {"context": 1048576, "output": 131072},

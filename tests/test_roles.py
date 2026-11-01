@@ -47,7 +47,7 @@ class RoleTopologyTests(unittest.TestCase):
         self.assertNotIn("whitelist", config["provider"]["openrouter"])
         model = config["provider"]["openrouter"]["models"]["deepseek/deepseek-v4.1-flash-1017"]
         self.assertEqual(model["options"]["reasoning"]["effort"], "high")
-        self.assertFalse(model["options"]["provider"]["allow_fallbacks"])
+        self.assertTrue(model["options"]["provider"]["allow_fallbacks"])
         self.assertEqual(model["variants"], {
             "low": {"reasoning": {"effort": "low"}},
             "medium": {"reasoning": {"effort": "medium"}},

@@ -6545,6 +6545,11 @@ A Ukrainian chapter was accepted with three CJK ideographs in the middle of a se
 - [x] Tests: the example sentence above is refused and the reason names the ideographs; a plain Ukrainian chapter with a Latin machine name passes; a source containing CJK allows CJK in the translation.
 - [x] A compound with a hyphen or apostrophe joining a Cyrillic part and a Latin part (`міні-PC`, `PC-шний`) is not a mixed word: the mixed-alphabet test applies to each part between hyphens, apostrophes and typographic apostrophes separately (found 2026-11-01 when it refused a correct Ukrainian chapter).
 
+**M85: the DeepSeek pin allows other endpoints** ✅
+The catalogue pins `deepseek/deepseek-v4.1-flash-1017` to the vendor's own endpoint with fallbacks off. On 2026-11-01 that endpoint answered `Insufficient Balance` and showed status -5 on OpenRouter, so every call of a role resolved to that model failed (measured on a book that pins no translation roles) and the run stopped with nothing written.
+- [x] `CHORUS_MODEL_CONFIGS["openrouter/deepseek/deepseek-v4.1-flash-1017"]["provider"]`: `order` alibaba, together, fireworks, deepseek; `only` the same four; `allow_fallbacks` true, so a refusal by one endpoint moves the call to the next instead of ending it.
+- [x] Tests that pin the old provider block follow it; `runtime sync` writes the new block into the generated OpenCode config.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
