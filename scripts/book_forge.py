@@ -1828,28 +1828,33 @@ def _run_opencode_process(argv: list[str], *, cwd: Path | str, env: dict[str, st
     standard input — the envelope arrives as attached files and the prompt as an
     argument — so there is nothing given up here.
     """
-    process = subprocess.Popen(
-        argv,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        start_new_session=True,
-    )
+    scratch = tempfile.mkdtemp(prefix="book-forge-oc-")
+    env = {**env, "TMPDIR": scratch}
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        process = subprocess.Popen(
+            argv,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            start_new_session=True,
+        )
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            process.kill()
-        stdout, stderr = process.communicate()
-        raise OpencodeTimeout(what, timeout, stdout or "", stderr or "")
-    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                process.kill()
+            stdout, stderr = process.communicate()
+            raise OpencodeTimeout(what, timeout, stdout or "", stderr or "")
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _session_id_in(stream: str) -> str | None:

@@ -6513,6 +6513,11 @@ After `reset`, a run that an `outcome_unknown` task had put in `blocked` still r
 - [x] `reset_book`: after the plan is saved, a run in state `blocked` with no task in `blocked` or `outcome_unknown` returns to `running`, as `recover_before_dispatch` already does before a dispatch.
 - [x] Test in `tests/test_reset.py`: a run blocked by an `outcome_unknown` task that the reset drops reads `running` afterwards; a run still holding an `outcome_unknown` task outside the reset scope stays `blocked`.
 
+**M79: each opencode call gets its own temp directory** ✅
+Every `opencode` start extracts a native library of about 5 MB into the system temp directory and never removes it; on a machine with a size-limited `/tmp`, a long run fills it (measured 2026-11-01: 893 copies, about 5 GB, the quota ran out and other processes failed).
+- [x] `_run_opencode_process`: create a directory with `tempfile.mkdtemp`, pass it as `TMPDIR` to the subprocess, remove it with `shutil.rmtree(..., ignore_errors=True)` in a `finally`.
+- [x] Test in `tests/`: the subprocess environment carries a `TMPDIR` that exists during the call and is gone after it, including when the call times out.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
