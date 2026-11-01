@@ -6523,6 +6523,11 @@ Every `opencode` start extracts a native library of about 5 MB into the system t
 - [x] `produce_pivotal_chapter`: when a variant task is already `succeeded` and its three outputs exist, read the candidate from disk (prose, beat map, consequences) instead of claiming the task again; the judge, the regular draft and the closure run as before.
 - [x] Test in `tests/`: with both variants `succeeded` on disk and the judge `pending`, `run_next` calls the judge exactly once, not the writer, and closes the chapter.
 
+**M81: a closed chapter reviewed by a rule's model is not style-pending forever** ✅
+`_closed_style_pending` looks only for `style-<slug>.json` of the default style models. A chapter whose style review was done by a model named in a style rule (for example a tag rule with its own reviewer) leaves `style-<other-slug>.json`, so the chapter stays pending, `run` revisits it after it was already revised and fails with `Task is not ready: REVISE-STYLE-...`, and no later chapter is ever written (measured 2026-11-01, chapter 3 of a project with a tag rule).
+- [x] `_closed_style_pending`: the review counts as done when any `style-*.json` exists in the chapter's `reviews/` directory, whichever model wrote it.
+- [x] Test: a closed chapter whose only style file is `style-grok-4-6.json` is not pending; one with none is.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

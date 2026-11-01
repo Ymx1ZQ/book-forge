@@ -9268,8 +9268,8 @@ def _closed_style_pending(root: Path, book_id: str, chapter_id: str) -> bool:
     reviser_id = f"REVISE-STYLE-{book_id}-{chapter_id}"
     if any(t["id"] == reviser_id and t["state"] in {"pending", "running"} for t in plan["tasks"]):
         return True
-    slugs = [model.split("/")[-1].replace(".", "-") for model in STYLE_REVIEW_MODELS]
-    return not any((root / f"books/{book_id}/reviews/{chapter_id}/style-{slug}.json").is_file() for slug in slugs)
+    reviews = root / "books" / book_id / "reviews" / chapter_id
+    return not any(reviews.glob("style-*.json"))
 
 
 def _with_contract_heading(prose: str, contract: dict[str, object]) -> str:
