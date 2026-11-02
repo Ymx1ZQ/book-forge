@@ -14582,6 +14582,12 @@ def _chapter_number_html(chapter: dict[str, object]) -> str:
     return f'<p class="chapter-number">{html.escape(str(number))}</p>' if number else ""
 
 
+def _print_safe(text: str) -> str:
+    # The regular print font (Noto Serif) has no glyph for U+2212 MINUS SIGN,
+    # so the PDF export uses U+2013 EN DASH, which the font carries.
+    return text.replace("−", "–")
+
+
 def _xhtml_document(title: str, language: str, body: str, *, nav: bool = False) -> bytes:
     nav_namespace = ' xmlns:epub="http://www.idpf.org/2007/ops"' if nav else ""
     return (
@@ -14887,7 +14893,7 @@ def export_pdf(
         "title_html": html.escape(str(assembly["title"]), quote=True),
         "author_html": html.escape(str(assembly["author"]), quote=True),
         "chapters": [
-            {"id": chapter["id"], "title": chapter["title"], "xhtml": f'<section id="{chapter["id"]}">{_chapter_number_html(chapter)}{_markdown_xhtml(str(chapter["markdown"]))}</section>'}
+            {"id": chapter["id"], "title": chapter["title"], "xhtml": _print_safe(f'<section id="{chapter["id"]}">{_chapter_number_html(chapter)}{_markdown_xhtml(str(chapter["markdown"]))}</section>')}
             for chapter in assembly["chapters"]
         ],
     }

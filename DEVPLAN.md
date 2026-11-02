@@ -6575,6 +6575,11 @@ In `produce_pivotal_chapter` the judge call is claimed, then `_parse_contract_js
 - [x] `_unprintable_problem(source, translated)` in `scripts/book_forge.py`: the characters of `translated` (whitespace excluded) that the regular print font (`PDF_FONT_PATHS["regular"]`) has no glyph for and that `source` does not carry, read once from `fc-query -f '%{charset}'` and cached; each named with its code point and the sentence around it, like `_foreign_script_problem`. When `fc-query` or the font is missing it returns `None`. Called where `_foreign_script_problem` is called (the translation validation and the machine finding in the translation review).
 - [x] Tests in `tests/test_translation_unprintable.py`: `「…」` and U+2212 are refused with their code points; ordinary Latin text with `« »`, `—`, `…` and `€` passes; a character the source carries passes; a missing `fc-query` returns `None`.
 
+**M91: the PDF export draws U+2212 with a glyph the print font has** ✅
+The regular print font (Noto Serif) has no U+2212 MINUS SIGN. On 2026-11-02 a chapter whose English source carries `−18 GPU-HE` was translated faithfully, so M90 correctly let it pass (the source has the character), and the PDF export then failed with "PDF contains an unexpected font family" for that edition. The translation review loop cannot remove a character the source contains and ran for hours without converging.
+- [x] In `export_pdf` (`scripts/book_forge.py`), the chapter XHTML handed to the renderer replaces U+2212 with U+2013 EN DASH (the font has it); the EPUB, the manuscript and the translation are left as they are.
+- [x] Test in `tests/test_pdf_minus.py` (new): the chapter markup built for the renderer from a chapter containing `−18` carries `–18` and no U+2212; use the same way other tests import the engine, and call whatever helper the edit introduces (extract the replacement into a small function `_print_safe(text)` so it can be tested without running the renderer).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
