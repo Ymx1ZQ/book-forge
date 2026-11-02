@@ -6570,6 +6570,11 @@ In `produce_pivotal_chapter` the judge call is claimed, then `_parse_contract_js
 - [x] The dispatch in `run` (the loop over `chapters/CH-*.json` in `scripts/book_forge.py`, near `return produce_pivotal_chapter(`): when the contract is pivotal and `draft.md` exists, go to `review_and_close_chapter` as for a non-pivotal chapter; `produce_pivotal_chapter` only when there is no draft.
 - [x] Test in `tests/test_pivotal.py`: a pivotal chapter with `draft.md` present and its pivot, judge and draft tasks `succeeded` is routed to `review_and_close_chapter` and calls neither the judge nor the writer.
 
+**M90: a translation with a character the print font cannot draw is refused** ✅
+`_foreign_script_problem` (M84) refuses letters of a foreign script, but not punctuation or symbols the print font lacks. On 2026-11-02 an Italian chapter came back with the Japanese corner brackets `「」` as dialogue marks (5 pairs) and another with U+2212 MINUS SIGN; both passed the validation, and the PDF export then failed with "PDF contains an unexpected font family" hours later.
+- [x] `_unprintable_problem(source, translated)` in `scripts/book_forge.py`: the characters of `translated` (whitespace excluded) that the regular print font (`PDF_FONT_PATHS["regular"]`) has no glyph for and that `source` does not carry, read once from `fc-query -f '%{charset}'` and cached; each named with its code point and the sentence around it, like `_foreign_script_problem`. When `fc-query` or the font is missing it returns `None`. Called where `_foreign_script_problem` is called (the translation validation and the machine finding in the translation review).
+- [x] Tests in `tests/test_translation_unprintable.py`: `「…」` and U+2212 are refused with their code points; ordinary Latin text with `« »`, `—`, `…` and `€` passes; a character the source carries passes; a missing `fc-query` returns `None`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

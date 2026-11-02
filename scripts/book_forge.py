@@ -11666,6 +11666,96 @@ def _foreign_script_problem(source: str, translated: str) -> str | None:
     )
 
 
+_PRINT_FONT_CHARSET: set[int] | None = None
+_PRINT_FONT_CHARSET_READ = False
+
+
+def _print_font_codepoints() -> set[int] | None:
+    """The code points the regular print font can draw, read once from fc-query.
+
+    `fc-query -f '%{charset}'` prints space-separated hex ranges (`20a0-20bf`) and
+    single code points (`38c`). The font is pinned for the PDF export, so a
+    character outside this set cannot be drawn there; when the tool or the font
+    is missing the whole check is skipped rather than refusing every chapter.
+    """
+    global _PRINT_FONT_CHARSET, _PRINT_FONT_CHARSET_READ
+    if _PRINT_FONT_CHARSET_READ:
+        return _PRINT_FONT_CHARSET
+    _PRINT_FONT_CHARSET_READ = True
+    font = PDF_FONT_PATHS["regular"]
+    if not font.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            ["fc-query", "-f", "%{charset}", str(font)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    points: set[int] = set()
+    for token in result.stdout.split():
+        first, _, last = token.partition("-")
+        try:
+            start = int(first, 16)
+            end = int(last, 16) if last else start
+        except ValueError:
+            return None
+        points.update(range(start, end + 1))
+    _PRINT_FONT_CHARSET = points
+    return points
+
+
+def _unprintable_problem(source: str, translated: str) -> str | None:
+    """The characters the print font cannot draw, named with their sentence.
+
+    An Italian chapter came back with the Japanese corner brackets `「」` as
+    dialogue marks and another with U+2212 MINUS SIGN. Both passed every gate,
+    and the PDF export then failed its font check hours later. A character the
+    source itself carries is left alone: it was already in the book before the
+    translation. The reason names each character with its code point and quotes
+    the sentence around it, so the repair ask can replace the mark instead of
+    searching the chapter.
+    """
+    charset = _print_font_codepoints()
+    if charset is None:
+        return None
+    source_chars = set(source)
+    hits: list[str] = []
+
+    def _sentence_span(text: str, index: int) -> tuple[int, int]:
+        # The bounds _sentence_around reads, so every unprintable character in
+        # one sentence shares a single quoted sentence instead of one per char.
+        left = max(text.rfind(mark, 0, index) for mark in (". ", "! ", "? ", "\n", "\u2026 "))
+        left = 0 if left < 0 else left + 1
+        rights = [at for at in (text.find(mark, index + 1) for mark in (". ", "! ", "? ", "\n")) if at >= 0]
+        return left, min(rights) + 1 if rights else len(text)
+
+    grouped: dict[tuple[int, int], list[tuple[int, str]]] = {}
+    for index, ch in enumerate(translated):
+        if ch.isspace() or ch in source_chars or ord(ch) in charset:
+            continue
+        grouped.setdefault(_sentence_span(translated, index), []).append((index, ch))
+    for _, found in grouped.items():
+        span_start = min(index for index, _ in found)
+        span_end = max(index for index, _ in found) + 1
+        named = ", ".join(f"{ch} (U+{ord(ch):04X})" for ch in dict.fromkeys(ch for _, ch in found))
+        hits.append(f"{named} in «{_sentence_around(translated, span_start, span_end)}»")
+    if not hits:
+        return None
+    more = len(hits) - 3
+    listed = "; ".join(hits[:3]) + (f"; and {more} more" if more > 0 else "")
+    return (
+        f"characters the print font has no glyph for: {listed}. Write the chapter with characters "
+        "the print font can draw; replace a quotation mark or symbol with the one the locale's "
+        "printed books use"
+    )
+
+
 def _translation_validation(source: str, value: dict[str, object], checks: dict[str, object] | None = None) -> list[str]:
     translated = value.get("translated_markdown")
     problems = []
@@ -11685,6 +11775,9 @@ def _translation_validation(source: str, value: dict[str, object], checks: dict[
     scripts = _foreign_script_problem(source, translated)
     if scripts:
         problems.append(scripts)
+    unprintable = _unprintable_problem(source, translated)
+    if unprintable:
+        problems.append(unprintable)
     source_headings = len(re.findall(r"(?m)^#{1,6}\s", source))
     translated_headings = len(re.findall(r"(?m)^#{1,6}\s", translated))
     if source_headings != translated_headings or source.count("\n***\n") != translated.count("\n***\n"):
@@ -12964,6 +13057,21 @@ def _review_translation(  # noqa: PLR0913 - the bilingual pass takes what the mo
             "kind": "style",
             "rule": "the translation's script",
             "issue": foreign_script,
+            "source": "",
+            "translated": "",
+            "fix": "",
+        })
+    # A character the print font cannot draw is the same kind of machine finding:
+    # the translation step refuses it now, and a translation written before that
+    # rule existed meets it here.
+    unprintable = _unprintable_problem(source, translated)
+    if unprintable:
+        findings.append({
+            "id": "L-glyph",
+            "severity": "warning",
+            "kind": "style",
+            "rule": "the translation's glyphs",
+            "issue": unprintable,
             "source": "",
             "translated": "",
             "fix": "",
