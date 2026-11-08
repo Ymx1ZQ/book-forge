@@ -3672,6 +3672,9 @@ def backfill_artifacts(project: Path | str, *, book: str | None = None, locale: 
     return {"backfilled": sorted(set(changed)), "count": len(set(changed))}
 
 
+ADOPTABLE_KINDS = ("source-chapter", "translation-chapter")
+
+
 def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "", keep_dependents: bool = False) -> dict[str, object]:
     """Accept a hand edit of a source chapter as its current version.
 
@@ -3687,8 +3690,8 @@ def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "", keep
     artifact = registry["artifacts"].get(artifact_id)
     if artifact is None:
         raise BookForgeError(f"Unknown artifact: {artifact_id}")
-    if artifact.get("kind") != "source-chapter":
-        raise BookForgeError(f"Only a source-chapter can be adopted; {artifact_id} is a {artifact.get('kind')}")
+    if artifact.get("kind") not in ADOPTABLE_KINDS:
+        raise BookForgeError(f"Only a source-chapter or translation-chapter can be adopted; {artifact_id} is a {artifact.get('kind')}")
     target = root / str(artifact["path"])
     if not target.is_file():
         raise BookForgeError(f"Artifact path does not exist: {artifact['path']}")
@@ -3732,7 +3735,7 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
                 if current_hash not in promoted_hashes.get(str(artifact["path"]), set()):
                     hint = (
                         f"; if the edit is intended, accept it with `book-forge adopt {artifact_id} --reason TEXT`"
-                        if artifact.get("kind") == "source-chapter"
+                        if artifact.get("kind") in ADOPTABLE_KINDS
                         else ""
                     )
                     raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}{hint}")

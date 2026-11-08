@@ -71,10 +71,16 @@ class AdoptTests(unittest.TestCase):
         row = json.loads((self.root / ".book-forge/adopted.jsonl").read_text().strip().splitlines()[-1])
         self.assertEqual(row["kept_dependents"], ["TRN"])
 
-    def test_adopt_refuses_an_artifact_that_is_not_a_source_chapter(self):
+    def test_adopt_accepts_a_hand_edited_translation(self):
         (self.root / "books" / "derived.txt").write_text("hand-edited translation")
+        result = self.bf.adopt_artifact(self.project, "TRN", reason="wording")
+        self.assertNotEqual(result["old_hash"], result["new_hash"])
+        self.assertEqual(self.bf.reconcile_artifacts(self.project), [])
+
+    def test_adopt_refuses_an_artifact_of_another_kind(self):
+        self.bf.register_artifact(self.project, "OTHER", "universe-block", path=self.source)
         with self.assertRaises(self.bf.BookForgeError):
-            self.bf.adopt_artifact(self.project, "TRN")
+            self.bf.adopt_artifact(self.project, "OTHER")
 
     def test_adopt_refuses_an_unknown_artifact(self):
         with self.assertRaises(self.bf.BookForgeError):
