@@ -3672,6 +3672,37 @@ def backfill_artifacts(project: Path | str, *, book: str | None = None, locale: 
     return {"backfilled": sorted(set(changed)), "count": len(set(changed))}
 
 
+def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "") -> dict[str, object]:
+    """Accept a hand edit of a source chapter as its current version.
+
+    The registry pins the hash of the last promoted text, so a chapter fixed by
+    hand fails every later reconcile. Adopting re-registers the file's present
+    hash and keeps the old and new hash on record; dependents (the translations)
+    then read as stale through the ordinary dependency comparison.
+    """
+    root = _project_root(project)
+    registry = _artifact_registry(root)
+    artifact = registry["artifacts"].get(artifact_id)
+    if artifact is None:
+        raise BookForgeError(f"Unknown artifact: {artifact_id}")
+    if artifact.get("kind") != "source-chapter":
+        raise BookForgeError(f"Only a source-chapter can be adopted; {artifact_id} is a {artifact.get('kind')}")
+    target = root / str(artifact["path"])
+    if not target.is_file():
+        raise BookForgeError(f"Artifact path does not exist: {artifact['path']}")
+    old_hash = str(artifact["hash"])
+    new_hash = _file_hash(target)
+    if new_hash != old_hash:
+        artifact["hash"] = new_hash
+        _write_json(root / ".book-forge" / "artifact-deps.json", registry)
+        journal = root / ".book-forge" / "adopted.jsonl"
+        row = {"at": time.time(), "artifact": artifact_id, "path": str(artifact["path"]), "old_hash": old_hash, "new_hash": new_hash, "reason": reason}
+        with journal.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    stale = reconcile_artifacts(root)
+    return {"artifact": artifact_id, "old_hash": old_hash, "new_hash": new_hash, "stale": stale}
+
+
 def reconcile_artifacts(project: Path | str) -> list[str]:
     root = _project_root(project)
     index = rebuild_indexes(root)
@@ -3688,7 +3719,12 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
                 if promoted_hashes is None:
                     promoted_hashes = _promoted_path_hashes(root)
                 if current_hash not in promoted_hashes.get(str(artifact["path"]), set()):
-                    raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}")
+                    hint = (
+                        f"; if the edit is intended, accept it with `book-forge adopt {artifact_id} --reason TEXT`"
+                        if artifact.get("kind") == "source-chapter"
+                        else ""
+                    )
+                    raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}{hint}")
             artifact["hash"] = current_hash
         for dependency in artifact.get("dependencies", []):
             current_dependency = _dependency_hash(root, dependency, registry, index)
@@ -8991,7 +9027,7 @@ def _advance_lock(root: Path, book_id: str):
             holder = 0
         if holder and holder != os.getpid() and _pid_alive(holder):
             raise AdvanceBusy(
-                f"another advance is already driving {book_id} (pid {holder}); "
+                f"another driver (advance or translate) is already driving {book_id} (pid {holder}); "
                 "wait for it rather than starting a second one — two drivers on one book "
                 "contend for the same claims"
             )
@@ -9004,6 +9040,17 @@ def _advance_lock(root: Path, book_id: str):
                 path.unlink()
         except OSError:
             pass
+
+
+def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_all: bool):
+    """`translate next|run` under the book's driver lock.
+
+    A second translate process on one project orphans the first one's attempts and
+    blocks the run on a plan-hash mismatch; the lock turns that into a refusal that
+    names the process already driving."""
+    root = _project_root(project)
+    with _advance_lock(root, book_id):
+        return translate_next(project, book_id, locale, run_all=run_all)
 
 
 class AdvanceHalted(BookForgeError):
@@ -15869,6 +15916,9 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--run")
     resume.add_argument("--resolve-unknown", action="append", default=[])
     resume.add_argument("--resolve-blocked", action="append", default=[])
+    adopt = commands.add_parser("adopt", help="Accept a hand-edited source chapter as its current version")
+    adopt.add_argument("artifact")
+    adopt.add_argument("--reason", default="")
     status = commands.add_parser("status")
     status.add_argument("--book")
     status.add_argument("--run")
@@ -15990,6 +16040,8 @@ def main(argv: list[str] | None = None) -> int:
                 task, resolution = value.rsplit(":", 1)
                 blocked[task] = resolution
             print(json.dumps(resume_run(args.project, run_id=args.run, resolutions=resolutions, blocked_resolutions=blocked), sort_keys=True))
+        elif args.command == "adopt":
+            print(json.dumps(adopt_artifact(args.project, args.artifact, reason=args.reason), sort_keys=True))
         elif args.command == "status":
             if args.repair_view:
                 repair_plan_view(args.project)
@@ -16067,7 +16119,7 @@ def main(argv: list[str] | None = None) -> int:
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
         elif args.command == "translate":
-            print(json.dumps(translate_next(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
+            print(json.dumps(run_translate_locked(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
         elif args.command == "audit":
             if args.kind == "engagement":
                 if not args.book:

@@ -28,7 +28,7 @@ reference before acting:
 | `design` | `references/design.md` |
 | `brief` | `references/brief.md` |
 | `run`, `advance` | `references/run.md` |
-| `pause`, `resume`, `status`, `reset` | `references/lifecycle.md` |
+| `pause`, `resume`, `status`, `reset`, `adopt` | `references/lifecycle.md` |
 | `audit` | `references/audit.md` |
 | `translate` | `references/translate.md` |
 | `chorus` | `references/chorus.md` |

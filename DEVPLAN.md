@@ -6580,6 +6580,21 @@ The regular print font (Noto Serif) has no U+2212 MINUS SIGN. On 2026-11-02 a ch
 - [x] In `export_pdf` (`scripts/book_forge.py`), the chapter XHTML handed to the renderer replaces U+2212 with U+2013 EN DASH (the font has it); the EPUB, the manuscript and the translation are left as they are.
 - [x] Test in `tests/test_pdf_minus.py` (new): the chapter markup built for the renderer from a chapter containing `−18` carries `–18` and no U+2212; use the same way other tests import the engine, and call whatever helper the edit introduces (extract the replacement into a small function `_print_safe(text)` so it can be tested without running the renderer).
 
+### M92 — A hand-edited source chapter can be adopted, and a second `translate run` is refused 🔄
+
+`reconcile_artifacts` raises `Derived artifact was edited directly: SOURCE-BOOK-0001-CH-0001` on every `translate run` once a source chapter has been changed by hand. The registry keeps the hash of the last promoted version, the edit's hash is in no transaction journal, and no command accepts it. Each translated chapter ends with that error; the retry recovers, so a run of N chapters needs N relaunches. Measured 2026-11-08: 8 consecutive stops on one project.
+
+Two running `translate run` processes on one project also block the run (`Canonical plan hash mismatch`, tasks left `outcome_unknown`); nothing refuses the second one.
+
+- [x] Test: a source chapter edited by hand makes `reconcile` fail with the current error; after `adopt` it passes and its translations are marked stale.
+- [x] `book-forge adopt <artifact-id> [--reason TEXT]`: re-registers the current hash of a hand-edited `source-chapter` artifact, records the old and new hash and the reason in a journal entry, refuses any other artifact kind, and lets currentness mark dependent translations stale as it does for any dependency change.
+- [x] `reconcile_artifacts`: the error message names the command (`run book-forge adopt <id>`).
+- [x] Test: a second `translate run` on the same project exits at once with a message naming the running process; a dead owner's lock is taken over.
+- [x] Lock for `translate run`: one lock file per project holding the pid, released on exit, stale when the pid is dead.
+- [x] `references/` and `SKILL.md` document `adopt`; the full test suite passes.
+- [x] Installed with `./install.sh --force`.
+- [ ] On the Margherita project: `adopt SOURCE-BOOK-0001-CH-0001`, then confirm `translate run` ends without the error. Held until the author decides what to do with the CH-0001 translations, which `adopt` marks stale.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

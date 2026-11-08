@@ -46,3 +46,11 @@ A driver killed mid-call — by the OOM killer, by a closed terminal, by `kill` 
 
 `pause --emergency` is for stopping a *live* run immediately and is not part of this. A run that is genuinely running, with a lease that has not expired, still refuses to resume — there is nothing waiting on a decision.
 
+
+## When a source chapter was fixed by hand
+
+The artifact registry keeps the hash of each source chapter as the pipeline last promoted it. A chapter corrected outside the pipeline makes every later `translate run` stop with `Derived artifact was edited directly: <id>`.
+
+`adopt <artifact-id> --reason TEXT` accepts the file as it now is: it re-registers the current hash, appends the old hash, the new hash and the reason to `.book-forge/adopted.jsonl`, and prints the artifacts that now read as stale. The translations of that chapter are among them: confirm each as still valid or translate it again. Only a `source-chapter` can be adopted; any other derived file edited by hand is still refused.
+
+`translate next` and `translate run` hold the same per-book lock as `advance`. A second process on the same book exits at once and names the pid already driving it; a lock left by a dead process is taken over.
