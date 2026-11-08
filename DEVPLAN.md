@@ -6595,7 +6595,7 @@ Two running `translate run` processes on one project also block the run (`Canoni
 - [x] Installed with `./install.sh --force`.
 - [x] `adopt --keep-translations`: accepts the new hash and re-pins the dependency hashes of the artifacts that depend on it, so translations already made stay current; default behaviour unchanged (they read as stale); the journal row records `kept_dependents`.
 - [x] `adopt` also accepts a hand-edited `translation-chapter` (the de/uk chapters of Margherita CH-0001–0006 were fixed by hand in the same commit); the reconcile hint names `adopt` for both kinds.
-- [ ] On the Margherita project: `adopt SOURCE-BOOK-0001-CH-0001 --keep-translations --reason "Italian words replaced by English, no content change"` (commit 088f6e4: Camere/piazza/Cognome/tesoro/Tedesca); confirm `translate run` ends without the error and CH-0001 is not retranslated.
+- [~] On the Margherita project (adopted 2026-11-08: source CH-0001–0006 and 0008 with `--keep-translations`, de/uk translations CH-0001–0006; still to confirm: the next `translate run` ends without the error): `adopt SOURCE-BOOK-0001-CH-0001 --keep-translations --reason "Italian words replaced by English, no content change"` (commit 088f6e4: Camere/piazza/Cognome/tesoro/Tedesca); confirm `translate run` ends without the error and CH-0001 is not retranslated.
 
 ### Dependencies and exclusions
 
