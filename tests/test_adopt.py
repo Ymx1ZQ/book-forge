@@ -61,6 +61,16 @@ class AdoptTests(unittest.TestCase):
         row = json.loads(journal[-1])
         self.assertEqual((row["artifact"], row["old_hash"], row["new_hash"], row["reason"]), ("SRC", old, new, "Italian words pass"))
 
+    def test_keep_translations_accepts_the_hash_and_leaves_the_translation_current(self):
+        self.source.write_text("alpha, edited by hand\n")
+
+        result = self.bf.adopt_artifact(self.project, "SRC", reason="wording only", keep_dependents=True)
+
+        self.assertEqual(result["stale"], [])
+        self.assertEqual(self.bf.reconcile_artifacts(self.project), [])
+        row = json.loads((self.root / ".book-forge/adopted.jsonl").read_text().strip().splitlines()[-1])
+        self.assertEqual(row["kept_dependents"], ["TRN"])
+
     def test_adopt_refuses_an_artifact_that_is_not_a_source_chapter(self):
         (self.root / "books" / "derived.txt").write_text("hand-edited translation")
         with self.assertRaises(self.bf.BookForgeError):

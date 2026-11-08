@@ -6593,7 +6593,8 @@ Two running `translate run` processes on one project also block the run (`Canoni
 - [x] Lock for `translate run`: one lock file per project holding the pid, released on exit, stale when the pid is dead.
 - [x] `references/` and `SKILL.md` document `adopt`; the full test suite passes.
 - [x] Installed with `./install.sh --force`.
-- [ ] On the Margherita project: `adopt SOURCE-BOOK-0001-CH-0001`, then confirm `translate run` ends without the error. Held until the author decides what to do with the CH-0001 translations, which `adopt` marks stale.
+- [x] `adopt --keep-translations`: accepts the new hash and re-pins the dependency hashes of the artifacts that depend on it, so translations already made stay current; default behaviour unchanged (they read as stale); the journal row records `kept_dependents`.
+- [ ] On the Margherita project: `adopt SOURCE-BOOK-0001-CH-0001 --keep-translations --reason "Italian words replaced by English, no content change"` (commit 088f6e4: Camere/piazza/Cognome/tesoro/Tedesca); confirm `translate run` ends without the error and CH-0001 is not retranslated.
 
 ### Dependencies and exclusions
 

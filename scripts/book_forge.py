@@ -3672,13 +3672,15 @@ def backfill_artifacts(project: Path | str, *, book: str | None = None, locale: 
     return {"backfilled": sorted(set(changed)), "count": len(set(changed))}
 
 
-def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "") -> dict[str, object]:
+def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "", keep_dependents: bool = False) -> dict[str, object]:
     """Accept a hand edit of a source chapter as its current version.
 
     The registry pins the hash of the last promoted text, so a chapter fixed by
     hand fails every later reconcile. Adopting re-registers the file's present
     hash and keeps the old and new hash on record; dependents (the translations)
-    then read as stale through the ordinary dependency comparison.
+    then read as stale through the ordinary dependency comparison. With
+    `keep_dependents` the dependents' pinned dependency hashes are moved to the
+    new text, so work already done on them stays current (a wording-only fix).
     """
     root = _project_root(project)
     registry = _artifact_registry(root)
@@ -3694,9 +3696,18 @@ def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "") -> d
     new_hash = _file_hash(target)
     if new_hash != old_hash:
         artifact["hash"] = new_hash
+        kept: list[str] = []
+        if keep_dependents:
+            index = rebuild_indexes(root)
+            for other_id, other in sorted(registry["artifacts"].items()):
+                if artifact_id in other.get("dependencies", []):
+                    other["dependency_hashes"][artifact_id] = _dependency_hash(root, artifact_id, registry, index)
+                    kept.append(str(other_id))
         _write_json(root / ".book-forge" / "artifact-deps.json", registry)
         journal = root / ".book-forge" / "adopted.jsonl"
         row = {"at": time.time(), "artifact": artifact_id, "path": str(artifact["path"]), "old_hash": old_hash, "new_hash": new_hash, "reason": reason}
+        if keep_dependents:
+            row["kept_dependents"] = kept
         with journal.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     stale = reconcile_artifacts(root)
@@ -15919,6 +15930,7 @@ def build_parser() -> argparse.ArgumentParser:
     adopt = commands.add_parser("adopt", help="Accept a hand-edited source chapter as its current version")
     adopt.add_argument("artifact")
     adopt.add_argument("--reason", default="")
+    adopt.add_argument("--keep-translations", action="store_true", help="Leave dependents current (wording-only fix)")
     status = commands.add_parser("status")
     status.add_argument("--book")
     status.add_argument("--run")
@@ -16041,7 +16053,7 @@ def main(argv: list[str] | None = None) -> int:
                 blocked[task] = resolution
             print(json.dumps(resume_run(args.project, run_id=args.run, resolutions=resolutions, blocked_resolutions=blocked), sort_keys=True))
         elif args.command == "adopt":
-            print(json.dumps(adopt_artifact(args.project, args.artifact, reason=args.reason), sort_keys=True))
+            print(json.dumps(adopt_artifact(args.project, args.artifact, reason=args.reason, keep_dependents=args.keep_translations), sort_keys=True))
         elif args.command == "status":
             if args.repair_view:
                 repair_plan_view(args.project)
