@@ -2929,6 +2929,12 @@ def status_project(
     wrapped = _status_wrapped_lines(root)
     if wrapped:
         result["wrapped_lines"] = wrapped
+    uncarried = pending_carries(root, book_id=book_id, locale=locale)
+    if uncarried:
+        result["source_edits_not_confirmed"] = [
+            {"translation": row["translation"], "source": row["source"], "paragraphs": None if row.get("changes") is None else len(row["changes"])}
+            for row in uncarried
+        ]
     if scope:
         result["scope"] = scope
     return result
@@ -3530,6 +3536,8 @@ def register_artifact(
         "events": list(events or []),
     }
     registry["artifacts"][artifact_id] = row
+    if kind == "source-chapter":
+        _snapshot_source(root, target)
     registry["edges"] = sorted(
         [{"from": dependency, "to": target_id} for target_id, artifact in registry["artifacts"].items() for dependency in artifact.get("dependencies", [])],
         key=lambda edge: (edge["from"], edge["to"]),
@@ -3672,6 +3680,77 @@ def backfill_artifacts(project: Path | str, *, book: str | None = None, locale: 
     return {"backfilled": sorted(set(changed)), "count": len(set(changed))}
 
 
+def _snapshot_dir(root: Path) -> Path:
+    return root / ".book-forge" / "source-text"
+
+
+def _snapshot_source(root: Path, path: Path) -> None:
+    """Keep the text behind a registered source hash, so a later hand edit can be
+    diffed paragraph by paragraph against what the translations were made from."""
+    digest = _file_hash(path)
+    if digest is None:
+        return
+    target = _snapshot_dir(root) / f"{digest}.md"
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(path.read_bytes())
+
+
+def _paragraph_changes(old: str | None, new: str) -> list[dict[str, str]] | None:
+    """Changed paragraphs as {old, new} pairs; None when the old text is unknown."""
+    if old is None:
+        return None
+    import difflib
+
+    before = [part.strip() for part in old.split("\n\n") if part.strip()]
+    after = [part.strip() for part in new.split("\n\n") if part.strip()]
+    changes: list[dict[str, str]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=before, b=after, autojunk=False).get_opcodes():
+        if tag != "equal":
+            changes.append({"old": "\n\n".join(before[i1:i2]), "new": "\n\n".join(after[j1:j2])})
+    return changes
+
+
+def _carries_path(root: Path) -> Path:
+    return root / ".book-forge" / "carries.json"
+
+
+def _read_carries(root: Path) -> list[dict[str, object]]:
+    path = _carries_path(root)
+    return list(_read_json(path).get("carries", [])) if path.is_file() else []
+
+
+def pending_carries(project: Path | str, *, book_id: str | None = None, locale: str | None = None) -> list[dict[str, object]]:
+    """Translations that were kept current through `adopt --keep-translations` and
+    whose source edit has not been confirmed as carried."""
+    root = _project_root(project)
+    rows = [row for row in _read_carries(root) if not row.get("confirmed_at")]
+    if book_id:
+        rows = [row for row in rows if f"-{book_id}-" in str(row["translation"])]
+    if locale:
+        rows = [row for row in rows if str(row["translation"]).endswith(f"-{_canonical_locale(locale)}")]
+    return rows
+
+
+def confirm_carried(project: Path | str, book_id: str, locale: str, *, chapter_id: str | None = None, who: str = "") -> list[str]:
+    """Record that the pending source edits were applied to these translations."""
+    root = _project_root(project)
+    carries = _read_carries(root)
+    suffix = f"-{_canonical_locale(locale)}"
+    confirmed: list[str] = []
+    for row in carries:
+        name = str(row["translation"])
+        if row.get("confirmed_at") or f"-{book_id}-" not in name or not name.endswith(suffix):
+            continue
+        if chapter_id and f"-{chapter_id}-" not in name:
+            continue
+        row["confirmed_at"] = time.time()
+        row["confirmed_by"] = who
+        confirmed.append(name)
+    _write_json(_carries_path(root), {"schema": 1, "carries": carries})
+    return sorted(set(confirmed))
+
+
 ADOPTABLE_KINDS = ("source-chapter", "translation-chapter")
 
 
@@ -3700,6 +3779,9 @@ def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "", keep
     if new_hash != old_hash:
         artifact["hash"] = new_hash
         kept: list[str] = []
+        old_snapshot = _snapshot_dir(root) / f"{old_hash}.md"
+        changes = _paragraph_changes(old_snapshot.read_text(encoding="utf-8") if old_snapshot.is_file() else None, target.read_text(encoding="utf-8")) if artifact.get("kind") == "source-chapter" else None
+        _snapshot_source(root, target)
         if keep_dependents:
             index = rebuild_indexes(root)
             for other_id, other in sorted(registry["artifacts"].items()):
@@ -3711,6 +3793,11 @@ def adopt_artifact(project: Path | str, artifact_id: str, reason: str = "", keep
         row = {"at": time.time(), "artifact": artifact_id, "path": str(artifact["path"]), "old_hash": old_hash, "new_hash": new_hash, "reason": reason}
         if keep_dependents:
             row["kept_dependents"] = kept
+            carries = _read_carries(root)
+            for name in kept:
+                if registry["artifacts"][name].get("kind") == "translation-chapter":
+                    carries.append({"at": row["at"], "source": artifact_id, "translation": name, "old_hash": old_hash, "new_hash": new_hash, "reason": reason, "changes": changes})
+            _write_json(_carries_path(root), {"schema": 1, "carries": carries})
         with journal.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     stale = reconcile_artifacts(root)
@@ -3740,6 +3827,8 @@ def reconcile_artifacts(project: Path | str) -> list[str]:
                     )
                     raise BookForgeError(f"Derived artifact was edited directly: {artifact_id}{hint}")
             artifact["hash"] = current_hash
+        if artifact.get("kind") == "source-chapter":
+            _snapshot_source(root, target)
         for dependency in artifact.get("dependencies", []):
             current_dependency = _dependency_hash(root, dependency, registry, index)
             if current_dependency != artifact["dependency_hashes"].get(dependency):
@@ -9056,7 +9145,26 @@ def _advance_lock(root: Path, book_id: str):
             pass
 
 
-def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_all: bool):
+def _retry_dead_translate_tasks(root: Path, book_id: str, locale: str) -> list[str]:
+    """Resolve as `retry` the outcome_unknown tasks of this book and locale.
+
+    Called with the book's driver lock held, so no process is driving them: a task
+    still marked in flight belongs to a process that is gone. Tasks outside this
+    book and locale are left for a person, and the run is not resumed past them."""
+    recover_run(root)
+    plan = _load_plan(root)
+    unknown = sorted(str(task["id"]) for task in plan["tasks"] if task["state"] == "outcome_unknown")
+    if not unknown:
+        return []
+    own = f"-{book_id}-"
+    if any(own not in task or not task.endswith(f"-{_canonical_locale(locale)}") for task in unknown):
+        return []
+    resume_run(root, resolutions={task: "retry" for task in unknown})
+    print(f"[translate] retrying tasks left unresolved by a process that is gone: {', '.join(unknown)}", file=sys.stderr)
+    return unknown
+
+
+def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_all: bool, retry_dead: bool = False):
     """`translate next|run` under the book's driver lock.
 
     A second translate process on one project orphans the first one's attempts and
@@ -9064,6 +9172,8 @@ def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_
     names the process already driving."""
     root = _project_root(project)
     with _advance_lock(root, book_id):
+        if retry_dead:
+            _retry_dead_translate_tasks(root, book_id, locale)
         return translate_next(project, book_id, locale, run_all=run_all)
 
 
@@ -10165,6 +10275,7 @@ MALFORMED_ANSWER_ASKS = 2
 # Every effort any catalogue model offers, lowest first. A model's own ladder is a
 # subset of it, and a step down is taken on that subset.
 EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+ROLE_DEFAULT_EFFORT = {"locale-reader": "medium"}
 
 
 def _one_rung_lower(variant: str | None, ladder: list[str] | None = None) -> str | None:
@@ -13687,12 +13798,24 @@ def _translate_one(
             telemetry=_provider_telemetry(result, envelope, attempt_number),
         )
         promote_task(root, claim["attempt"], claim["fence"])
-        reconcile_artifacts(root)
-        # Close the whole promoted chain, not just this chapter: an earlier chapter
-        # translated before the registry existed would leave `previous` dangling.
-        _ensure_translation_artifacts(root, book_id, locale, completed)
+        _register_then_reconcile(root, book_id, locale, completed)
         return {"chapter": chapter_id, "locale": locale, "calls": calls, "receipt": receipt}
     raise BookForgeError("Unreachable translation state")
+
+
+def _register_then_reconcile(root: Path, book_id: str, locale: str, completed: list[str]) -> None:
+    """Record the promoted chapter in the registry, then reconcile.
+
+    Registration comes first and does not depend on reconcile: reconcile raises
+    on any hand-edited artifact in the project, and when it ran first that error
+    skipped the registration, leaving translated chapters out of the registry so
+    a later source edit never marked them stale. The whole promoted chain is
+    closed, not just this chapter: an earlier chapter translated before the
+    registry existed would leave `previous` dangling."""
+    try:
+        _ensure_translation_artifacts(root, book_id, locale, completed)
+    finally:
+        reconcile_artifacts(root)
 
 
 def _record_refusals(locale_root: Path, locale: str, refused: list[dict[str, object]], *, now: float | None = None) -> list[dict[str, object]]:
@@ -13811,6 +13934,25 @@ def _locale_run_state(locale_root: Path, *, refused: bool) -> str:
     return "refused" if refused else "empty"
 
 
+EXPLICIT_STYLE_PRESETS = ("erotic-romance",)
+
+
+def _refuse_shallow_reader(root: Path) -> None:
+    """A project whose style preset writes explicit scenes does not read them back
+    at an effort below the default: a reader at `low` passed two chapters of such
+    scenes with a word-for-word calque in them."""
+    config = _project_config(root)
+    if _style_preset_name(config) not in EXPLICIT_STYLE_PRESETS:
+        return
+    effort, _ladder = _role_ladder(root, "locale-reader")
+    floor = ROLE_DEFAULT_EFFORT["locale-reader"]
+    if effort in EFFORT_ORDER and EFFORT_ORDER.index(effort) < EFFORT_ORDER.index(floor):
+        raise BookForgeError(
+            f"roles.locale-reader is pinned at {effort}, below the default {floor}, and style.preset "
+            f"{_style_preset_name(config)} writes explicit scenes; raise the pin before reading translations back"
+        )
+
+
 def review_translation(
     project: Path | str,
     book_id: str,
@@ -13834,6 +13976,7 @@ def review_translation(
     if not (locale_root / "locale.yaml").is_file():
         raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
     _require_locale_style(root, book_id, canonical)
+    _refuse_shallow_reader(root)
     chapters = sorted((locale_root / "chapters").glob("CH-*.md"))
     if chapter_id:
         chapters = [path for path in chapters if path.stem == chapter_id]
@@ -15954,10 +16097,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task")
     run.add_argument("--next", action="store_true")
     translate = commands.add_parser("translate")
-    translate.add_argument("action", choices=("add", "next", "run", "status", "review", "glossary"))
+    translate.add_argument("action", choices=("add", "next", "run", "status", "review", "glossary", "sync"))
     translate.add_argument("--chapter", help="With review: read back one chapter instead of every translated one")
     translate.add_argument("--until-clean", action="store_true", help="With review: keep reading a chapter back until it converges, makes no progress, or hits the pass cap")
     translate.add_argument("--apply", action="store_true", help="With glossary: move rows that are not terms into the locale's notes; without it, report only")
+    translate.add_argument("--retry-dead", action="store_true", help="With run|next: resolve as retry the tasks of this book and locale left unresolved by a process that is gone")
+    translate.add_argument("--confirm-carried", action="store_true", help="With sync: record that the listed source edits were applied to the translation by hand")
+    translate.add_argument("--who", default="", help="With sync --confirm-carried: who applied them")
     translate.add_argument("book")
     translate.add_argument("locale")
     audit = commands.add_parser("audit")
@@ -16130,11 +16276,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(review_translation(args.project, args.book, args.locale, chapter_id=args.chapter, until_clean=args.until_clean), sort_keys=True))
         elif args.command == "translate" and args.action == "glossary":
             print(json.dumps(prune_glossary(args.project, args.book, args.locale, apply=args.apply), sort_keys=True))
+        elif args.command == "translate" and args.action == "sync":
+            if args.confirm_carried:
+                print(json.dumps({"confirmed": confirm_carried(args.project, args.book, args.locale, chapter_id=args.chapter, who=args.who)}, sort_keys=True))
+            else:
+                print(json.dumps({"pending": pending_carries(args.project, book_id=args.book, locale=args.locale)}, sort_keys=True, ensure_ascii=False))
         elif args.command == "translate" and args.action == "status":
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
         elif args.command == "translate":
-            print(json.dumps(run_translate_locked(args.project, args.book, args.locale, run_all=args.action == "run"), sort_keys=True))
+            print(json.dumps(run_translate_locked(args.project, args.book, args.locale, run_all=args.action == "run", retry_dead=args.retry_dead), sort_keys=True))
         elif args.command == "audit":
             if args.kind == "engagement":
                 if not args.book:

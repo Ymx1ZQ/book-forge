@@ -16,7 +16,7 @@ This is the question the role exists for, and it applies to sentences the first 
 
 Answer it in `natural`. `false` means no — a writer of this language does not build the sentence this way, whatever it is doing here. `true` means yes, this is how the language does this.
 
-A sentence can be grammatical, break no rule you can name, cost you no time at all, and still be one nobody writing in this language would produce. Those are the sentences that make a book feel like it came from somewhere else, and they are invisible to anyone reading fast. Slow down for this question, and only for this one. Watch in particular for a verb that does not take this noun, a word whose commonest sense here is not the sense meant, a compound built the way another language builds it, and a technical word borrowed from the wrong trade.
+A sentence can be grammatical, break no rule you can name, cost you no time at all, and still be one nobody writing in this language would produce. Those are the sentences that make a book feel like it came from somewhere else, and they are invisible to anyone reading fast. Slow down for this question, and only for this one. Watch in particular for a **calque**, an idiom or a spatial phrase carried over word for word from another language (an object put "over the head" or "on the head" where the speakers of this language say it goes "round the neck", a preposition of place that this language does not use for that action), for a verb that does not take this noun, a word whose commonest sense here is not the sense meant, a compound built the way another language builds it, and a technical word borrowed from the wrong trade.
 
 ## The third question: is there something here you cannot identify?
 

@@ -93,6 +93,64 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(self.registry()["SRC"]["hash"], before)
 
 
+class CarryTests(unittest.TestCase):
+    def setUp(self):
+        self.bf = load_module()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.project = Path(temp.name) / "world"
+        self.bf.init_project(self.project, "World", chorus_models=[])
+        self.root = self.bf._project_root(self.project)
+        (self.root / "books").mkdir(exist_ok=True)
+        self.source = self.root / "books" / "a.txt"
+        self.source.write_text("one\n\ntwo\n\nthree\n")
+        derived = self.root / "books" / "BX-d.txt"
+        derived.write_text("uno due tre")
+        self.bf.register_artifact(self.project, "SRC", "source-chapter", path=self.source)
+        self.bf.register_artifact(self.project, "TRANSLATION-BX-CH-0001-it", "translation-chapter", path=derived, dependencies=["SRC"])
+
+    def test_keep_translations_records_the_changed_paragraphs_and_status_lists_them(self):
+        self.source.write_text("one\n\n2\n\nthree\n")
+        self.bf.adopt_artifact(self.project, "SRC", reason="r", keep_dependents=True)
+        pending = self.bf.pending_carries(self.project)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["changes"], [{"old": "two", "new": "2"}])
+        self.assertEqual(self.bf.status_project(self.project)["source_edits_not_confirmed"][0]["paragraphs"], 1)
+
+    def test_confirm_carried_clears_the_pending_list(self):
+        self.source.write_text("one\n\n2\n\nthree\n")
+        self.bf.adopt_artifact(self.project, "SRC", reason="r", keep_dependents=True)
+        done = self.bf.confirm_carried(self.project, "BX", "it", who="author")
+        self.assertEqual(done, ["TRANSLATION-BX-CH-0001-it"])
+        self.assertEqual(self.bf.pending_carries(self.project), [])
+        self.assertNotIn("source_edits_not_confirmed", self.bf.status_project(self.project))
+
+    def test_without_keep_translations_nothing_is_pending(self):
+        self.source.write_text("one\n\n2\n\nthree\n")
+        self.bf.adopt_artifact(self.project, "SRC", reason="r")
+        self.assertEqual(self.bf.pending_carries(self.project), [])
+
+
+class ShallowReaderTests(unittest.TestCase):
+    def setUp(self):
+        self.bf = load_module()
+
+    def guard(self, preset, effort):
+        self.bf._project_config = lambda root: {"style": {"preset": preset}}
+        self.bf._role_ladder = lambda root, role: (effort, ["low", "medium", "high", "max"])
+        self.bf._refuse_shallow_reader(Path("."))
+
+    def test_an_explicit_preset_refuses_a_reader_below_the_default(self):
+        with self.assertRaises(self.bf.BookForgeError):
+            self.guard("erotic-romance", "low")
+
+    def test_the_default_effort_passes(self):
+        self.guard("erotic-romance", "medium")
+
+    def test_another_preset_may_read_at_low(self):
+        self.guard("neutral", "low")
+
+
 class TranslateLockTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
@@ -111,6 +169,20 @@ class TranslateLockTests(unittest.TestCase):
             self.bf.run_translate_locked(self.project, self.book, "it", run_all=True)
         self.assertIn("pid 1", str(caught.exception))
 
+    def test_retry_dead_resumes_the_unknown_tasks_of_this_book_and_locale_only(self):
+        seen = {}
+        self.bf.recover_run = lambda root: None
+        self.bf._load_plan = lambda root: {"tasks": [{"id": "TRANSLATE-B-CH-0001-it", "state": "outcome_unknown"}, {"id": "TRANSLATE-B-CH-0002-it", "state": "running"}]}
+        self.bf.resume_run = lambda root, resolutions=None, **k: seen.update(resolutions or {})
+        self.assertEqual(self.bf._retry_dead_translate_tasks(self.root, "B", "it"), ["TRANSLATE-B-CH-0001-it"])
+        self.assertEqual(seen, {"TRANSLATE-B-CH-0001-it": "retry"})
+
+    def test_retry_dead_leaves_another_locales_unknown_task_alone(self):
+        self.bf.recover_run = lambda root: None
+        self.bf._load_plan = lambda root: {"tasks": [{"id": "TRANSLATE-B-CH-0001-de", "state": "outcome_unknown"}]}
+        self.bf.resume_run = lambda *a, **k: self.fail("must not resume")
+        self.assertEqual(self.bf._retry_dead_translate_tasks(self.root, "B", "it"), [])
+
     def test_a_dead_holder_is_taken_over(self):
         lock = self.bf._advance_lock_path(self.root, self.book)
         lock.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +192,22 @@ class TranslateLockTests(unittest.TestCase):
         self.assertEqual(self.bf.run_translate_locked(self.project, self.book, "it", run_all=True), {"ok": True})
         self.assertEqual(len(calls), 1)
         self.assertFalse(lock.exists())
+
+
+class RegisterBeforeReconcileTests(unittest.TestCase):
+    def test_registration_runs_even_when_reconcile_raises(self):
+        bf = load_module()
+        calls = []
+        bf._ensure_translation_artifacts = lambda *a, **k: calls.append("register") or []
+
+        def boom(root):
+            calls.append("reconcile")
+            raise bf.BookForgeError("Derived artifact was edited directly: X")
+
+        bf.reconcile_artifacts = boom
+        with self.assertRaises(bf.BookForgeError):
+            bf._register_then_reconcile(Path("."), "B", "it", ["CH-0001"])
+        self.assertEqual(calls, ["register", "reconcile"])
 
 
 if __name__ == "__main__":
