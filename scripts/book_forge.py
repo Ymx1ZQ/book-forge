@@ -95,6 +95,11 @@ ROLE_SPECS = {
     # directions), and the sentence has to be rebuilt by someone who cannot see the
     # shape that produced it.
     "locale-reviser": ("all", "medium", 7),
+    # The continuity ledger: one cheap read per closed chapter that lists the facts a
+    # later chapter can contradict, and one comparison of that list with the earlier
+    # ones. Both are advisory and neither writes prose.
+    "continuity-extractor": ("all", "low", 4),
+    "continuity-checker": ("all", "medium", 4),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
@@ -2935,6 +2940,12 @@ def status_project(
             {"translation": row["translation"], "source": row["source"], "paragraphs": None if row.get("changes") is None else len(row["changes"])}
             for row in uncarried
         ]
+    flagged = _open_flags(root, book_id)
+    if flagged:
+        result["continuity_flags_open"] = [
+            {"id": flag["id"], "book": flag["book"], "chapter": flag["chapter"], "earlier_chapter": flag["earlier_chapter"], "reason": flag["reason"]}
+            for flag in flagged
+        ]
     if scope:
         result["scope"] = scope
     return result
@@ -3896,6 +3907,10 @@ ROLE_BUDGETS = {
     # It reads one chapter and answers in a few quoted stumbles: a small question
     # deliberately, since a reader who is asked for an essay starts writing one.
     "locale-reader": (16000, 3000),
+    # The extractor reads a whole chapter and lists its facts with a quote each; the
+    # checker reads every earlier chapter's list, which is short beside the prose.
+    "continuity-extractor": (32000, 5000),
+    "continuity-checker": (32000, 4000),
     # It returns the whole chapter and a record of every sentence it rewrote, so its
     # allowance is the translator's with room for the record.
     "locale-reviser": (16000, 7000),
@@ -9164,7 +9179,7 @@ def _retry_dead_translate_tasks(root: Path, book_id: str, locale: str) -> list[s
     return unknown
 
 
-def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_all: bool, retry_dead: bool = False):
+def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_all: bool, retry_dead: bool = False, accept_flags: bool = False):
     """`translate next|run` under the book's driver lock.
 
     A second translate process on one project orphans the first one's attempts and
@@ -9174,7 +9189,7 @@ def run_translate_locked(project: Path | str, book_id: str, locale: str, *, run_
     with _advance_lock(root, book_id):
         if retry_dead:
             _retry_dead_translate_tasks(root, book_id, locale)
-        return translate_next(project, book_id, locale, run_all=run_all)
+        return translate_next(project, book_id, locale, run_all=run_all, accept_flags=accept_flags)
 
 
 class AdvanceHalted(BookForgeError):
@@ -13858,6 +13873,7 @@ def translate_next(
     *,
     provider=None,
     run_all: bool = False,
+    accept_flags: bool = False,
 ) -> dict[str, object]:
     root = _project_root(project)
     canonical = _canonical_locale(locale)
@@ -13878,6 +13894,7 @@ def translate_next(
         )
         if not next_source:
             break
+        _refuse_flagged_chapter(root, book_id, next_source.stem, accept_flags=accept_flags)
         try:
             results.append(_translate_one(root, book_id, canonical, next_source.stem, provider=provider))
         except TranslationRefused as no:
@@ -16004,6 +16021,265 @@ def humanize_book(project: Path | str, book_id: str, chapter_id: str | None = No
     return {"book": book_id, "chapters": [humanize_chapter(root, book_id, chapter, provider) for chapter in chapters]}
 
 
+# --- continuity ledger -------------------------------------------------------
+#
+# Slips between chapters (an interval of a month and a half in one chapter and two
+# months in a later one, a blouse and a dress for the same night, "cones" and
+# "pyramids" for the same heaps) were found by a read-through after the chapters
+# were closed and translated before they were fixed. The ledger finds them when the
+# chapter closes: one cheap call per chapter lists its checkable facts, keyed by the
+# source hash so an unchanged chapter is never read twice, and one call per chapter
+# compares that list with the earlier ones. A contradiction is an open flag with both
+# quotes, and `translate` will not go past a chapter that has one unless told to.
+
+LEDGER_MAX_FACTS = 60
+FACT_CATEGORIES = ("elapsed_time", "clock_time", "clothing", "object_name", "place_name", "knowledge")
+
+
+def _ledger_dir(root: Path, book_id: str) -> Path:
+    return root / "books" / book_id / "work" / "continuity"
+
+
+def _flags_path(root: Path, book_id: str) -> Path:
+    return _ledger_dir(root, book_id) / "flags.json"
+
+
+def _load_flags(root: Path, book_id: str) -> dict[str, object]:
+    path = _flags_path(root, book_id)
+    if not path.is_file():
+        return {"schema": 1, "book": book_id, "flags": [], "checked": {}}
+    value = _read_json(path)
+    value.setdefault("flags", [])
+    value.setdefault("checked", {})
+    return value
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip().lower()
+
+
+def _quote_in(quote: object, text: str) -> bool:
+    return isinstance(quote, str) and bool(quote.strip()) and _squash(quote) in _squash(text)
+
+
+def _valid_facts(value: dict[str, object], text: str) -> list[dict[str, str]]:
+    """The facts whose quote the chapter really contains. A model that paraphrases
+    gives a quote nobody can find, and a flag built on it cannot be checked."""
+    rows = value.get("facts")
+    if not isinstance(rows, list):
+        raise MalformedAnswer("continuity extractor answer has no `facts` list")
+    kept: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("category") not in FACT_CATEGORIES:
+            continue
+        if not _quote_in(row.get("quote"), text):
+            continue
+        kept.append({key: str(row.get(key) or "").strip() for key in ("category", "subject", "fact", "quote")})
+    return kept[:LEDGER_MAX_FACTS]
+
+
+def _ledger_call(root: Path, task_id: str, role: str, capsule: dict[str, object], runner) -> dict[str, object]:
+    """One ledger call through the plan: claimed, asked past an empty answer, parsed."""
+    plan = _load_plan(root)
+    if not any(task["id"] == task_id for task in plan["tasks"]):
+        add_task(root, task_id, role, priority=85, outputs=[])
+    else:
+        _reopen_task(root, task_id)
+    claim = None
+    try:
+        envelope = build_envelope(
+            root, role=role, task_capsule=capsule, imports=[], state={}, tools=[],
+            max_output_tokens=ROLE_BUDGETS[role][1],
+        )
+        claim = claim_task(root, task_id, request_hash=str(envelope["hash"]))
+        attempt_dir = Path(claim["capsule"]).parent
+        result = _ask_past_empty(runner, role, envelope, attempt_dir, *_role_ladder(root, role), asks=2, only_lower=True)
+        mark_provider_accepted(root, claim["attempt"], str(result.get("session_id") or ""))
+        value = _parse_contract_json(str(result["text"]))
+        _release_claim(root, claim["attempt"], note="advisory pass complete")
+        return value
+    except Exception as failed:
+        if claim is not None:
+            try:
+                _set_attempt_failure(root, claim["attempt"], block=False, reason=str(failed)[:200])
+            except BookForgeError:
+                pass
+        raise
+
+
+def _signature(earlier: str, later: str, earlier_quote: str, later_quote: str) -> str:
+    return _sha256_bytes(_json_bytes([earlier, later, _squash(earlier_quote), _squash(later_quote)]))[:16]
+
+
+def continuity_ledger(project: Path | str, book_id: str, *, provider=None) -> dict[str, object]:
+    """Extract the facts of every closed chapter and flag what contradicts an earlier one."""
+    root = _project_root(project)
+    runner = provider or run_opencode_role
+    if book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    with _advance_lock(root, book_id):
+        state = _read_json(root / "books" / book_id / "state.yaml")
+        closed = sorted(str(value) for value in state.get("closed_chapters", []))
+        if not closed:
+            raise BookForgeError(f"{book_id} has no closed chapter to read")
+        manuscript = root / "books" / book_id / "manuscript" / "chapters"
+        texts: dict[str, str] = {}
+        hashes: dict[str, str] = {}
+        for chapter in closed:
+            path = manuscript / f"{chapter}.md"
+            if not path.is_file():
+                raise BookForgeError(f"{chapter} is closed and has no manuscript file")
+            texts[chapter] = path.read_text(encoding="utf-8")
+            hashes[chapter] = _sha256_bytes(path.read_bytes())
+        facts_dir = _ledger_dir(root, book_id) / "facts"
+        facts: dict[str, list[dict[str, str]]] = {}
+        extracted: list[str] = []
+        reused: list[str] = []
+        unread: list[dict[str, str]] = []
+        for chapter in closed:
+            stored = facts_dir / f"{chapter}.json"
+            if stored.is_file() and _read_json(stored).get("source_hash") == hashes[chapter]:
+                facts[chapter] = list(_read_json(stored)["facts"])
+                reused.append(chapter)
+                continue
+            try:
+                value = _ledger_call(
+                    root, f"LEDGER-{book_id}-{chapter}", "continuity-extractor",
+                    {"chapter": chapter, "chapter_markdown": texts[chapter]}, runner,
+                )
+                rows = _valid_facts(value, texts[chapter])
+            except Exception as failed:
+                print(f"[continuity-extractor] {chapter} was not read: {str(failed)[:160]}", file=sys.stderr)
+                unread.append({"chapter": chapter, "why": str(failed)[:200]})
+                continue
+            facts_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(stored, {"schema": 1, "chapter": chapter, "source_hash": hashes[chapter], "facts": rows})
+            facts[chapter] = rows
+            extracted.append(chapter)
+        ledger = _load_flags(root, book_id)
+        checked: dict[str, str] = dict(ledger["checked"])  # type: ignore[arg-type]
+        new_flags: list[str] = []
+        compared: list[str] = []
+        for index, chapter in enumerate(closed):
+            earlier = {name: facts[name] for name in closed[:index] if facts.get(name)}
+            if chapter not in facts:
+                continue
+            key = _sha256_bytes(_json_bytes([facts[chapter], earlier]))
+            if checked.get(chapter) == key:
+                continue
+            if not earlier or not facts[chapter]:
+                # Nothing to compare, and whatever this chapter was flagged for no longer stands.
+                ledger["flags"] = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
+                checked[chapter] = key
+                continue
+            try:
+                value = _ledger_call(
+                    root, f"LEDGERCHECK-{book_id}-{chapter}", "continuity-checker",
+                    {"chapter": chapter, "chapter_facts": facts[chapter], "earlier_facts": earlier}, runner,
+                )
+                rows = value.get("contradictions")
+                if not isinstance(rows, list):
+                    raise MalformedAnswer("continuity checker answer has no `contradictions` list")
+            except Exception as failed:
+                print(f"[continuity-checker] {chapter} was not compared: {str(failed)[:160]}", file=sys.stderr)
+                unread.append({"chapter": chapter, "why": str(failed)[:200]})
+                continue
+            flags = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
+            known = {flag["signature"] for flag in flags}
+            number = max([int(str(flag["id"]).rsplit("-", 1)[1]) for flag in ledger["flags"]] + [0])  # type: ignore[union-attr]
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                before = str(row.get("earlier_chapter") or "")
+                earlier_quote, later_quote = row.get("earlier_quote"), row.get("later_quote")
+                if before not in earlier or not _quote_in(earlier_quote, texts[before]) or not _quote_in(later_quote, texts[chapter]):
+                    print(f"[continuity-checker] {chapter}: a contradiction whose quotes the chapters do not contain was set aside", file=sys.stderr)
+                    continue
+                signature = _signature(before, chapter, str(earlier_quote), str(later_quote))
+                if signature in known:
+                    continue
+                known.add(signature)
+                number += 1
+                flag_id = f"CF-{book_id}-{number:04d}"
+                flags.append({
+                    "id": flag_id, "state": "open", "chapter": chapter, "earlier_chapter": before,
+                    "category": str(row.get("category") or ""),
+                    "quotes": [{"chapter": before, "quote": str(earlier_quote).strip()}, {"chapter": chapter, "quote": str(later_quote).strip()}],
+                    "reason": str(row.get("reason") or "").strip(), "signature": signature, "opened_at": time.time(),
+                })
+                new_flags.append(flag_id)
+            ledger["flags"] = flags
+            checked[chapter] = key
+            compared.append(chapter)
+        ledger["checked"] = checked
+        _ledger_dir(root, book_id).mkdir(parents=True, exist_ok=True)
+        _write_json(_flags_path(root, book_id), ledger)
+        return {
+            "book": book_id, "chapters": closed, "extracted": extracted, "reused": reused, "compared": compared,
+            "new_flags": new_flags, "open_flags": len(_open_flags(root, book_id)), "unread": unread,
+        }
+
+
+def _open_flags(root: Path, book_id: str | None = None) -> list[dict[str, object]]:
+    books = [book_id] if book_id else [str(book["id"]) for book in list_books(root)]
+    found: list[dict[str, object]] = []
+    for name in books:
+        for flag in _load_flags(root, name)["flags"]:  # type: ignore[union-attr]
+            if flag["state"] == "open":
+                found.append({"book": name, **flag})
+    return found
+
+
+def continuity_flags(project: Path | str, book_id: str | None = None, *, include_resolved: bool = False) -> list[dict[str, object]]:
+    root = _project_root(project)
+    if book_id is None:
+        books = [str(book["id"]) for book in list_books(root)]
+    elif book_id in {str(book["id"]) for book in list_books(root)}:
+        books = [book_id]
+    else:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    rows = []
+    for name in books:
+        for flag in _load_flags(root, name)["flags"]:  # type: ignore[union-attr]
+            if include_resolved or flag["state"] == "open":
+                rows.append({"book": name, **flag})
+    return rows
+
+
+def resolve_continuity_flag(project: Path | str, flag_id: str, reason: str) -> dict[str, object]:
+    """Close a flag with the reason it was closed: the slip was fixed, or it is not one."""
+    root = _project_root(project)
+    if not reason or not reason.strip():
+        raise BookForgeError("continuity resolve needs --reason TEXT")
+    for book in list_books(root):
+        ledger = _load_flags(root, str(book["id"]))
+        for flag in ledger["flags"]:  # type: ignore[union-attr]
+            if flag["id"] == flag_id:
+                if flag["state"] != "open":
+                    raise BookForgeError(f"{flag_id} is already resolved")
+                flag["state"] = "resolved"
+                flag["resolved"] = {"reason": reason.strip(), "when": time.time()}
+                _write_json(_flags_path(root, str(book["id"])), ledger)
+                return {"resolved": flag_id, "book": book["id"], "reason": reason.strip(), "open_flags": len(_open_flags(root, str(book["id"])))}
+    raise BookForgeError(f"Unknown continuity flag: {flag_id}")
+
+
+def _refuse_flagged_chapter(root: Path, book_id: str, chapter_id: str, *, accept_flags: bool) -> None:
+    """Open flags on this chapter or an earlier one are what a translation would carry over."""
+    held = [flag for flag in _open_flags(root, book_id) if str(flag["chapter"]) <= chapter_id]
+    if not held:
+        return
+    listing = "; ".join(f"{flag['id']} ({flag['earlier_chapter']} against {flag['chapter']}: {flag['reason']})" for flag in held)
+    if accept_flags:
+        print(f"[translator] {chapter_id} goes ahead with {len(held)} open continuity flag(s) accepted: {listing}", file=sys.stderr)
+        return
+    raise BookForgeError(
+        f"{chapter_id} is held back by {len(held)} open continuity flag(s): {listing}. "
+        "Fix the manuscript and close each with `continuity resolve <flag-id> --reason TEXT`, "
+        "or translate anyway with --accept-flags"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="book-forge")
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -16035,6 +16311,14 @@ def build_parser() -> argparse.ArgumentParser:
     continuity_add.add_argument("--kind", choices=("primary", "alternate"), default="alternate")
     continuity_add.add_argument("--fork-from")
     continuity_add.add_argument("--import", dest="imports", action="append", default=[])
+    continuity_ledger_command = continuity_commands.add_parser("ledger", help="Extract each closed chapter's checkable facts and flag contradictions with earlier chapters")
+    continuity_ledger_command.add_argument("book")
+    continuity_flags_command = continuity_commands.add_parser("flags", help="List the open continuity flags")
+    continuity_flags_command.add_argument("book", nargs="?")
+    continuity_flags_command.add_argument("--all", action="store_true", help="Include resolved flags")
+    continuity_resolve = continuity_commands.add_parser("resolve", help="Close a continuity flag with a reason")
+    continuity_resolve.add_argument("flag_id")
+    continuity_resolve.add_argument("--reason", required=True)
     add_book_command = commands.add_parser("add-book")
     add_book_command.add_argument("title")
     add_book_command.add_argument("--continuity", default="CNT-0001")
@@ -16102,6 +16386,7 @@ def build_parser() -> argparse.ArgumentParser:
     translate.add_argument("--until-clean", action="store_true", help="With review: keep reading a chapter back until it converges, makes no progress, or hits the pass cap")
     translate.add_argument("--apply", action="store_true", help="With glossary: move rows that are not terms into the locale's notes; without it, report only")
     translate.add_argument("--retry-dead", action="store_true", help="With run|next: resolve as retry the tasks of this book and locale left unresolved by a process that is gone")
+    translate.add_argument("--accept-flags", action="store_true", help="With run|next: translate chapters that have open continuity flags on them or on an earlier chapter")
     translate.add_argument("--confirm-carried", action="store_true", help="With sync: record that the listed source edits were applied to the translation by hand")
     translate.add_argument("--who", default="", help="With sync --confirm-carried: who applied them")
     translate.add_argument("book")
@@ -16160,6 +16445,12 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm, style_preset=getattr(args, "style", None)), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
+        elif args.command == "continuity" and args.continuity_command == "ledger":
+            print(json.dumps(continuity_ledger(args.project, args.book), sort_keys=True))
+        elif args.command == "continuity" and args.continuity_command == "flags":
+            print(json.dumps({"flags": continuity_flags(args.project, args.book, include_resolved=args.all)}, sort_keys=True))
+        elif args.command == "continuity" and args.continuity_command == "resolve":
+            print(json.dumps(resolve_continuity_flag(args.project, args.flag_id, args.reason), sort_keys=True))
         elif args.command == "reset":
             print(json.dumps(reset_book(args.project, args.book, scope=args.scope, confirm=args.yes, locale=args.locale, chapter=args.chapter), sort_keys=True))
         elif args.command == "revise":
@@ -16285,7 +16576,7 @@ def main(argv: list[str] | None = None) -> int:
             canonical = _canonical_locale(args.locale)
             print(json.dumps(_read_json(_project_root(args.project) / "books" / args.book / "translations" / canonical / "state.yaml"), sort_keys=True))
         elif args.command == "translate":
-            print(json.dumps(run_translate_locked(args.project, args.book, args.locale, run_all=args.action == "run", retry_dead=args.retry_dead), sort_keys=True))
+            print(json.dumps(run_translate_locked(args.project, args.book, args.locale, run_all=args.action == "run", retry_dead=args.retry_dead, accept_flags=args.accept_flags), sort_keys=True))
         elif args.command == "audit":
             if args.kind == "engagement":
                 if not args.book:

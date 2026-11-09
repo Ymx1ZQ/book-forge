@@ -5,6 +5,7 @@ Use this route for `status`, `pause`, and `resume`.
 - `status` is zero-model. Summarize task/run state, transaction recovery,
   accepted calls, tokens, cost, retries, ambiguity, stale causes, and budget
   violations from immutable receipts.
+- `status` lists the book's open continuity flags under `continuity_flags_open`.
 - Use ordinary `pause` to drain accepted work safely. Use `--emergency` only
   when the user requests an immediate stop; accepted unfinished calls become
   `outcome_unknown`.

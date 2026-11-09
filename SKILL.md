@@ -24,7 +24,8 @@ reference before acting:
 | Selector | Reference |
 |---|---|
 | `init` | `references/init.md` |
-| `migrate`, `continuity`, `add-book`, `relate`, `collection` | `references/catalog.md` |
+| `migrate`, `continuity add`, `add-book`, `relate`, `collection` | `references/catalog.md` |
+| `continuity ledger`, `continuity flags`, `continuity resolve` | `references/continuity.md` |
 | `design` | `references/design.md` |
 | `brief` | `references/brief.md` |
 | `run`, `advance` | `references/run.md` |
@@ -71,6 +72,9 @@ book-forge runtime sync
 book-forge chorus <status|synthesize|apply> [--book <id>]
 book-forge migrate <check|dry-run|apply|rollback>
 book-forge continuity add <name> [--kind <primary|alternate>] [--fork-from <id>] [--import <block>...]
+book-forge continuity ledger <book>                      # facts per closed chapter, contradictions with earlier chapters as open flags
+book-forge continuity flags [<book>] [--all]
+book-forge continuity resolve <flag-id> --reason <text>
 book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
@@ -84,7 +88,7 @@ book-forge status [--book <id>|--run <id>|--locale <tag>] [--repair-view]
 book-forge artifacts backfill [--book <id>] [--locale <tag>]
 book-forge reset --book <id> [--scope <prose|design>] --yes
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
-book-forge translate <add|next|run|status> <book> <locale>
+book-forge translate <add|next|run|status> <book> <locale> [--accept-flags]  # run|next refuse a chapter with open continuity flags on it or an earlier one
 book-forge export <book> --lang <tag> --format <epub|pdf|all>
 book-forge revise --book <id> --chapter <ch> --note <text> [--anchor <words>]
 book-forge humanize --book <id> [--chapter <ch>]

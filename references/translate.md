@@ -72,3 +72,7 @@ It matters because a row is not stored, it is *read*: into every translator, cri
 Scored by the monolingual reader and never against a reference translation: refinement is measured to lower string similarity while human readers rate the result better, so ranking by distance from a model answer orders the candidates backwards. What is counted is what a reader of the target language stumbles on, plus the locale rules the text breaks, per thousand words; ties go to the cheaper model.
 
 A locale rule broken does not disqualify a candidate. The normal path gives a translator two repairs after a validation failure and this route gives none, so a first-attempt rule break would drop a model out of the comparison entirely — which is what happened to the incumbent on the first real bake-off, leaving nothing to compare it against. It is counted as a defect instead. Only an answer nobody can parse is `unusable`.
+
+## Open continuity flags
+
+`translate next` and `translate run` refuse a chapter while the book has open continuity flags on it or on an earlier chapter. The refusal names the flags and `continuity resolve`; `--accept-flags` translates anyway.

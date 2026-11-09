@@ -86,7 +86,7 @@ class RoleTopologyTests(unittest.TestCase):
         # a translation reread by the model that wrote it is approved, not audited.
         self.assertEqual(
             set(files),
-            set(expected) | expected_chorus | expected_writers | expected_translators | expected_revisers | {"translation-critic", "locale-reader", "locale-reviser"},
+            set(expected) | expected_chorus | expected_writers | expected_translators | expected_revisers | {"translation-critic", "locale-reader", "locale-reviser", "continuity-extractor", "continuity-checker"},
         )
         critic = files["translation-critic"]
         self.assertIn(f"model: {self.bf.CHORUS_SYNTHESIZER}", critic)
