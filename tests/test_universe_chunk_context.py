@@ -136,7 +136,26 @@ class UniverseRepairTests(unittest.TestCase):
         text = json.dumps({"events": [{"id": "EVT-0001", "era": "ERA-0001", "order": 1, "summary": "still wrong"}]})
         _, audit = self.bf._repair_blocked_universe(self.root, self.proposal, self.blocked(), self.runner(text))
         self.assertEqual(audit["state"], "blocked")
-        self.assertEqual(len(self.asked), self.bf.MAX_DESIGN_REPAIR_ROUNDS)
+        self.assertEqual(len(self.asked), self.bf.UNIVERSE_REPAIR_ROUNDS)
+
+    def test_a_row_the_validator_refuses_is_sent_back_with_the_reason_before_the_round_is_lost(self):
+        refusal = {"code": "tier.L3.words", "expected": "60-90", "id": "CHR-0002", "severity": "blocking", "words": 102}
+        verdicts = [[refusal], []]
+        self.bf.validate_universe_design = lambda root, proposal: verdicts.pop(0)
+        text = json.dumps({"events": [{"id": "EVT-0001", "era": "ERA-0002", "order": 1, "summary": "ok"}]})
+        _, audit = self.bf._repair_blocked_universe(self.root, self.proposal, self.blocked(), self.runner(text))
+        self.assertEqual(audit["state"], "design_clean")
+        self.assertEqual(len(self.asked), 2)
+        self.assertNotIn("validation_errors", self.asked[0]["task_capsule"]["repair"])
+        self.assertEqual(self.asked[1]["task_capsule"]["repair"]["validation_errors"], [refusal])
+
+    def test_a_row_still_refused_after_the_second_answer_stops_the_run(self):
+        refusal = {"code": "tier.L3.words", "id": "CHR-0002", "severity": "blocking"}
+        self.bf.validate_universe_design = lambda root, proposal: [refusal]
+        text = json.dumps({"events": [{"id": "EVT-0001", "era": "ERA-0002", "order": 1, "summary": "ok"}]})
+        with self.assertRaises(self.bf.BookForgeError):
+            self.bf._repair_blocked_universe(self.root, self.proposal, self.blocked(), self.runner(text))
+        self.assertEqual(len(self.asked), self.bf.UNIVERSE_REPAIR_VALIDATION_ATTEMPTS)
 
     def test_an_answer_naming_no_requested_row_is_refused(self):
         with self.assertRaises(self.bf.BookForgeError):

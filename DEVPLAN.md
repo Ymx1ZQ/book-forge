@@ -6622,7 +6622,7 @@ Measured: canon-auditor on DeepSeek V4.1 Flash 1017 (design universe audit, vari
 - [x] Add both roles to `REASONING_ROOM`.
 - [x] Same for `continuity-extractor` (37,000 of 37,000 on Margherita CH-0004) and re-run the ledger on Margherita CH-0004 and Landfall CH-0005.
 
-### M95 — Universe design chunks see each other, and a blocked universe audit is repaired 🔄
+### M95 — Universe design chunks see each other, and a blocked universe audit is repaired ✅
 
 Measured on a book's universe (2026-11-10): `_run_design_chunk` received only the base capsule and its own chunk, so the events chunk never saw the eras just generated (run 2 invented ERA-0006; run 3 put all twenty events in ERA-0001 against LAW-0015), and the second half of the cast repeated the first (CHR-0009 and CHR-0101 both Lupe, CHR-0010 and CHR-0102 both Ramiro, CHR-0103 a second Toño). A blocked universe audit raised and stopped: `_repair_blocked_design` served books only, so the one remedy was `--refresh`, which asks every chunk again (about ten calls) and brings new errors.
 
@@ -6631,7 +6631,7 @@ Measured on a book's universe (2026-11-10): `_run_design_chunk` received only th
 - [x] Test: a blocked universe audit rewrites only the rows its findings name (and drops a duplicate named under `remove`), re-writes the promoted files, audits again, and stops after `MAX_DESIGN_REPAIR_ROUNDS`.
 - [x] `_repair_blocked_universe` on both paths of `execute_universe_design`; canon-auditor prompt asks a universe finding to name canon row ids in `repair_scope`.
 - [x] After a blocked design audit that repair could not clear, the audit task goes back to `pending` (verdict stays on disk), so `status` no longer reports a finished run; the next `design` run repairs again. Test in `tests/test_design_repair.py`.
-- [ ] Verify on a real universe (`design universe --refresh --no-chorus`).
+- [x] A repaired row the validator refuses (a cast row over its word limit) is sent back once with the validator's reason (`UNIVERSE_REPAIR_VALIDATION_ATTEMPTS`); a universe gets three repair rounds (`UNIVERSE_REPAIR_ROUNDS`). Found on a copy of a real blocked universe: the first run lost its round to a 102-word row; with the fixes, two rounds left one blocking finding and a third cleared the audit (`design_clean`).
 
 ### M96 — The skill fixes the contradictions its ledger finds, before they are translated ✅
 

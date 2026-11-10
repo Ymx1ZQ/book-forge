@@ -7216,10 +7216,10 @@ def _repair_blocked_universe(root, proposal, audit, runner):
     set of mistakes. The findings already name the rows, so the designer is asked
     for those rows alone, with the rest of the world in front of it, and may name
     rows to drop (a character who is a second copy of another). Bounded by
-    MAX_DESIGN_REPAIR_ROUNDS; a finding naming no row of the universe is left for
+    UNIVERSE_REPAIR_ROUNDS; a finding naming no row of the universe is left for
     the caller to halt on.
     """
-    for round_number in range(1, MAX_DESIGN_REPAIR_ROUNDS + 1):
+    for round_number in range(1, UNIVERSE_REPAIR_ROUNDS + 1):
         findings = _blocking(audit)
         if not findings:
             return proposal, audit
@@ -7231,7 +7231,7 @@ def _repair_blocked_universe(root, proposal, audit, runner):
         scope = sorted({str(v) for finding in findings for v in finding.get("repair_scope", []) if str(v) in rows})
         if not scope:
             return proposal, audit
-        _log_step(7, 7, f"universe repair {round_number}/{MAX_DESIGN_REPAIR_ROUNDS} on {', '.join(scope)}", "→")
+        _log_step(7, 7, f"universe repair {round_number}/{UNIVERSE_REPAIR_ROUNDS} on {', '.join(scope)}", "→")
         round_dir = root / ".book-forge" / "repairs" / "universe" / f"round-{round_number}"
         round_dir.mkdir(parents=True, exist_ok=True)
         capsule = {
@@ -7259,33 +7259,43 @@ def _repair_blocked_universe(root, proposal, audit, runner):
                 if isinstance(row, dict) and str(row.get("id")) in scope
             ],
         }
-        envelope = build_envelope(
-            root, role="designer", task_capsule=capsule, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=12288
-        )
-        _write_bytes_atomic(round_dir / "envelope-repair.json", envelope["bytes"])
-        answer = runner("designer", envelope, round_dir)
-        _write_bytes_atomic(round_dir / "raw-repair.txt", str(answer.get("text", "")).encode())
-        try:
-            value = _parse_chunked_contract(str(answer.get("text", "")), max_bytes=12288 * 4)
-        except BookForgeError as exc:
-            raise BookForgeError(f"Universe repair produced no usable answer: {exc}") from exc
-        removed = {str(v) for v in value.get("remove", []) if str(v) in scope} if isinstance(value.get("remove"), list) else set()
-        repaired = {
-            str(row["id"]): row
-            for category in UNIVERSE_REPAIR_CATEGORIES
-            for row in value.get(category, []) if isinstance(row, dict) and str(row.get("id")) in scope
-        }
-        if not repaired and not removed:
-            raise BookForgeError("Universe repair named none of the rows it was asked to correct")
-        candidate = dict(proposal)
-        for category in UNIVERSE_REPAIR_CATEGORIES:
-            candidate[category] = [
-                repaired.get(str(row.get("id")), row)
-                for row in proposal.get(category, []) if str(row.get("id")) not in removed
-            ]
-        blocking_findings = [row for row in validate_universe_design(root, candidate) if row["severity"] == "blocking"]
-        if blocking_findings:
-            raise BookForgeError(f"Repaired universe has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
+        validation_errors: list[object] = []
+        for attempt in range(UNIVERSE_REPAIR_VALIDATION_ATTEMPTS):
+            if validation_errors:
+                # The designer is told what the validator refused (a cast row over its
+                # word limit, say) and answers again, instead of the round being lost.
+                capsule["repair"] = {**capsule["repair"], "validation_errors": validation_errors}
+            envelope = build_envelope(
+                root, role="designer", task_capsule=capsule, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=12288
+            )
+            _write_bytes_atomic(round_dir / "envelope-repair.json", envelope["bytes"])
+            answer = runner("designer", envelope, round_dir)
+            _write_bytes_atomic(round_dir / "raw-repair.txt", str(answer.get("text", "")).encode())
+            try:
+                value = _parse_chunked_contract(str(answer.get("text", "")), max_bytes=12288 * 4)
+            except BookForgeError as exc:
+                raise BookForgeError(f"Universe repair produced no usable answer: {exc}") from exc
+            removed = {str(v) for v in value.get("remove", []) if str(v) in scope} if isinstance(value.get("remove"), list) else set()
+            repaired = {
+                str(row["id"]): row
+                for category in UNIVERSE_REPAIR_CATEGORIES
+                for row in value.get(category, []) if isinstance(row, dict) and str(row.get("id")) in scope
+            }
+            if not repaired and not removed:
+                raise BookForgeError("Universe repair named none of the rows it was asked to correct")
+            candidate = dict(proposal)
+            for category in UNIVERSE_REPAIR_CATEGORIES:
+                candidate[category] = [
+                    repaired.get(str(row.get("id")), row)
+                    for row in proposal.get(category, []) if str(row.get("id")) not in removed
+                ]
+            blocking_findings = [row for row in validate_universe_design(root, candidate) if row["severity"] == "blocking"]
+            if blocking_findings:
+                validation_errors = blocking_findings
+                if attempt + 1 == UNIVERSE_REPAIR_VALIDATION_ATTEMPTS:
+                    raise BookForgeError(f"Repaired universe has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
+                continue
+            break
         proposal = candidate
         for path, content in _universe_design_outputs(proposal).items():
             _write_bytes_atomic(root / path, content.encode() if isinstance(content, str) else content)
@@ -7747,6 +7757,10 @@ def _audit_proposal(proposal: dict[str, object]) -> dict[str, object]:
 
 
 MAX_DESIGN_REPAIR_ROUNDS = 2
+UNIVERSE_REPAIR_VALIDATION_ATTEMPTS = 2
+# A universe is one document the whole book rests on: a real one cleared 6 findings in two
+# rounds and had one blocking left, so it gets a third.
+UNIVERSE_REPAIR_ROUNDS = 3
 
 
 def _blocking(audit: dict[str, object]) -> list[dict[str, object]]:
