@@ -6613,6 +6613,13 @@ Measured on Margherita, 2026-11-04 to 2026-11-09: (1) five continuity slips (an 
 - [ ] Docs in `references/` and `SKILL.md`; full suite passes; installed.
 - [ ] Check the same five dimensions on the Landfall and Ground Truth projects (continuity slips across closed chapters, source fixes not carried into translations, unregistered translations, reader coverage, orphaned tasks) and report what each shows. Requested by the author 2026-11-09, after the skill work.
 
+### M94 — Reasoning room for canon-auditor and continuity-checker ✅
+
+Measured: canon-auditor on DeepSeek V4.1 Flash 1017 (design universe audit, variant high and medium) spent 35,000 of 35,000 tokens on reasoning and wrote 0, so the audit never closed; continuity-checker spent 36,000 of 36,000 on one Margherita chapter (2026-11-10). Neither role was in `REASONING_ROOM`, so both got the 32,000 default. The empty answer is already reported as `ReasoningCeilingSpent` (not a JSON error) by `_refuse_empty_answer`.
+
+- [x] Test: `canon-auditor` and `continuity-checker` get 64,000 + their output budget (`tests/test_reasoning_room.py`).
+- [x] Add both roles to `REASONING_ROOM`.
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped
