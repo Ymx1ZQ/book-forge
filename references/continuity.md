@@ -26,3 +26,8 @@ Closes a flag. The reason is required and stored: the slip was fixed in the manu
 ## The translation gate
 
 `translate next` and `translate run` refuse a chapter while the book has an open flag on that chapter or on an earlier one. The refusal names the flags and the command that closes them and nothing is translated or paid for. `--accept-flags` translates anyway and prints the flags it let through.
+
+## It runs by itself
+
+The ledger starts without a command at two points: when a chapter closes, and before `translate` picks its next chapter. The second catches a source that was fixed by hand since its facts were read, so a fix that opened a new contradiction is flagged before it is translated. A pass reads only the chapters whose text changed and compares only what changed, so it costs two calls per new or edited chapter and nothing for the rest. A failure is printed and the work goes on; the gate on `translate` is what stops. To turn it off, set `"continuity": {"auto": false}` in `book-forge.yaml`; `continuity ledger <book>` still runs it by hand.
+

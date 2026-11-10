@@ -55,7 +55,8 @@ class ReasoningRoomTests(unittest.TestCase):
     def test_measured_roles_get_their_room_above_the_output_budget(self):
         for role in MEASURED_ROLES:
             with self.subTest(role=role):
-                self.assertEqual(self._cap(role), 64000 + self.bf.ROLE_BUDGETS[role][1])
+                self.assertGreaterEqual(self.bf.REASONING_ROOM[role], 64000)
+                self.assertEqual(self._cap(role), self.bf.REASONING_ROOM[role] + self.bf.ROLE_BUDGETS[role][1])
 
     def test_a_role_outside_the_table_keeps_the_provider_default(self):
         role = "cold-reader"

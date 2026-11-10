@@ -3891,7 +3891,7 @@ OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
 # in three, and at `low` once in two.
 # canon-auditor on the same model spent 35,000 of 35,000 on reasoning with 0 output twice (variant high and medium) on a new book's universe audit; continuity-checker spent 36,000 of 36,000 on one Margherita chapter and one Landfall chapter, continuity-extractor 37,000 of 37,000 on Margherita CH-0004 (2026-11-10).
 # On 2026-11-01 a writer on DeepSeek V4.1 Flash 1017 at `high` used all 38,000 tokens on reasoning and returned no answer, twice, on one chapter.
-REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 64000, "continuity-checker": 64000, "continuity-extractor": 64000}
+REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 96000, "continuity-checker": 64000, "continuity-extractor": 64000}
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),
@@ -4652,6 +4652,39 @@ UNIVERSE_DESIGN_CHUNKS: list[dict[str, object]] = [
 ]
 
 
+def _brief_rows(rows: object, keys: tuple[str, ...]) -> list[dict[str, object]]:
+    return [
+        {key: row[key] for key in keys if key in row}
+        for row in rows if isinstance(rows, list) and isinstance(row, dict) and row.get("id")
+    ] if isinstance(rows, list) else []
+
+
+def _chunk_prior(chunk: dict[str, object], merged: dict[str, object]) -> dict[str, object]:
+    """What the calls before this one already decided, for the universe chunks that depend on it.
+
+    Chunks used to be asked in isolation, so each answered a question about a world
+    it had not been shown: the events call invented ERA-0006 (no such era), put all
+    twenty events in ERA-0001 against LAW-0015, and the second half of the cast
+    named Lupe, Ramiro and Toño again under new ids. Only what a chunk must agree
+    with is passed: eras with their summaries for the events, the names already
+    given for the rest of the cast, and the ids that exist for the tail.
+    """
+    category = str(chunk.get("category"))
+    if category == "events":
+        return {"eras": _brief_rows(merged.get("eras"), ("id", "name", "when", "summary"))}
+    if category == "characters" and chunk.get("part") == "L3+L4":
+        return {"characters_so_far": _brief_rows(merged.get("characters"), ("id", "name", "tier"))}
+    if category == "tail":
+        return {
+            "ids": {
+                key: [str(row["id"]) for row in merged.get(key, []) if isinstance(row, dict) and row.get("id")]
+                for key in ("kernel", "eras", "events", "places", "factions", "characters")
+                if isinstance(merged.get(key), list)
+            }
+        }
+    return {}
+
+
 def _chunk_slug(chunk: dict[str, object]) -> str:
     part = str(chunk.get("part", ""))
     return f"{chunk['category']}{'-' + part.lower() if part else ''}"
@@ -4746,7 +4779,7 @@ def _run_design_chunked(
     chunk_telemetry: list[dict[str, object]] = []
     for chunk in chunk_specs:
         parsed, telemetry, chunk_results = _run_design_chunk(
-            root, task_id, claim, attempt_dir, base_capsule, chunk, imports, runner, max_output_tokens
+            root, task_id, claim, attempt_dir, base_capsule, chunk, imports, runner, max_output_tokens, merged=merged
         )
         results.extend(chunk_results)
         chunk_telemetry.append(telemetry)
@@ -4764,6 +4797,7 @@ def _run_design_chunk(
     imports: list[str],
     runner,
     max_output_tokens: int,
+    merged: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     """Run the designer for one chunk under an already-claimed task.
 
@@ -4779,6 +4813,9 @@ def _run_design_chunk(
     unread = CHUNK_DOES_NOT_READ.get(str(chunk.get("category")), ())
     capsule = {key: value for key, value in base_capsule.items() if key not in unread}
     capsule["chunk"] = chunk
+    prior = _chunk_prior(chunk, merged or {})
+    if prior:
+        capsule["prior"] = prior
     # What this chunk adds on top of the capsule every chunk shares. A truncation
     # discovered by the provider costs three calls and a blocked task; the same
     # answer measured here costs nothing, so a chunk that is plainly too big is
@@ -7160,6 +7197,105 @@ def _sweep_orphaned_canon(root: Path, proposal: dict[str, object]) -> list[str]:
     return swept
 
 
+UNIVERSE_REPAIR_CATEGORIES = ("kernel", "eras", "events", "places", "factions", "characters")
+
+
+def _repair_blocked_universe(root, proposal, audit, runner):
+    """Rewrite the canon rows a blocking finding names, then audit again.
+
+    A blocked universe audit used to end the run, and the only way on was
+    `--refresh`, which asks every chunk again (about ten calls) and returns a new
+    set of mistakes. The findings already name the rows, so the designer is asked
+    for those rows alone, with the rest of the world in front of it, and may name
+    rows to drop (a character who is a second copy of another). Bounded by
+    MAX_DESIGN_REPAIR_ROUNDS; a finding naming no row of the universe is left for
+    the caller to halt on.
+    """
+    for round_number in range(1, MAX_DESIGN_REPAIR_ROUNDS + 1):
+        findings = _blocking(audit)
+        if not findings:
+            return proposal, audit
+        rows = {
+            str(row["id"]): category
+            for category in UNIVERSE_REPAIR_CATEGORIES
+            for row in proposal.get(category, []) if isinstance(row, dict) and row.get("id")
+        }
+        scope = sorted({str(v) for finding in findings for v in finding.get("repair_scope", []) if str(v) in rows})
+        if not scope:
+            return proposal, audit
+        _log_step(7, 7, f"universe repair {round_number}/{MAX_DESIGN_REPAIR_ROUNDS} on {', '.join(scope)}", "→")
+        round_dir = root / ".book-forge" / "repairs" / "universe" / f"round-{round_number}"
+        round_dir.mkdir(parents=True, exist_ok=True)
+        capsule = {
+            "scope": "universe",
+            "chunk": {"category": "repair", "part": "universe"},
+            "repair": {
+                "reason": "the independent canon audit found blocking contradictions",
+                "findings": [row for row in findings if set(str(v) for v in row.get("repair_scope", [])) & set(scope)],
+                "rewrite_only": scope,
+                "answer": (
+                    "one JSON object keyed by category (kernel, eras, events, places, factions, characters), each a list of "
+                    "the corrected rows with the SAME ids; to drop a row that duplicates another, list its id under "
+                    "\"remove\"; never add an id that was not sent"
+                ),
+            },
+            "world": {
+                category: _brief_rows(
+                    [row for row in proposal.get(category, []) if str(row.get("id")) not in scope],
+                    ("id", "name", "when", "era", "order", "summary", "tier"),
+                )
+                for category in UNIVERSE_REPAIR_CATEGORIES
+            },
+            "rows_to_rewrite": [
+                row for category in UNIVERSE_REPAIR_CATEGORIES for row in proposal.get(category, [])
+                if isinstance(row, dict) and str(row.get("id")) in scope
+            ],
+        }
+        envelope = build_envelope(
+            root, role="designer", task_capsule=capsule, imports=["UNI-0001#kernel"], state={}, tools=[], max_output_tokens=12288
+        )
+        _write_bytes_atomic(round_dir / "envelope-repair.json", envelope["bytes"])
+        answer = runner("designer", envelope, round_dir)
+        _write_bytes_atomic(round_dir / "raw-repair.txt", str(answer.get("text", "")).encode())
+        try:
+            value = _parse_chunked_contract(str(answer.get("text", "")), max_bytes=12288 * 4)
+        except BookForgeError as exc:
+            raise BookForgeError(f"Universe repair produced no usable answer: {exc}") from exc
+        removed = {str(v) for v in value.get("remove", []) if str(v) in scope} if isinstance(value.get("remove"), list) else set()
+        repaired = {
+            str(row["id"]): row
+            for category in UNIVERSE_REPAIR_CATEGORIES
+            for row in value.get(category, []) if isinstance(row, dict) and str(row.get("id")) in scope
+        }
+        if not repaired and not removed:
+            raise BookForgeError("Universe repair named none of the rows it was asked to correct")
+        candidate = dict(proposal)
+        for category in UNIVERSE_REPAIR_CATEGORIES:
+            candidate[category] = [
+                repaired.get(str(row.get("id")), row)
+                for row in proposal.get(category, []) if str(row.get("id")) not in removed
+            ]
+        blocking_findings = [row for row in validate_universe_design(root, candidate) if row["severity"] == "blocking"]
+        if blocking_findings:
+            raise BookForgeError(f"Repaired universe has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
+        proposal = candidate
+        for path, content in _universe_design_outputs(proposal).items():
+            _write_bytes_atomic(root / path, content.encode() if isinstance(content, str) else content)
+        _sweep_orphaned_canon(root, proposal)
+        rebuild_indexes(root)
+        _write_json(
+            round_dir / "repair-telemetry.json",
+            {"schema": 1, "round": round_number, "advisors": [{"role": "designer", **_chorus_telemetry(answer, envelope)}]},
+        )
+        _reopen_task(root, "AUDIT-UNI-0001")
+        _forget_task_calls(root, "AUDIT-UNI-0001", touching=[])
+        audit = _design_audit_record(
+            root, "AUDIT-UNI-0001", {"scope": "universe", "proposal": proposal}, ["UNI-0001#kernel"], runner,
+            "universe/design-audit.json", raise_on_blocked=False,
+        )
+    return proposal, audit
+
+
 def execute_universe_design(project: Path | str, *, provider=None, chorus_models: str | None = None, no_chorus: bool = False, no_post_chorus: bool = False, with_chorus_context: bool = False, refresh: bool = False, skip_brief: bool = False) -> dict[str, object]:
     root = _project_root(project)
     runner = provider or run_opencode_role
@@ -7187,7 +7323,11 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
             ["UNI-0001#kernel"],
             runner,
             "universe/design-audit.json",
+            raise_on_blocked=False,
         )
+        proposal, audit = _repair_blocked_universe(root, proposal, audit, runner)
+        if _blocking(audit):
+            raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(audit['findings'], sort_keys=True)}")
         return {**audit, "calls": 1}
     # 00-BRIEF gate default ON (M2)
     if _should_brief_gate(root, "universe", skip_flag=skip_brief):
@@ -7281,7 +7421,12 @@ def execute_universe_design(project: Path | str, *, provider=None, chorus_models
         ["UNI-0001#kernel"],
         runner,
         "universe/design-audit.json",
+        raise_on_blocked=False,
     )
+    proposal, audit = _repair_blocked_universe(root, proposal, audit, runner)
+    if _blocking(audit):
+        _log_step(7, 7, "audit", "✗")
+        raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(audit['findings'], sort_keys=True)}")
     _log_step(7, 7, "audit", "✓")
     # M2: post-design ensemble — re-read product at per-chapter granularity (places/characters/themes)
     if (not no_chorus) and (not no_post_chorus) and _chorus_post_enabled(config):
@@ -11015,6 +11160,7 @@ def review_and_close_chapter(
     machine_state["source_language"] = _read_json(root / "book-forge.yaml")["source_language"]
     _write_json(root / ".book-forge" / "state.json", machine_state)
     _ensure_artifact(root, *_source_chapter_artifact(root, book_id, chapter_id))
+    _auto_ledger(root, book_id, provider, f"closing {chapter_id}")
     return {"state": "closed", "book": book_id, "chapter": chapter_id, "calls": calls, "receipts": receipts}
 
 
@@ -13883,6 +14029,9 @@ def translate_next(
     if not (locale_root / "locale.yaml").is_file():
         raise BookForgeError("Translation workspace does not exist; run translate add explicitly")
     _ensure_locale_artifacts(root, book_id, canonical)
+    # A source edited since its facts were read is read again before it is
+    # translated, so a fix that opened a new contradiction is caught here.
+    _auto_ledger(root, book_id, provider, "a source change before translating")
     results = []
     refused: list[dict[str, object]] = []
     while True:
@@ -16119,106 +16268,136 @@ def continuity_ledger(project: Path | str, book_id: str, *, provider=None) -> di
     if book_id not in {str(book["id"]) for book in list_books(root)}:
         raise BookForgeError(f"Unknown book: {book_id}")
     with _advance_lock(root, book_id):
-        state = _read_json(root / "books" / book_id / "state.yaml")
-        closed = sorted(str(value) for value in state.get("closed_chapters", []))
-        if not closed:
-            raise BookForgeError(f"{book_id} has no closed chapter to read")
-        manuscript = root / "books" / book_id / "manuscript" / "chapters"
-        texts: dict[str, str] = {}
-        hashes: dict[str, str] = {}
-        for chapter in closed:
-            path = manuscript / f"{chapter}.md"
-            if not path.is_file():
-                raise BookForgeError(f"{chapter} is closed and has no manuscript file")
-            texts[chapter] = path.read_text(encoding="utf-8")
-            hashes[chapter] = _sha256_bytes(path.read_bytes())
-        facts_dir = _ledger_dir(root, book_id) / "facts"
-        facts: dict[str, list[dict[str, str]]] = {}
-        extracted: list[str] = []
-        reused: list[str] = []
-        unread: list[dict[str, str]] = []
-        for chapter in closed:
-            stored = facts_dir / f"{chapter}.json"
-            if stored.is_file() and _read_json(stored).get("source_hash") == hashes[chapter]:
-                facts[chapter] = list(_read_json(stored)["facts"])
-                reused.append(chapter)
-                continue
-            try:
-                value = _ledger_call(
-                    root, f"LEDGER-{book_id}-{chapter}", "continuity-extractor",
-                    {"chapter": chapter, "chapter_markdown": texts[chapter]}, runner,
-                )
-                rows = _valid_facts(value, texts[chapter])
-            except Exception as failed:
-                print(f"[continuity-extractor] {chapter} was not read: {str(failed)[:160]}", file=sys.stderr)
-                unread.append({"chapter": chapter, "why": str(failed)[:200]})
-                continue
-            facts_dir.mkdir(parents=True, exist_ok=True)
-            _write_json(stored, {"schema": 1, "chapter": chapter, "source_hash": hashes[chapter], "facts": rows})
-            facts[chapter] = rows
-            extracted.append(chapter)
-        ledger = _load_flags(root, book_id)
-        checked: dict[str, str] = dict(ledger["checked"])  # type: ignore[arg-type]
-        new_flags: list[str] = []
-        compared: list[str] = []
-        for index, chapter in enumerate(closed):
-            earlier = {name: facts[name] for name in closed[:index] if facts.get(name)}
-            if chapter not in facts:
-                continue
-            key = _sha256_bytes(_json_bytes([facts[chapter], earlier]))
-            if checked.get(chapter) == key:
-                continue
-            if not earlier or not facts[chapter]:
-                # Nothing to compare, and whatever this chapter was flagged for no longer stands.
-                ledger["flags"] = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
-                checked[chapter] = key
-                continue
-            try:
-                value = _ledger_call(
-                    root, f"LEDGERCHECK-{book_id}-{chapter}", "continuity-checker",
-                    {"chapter": chapter, "chapter_facts": facts[chapter], "earlier_facts": earlier}, runner,
-                )
-                rows = value.get("contradictions")
-                if not isinstance(rows, list):
-                    raise MalformedAnswer("continuity checker answer has no `contradictions` list")
-            except Exception as failed:
-                print(f"[continuity-checker] {chapter} was not compared: {str(failed)[:160]}", file=sys.stderr)
-                unread.append({"chapter": chapter, "why": str(failed)[:200]})
-                continue
-            flags = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
-            known = {flag["signature"] for flag in flags}
-            number = max([int(str(flag["id"]).rsplit("-", 1)[1]) for flag in ledger["flags"]] + [0])  # type: ignore[union-attr]
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                before = str(row.get("earlier_chapter") or "")
-                earlier_quote, later_quote = row.get("earlier_quote"), row.get("later_quote")
-                if before not in earlier or not _quote_in(earlier_quote, texts[before]) or not _quote_in(later_quote, texts[chapter]):
-                    print(f"[continuity-checker] {chapter}: a contradiction whose quotes the chapters do not contain was set aside", file=sys.stderr)
-                    continue
-                signature = _signature(before, chapter, str(earlier_quote), str(later_quote))
-                if signature in known:
-                    continue
-                known.add(signature)
-                number += 1
-                flag_id = f"CF-{book_id}-{number:04d}"
-                flags.append({
-                    "id": flag_id, "state": "open", "chapter": chapter, "earlier_chapter": before,
-                    "category": str(row.get("category") or ""),
-                    "quotes": [{"chapter": before, "quote": str(earlier_quote).strip()}, {"chapter": chapter, "quote": str(later_quote).strip()}],
-                    "reason": str(row.get("reason") or "").strip(), "signature": signature, "opened_at": time.time(),
-                })
-                new_flags.append(flag_id)
-            ledger["flags"] = flags
+        return _ledger_pass(root, book_id, runner)
+
+
+def _auto_ledger(root: Path, book_id: str, provider, why: str) -> dict[str, object] | None:
+    """Run the continuity ledger by itself, where a slip would otherwise travel on.
+
+    It used to start only when a person typed `continuity ledger`, so a slip nobody
+    went looking for was written into the next chapter and translated three times.
+    Called with the lock already held (a chapter closing, a translation starting),
+    never raises: a failed read is printed and the work goes on, because the ledger
+    advises and the gate on `translate` is what stops. A substituted runner is left
+    alone, as in the retry wait: tests and replays have their own calls to count.
+    Switched off by `"continuity": {"auto": false}` in book-forge.yaml.
+    """
+    if provider is not None and provider is not run_opencode_role:
+        return None
+    try:
+        settings = _read_json(root / "book-forge.yaml").get("continuity")
+        if isinstance(settings, dict) and settings.get("auto") is False:
+            return None
+        report = _ledger_pass(root, book_id, provider or run_opencode_role)
+    except Exception as failed:
+        print(f"[continuity] ledger not run ({why}): {str(failed)[:160]}", file=sys.stderr)
+        return None
+    if report["new_flags"]:
+        print(f"[continuity] {len(report['new_flags'])} new flag(s) after {why}: see `continuity flags {book_id}`", file=sys.stderr)
+    return report
+
+
+def _ledger_pass(root: Path, book_id: str, runner) -> dict[str, object]:
+    state = _read_json(root / "books" / book_id / "state.yaml")
+    closed = sorted(str(value) for value in state.get("closed_chapters", []))
+    if not closed:
+        raise BookForgeError(f"{book_id} has no closed chapter to read")
+    manuscript = root / "books" / book_id / "manuscript" / "chapters"
+    texts: dict[str, str] = {}
+    hashes: dict[str, str] = {}
+    for chapter in closed:
+        path = manuscript / f"{chapter}.md"
+        if not path.is_file():
+            raise BookForgeError(f"{chapter} is closed and has no manuscript file")
+        texts[chapter] = path.read_text(encoding="utf-8")
+        hashes[chapter] = _sha256_bytes(path.read_bytes())
+    facts_dir = _ledger_dir(root, book_id) / "facts"
+    facts: dict[str, list[dict[str, str]]] = {}
+    extracted: list[str] = []
+    reused: list[str] = []
+    unread: list[dict[str, str]] = []
+    for chapter in closed:
+        stored = facts_dir / f"{chapter}.json"
+        if stored.is_file() and _read_json(stored).get("source_hash") == hashes[chapter]:
+            facts[chapter] = list(_read_json(stored)["facts"])
+            reused.append(chapter)
+            continue
+        try:
+            value = _ledger_call(
+                root, f"LEDGER-{book_id}-{chapter}", "continuity-extractor",
+                {"chapter": chapter, "chapter_markdown": texts[chapter]}, runner,
+            )
+            rows = _valid_facts(value, texts[chapter])
+        except Exception as failed:
+            print(f"[continuity-extractor] {chapter} was not read: {str(failed)[:160]}", file=sys.stderr)
+            unread.append({"chapter": chapter, "why": str(failed)[:200]})
+            continue
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(stored, {"schema": 1, "chapter": chapter, "source_hash": hashes[chapter], "facts": rows})
+        facts[chapter] = rows
+        extracted.append(chapter)
+    ledger = _load_flags(root, book_id)
+    checked: dict[str, str] = dict(ledger["checked"])  # type: ignore[arg-type]
+    new_flags: list[str] = []
+    compared: list[str] = []
+    for index, chapter in enumerate(closed):
+        earlier = {name: facts[name] for name in closed[:index] if facts.get(name)}
+        if chapter not in facts:
+            continue
+        key = _sha256_bytes(_json_bytes([facts[chapter], earlier]))
+        if checked.get(chapter) == key:
+            continue
+        if not earlier or not facts[chapter]:
+            # Nothing to compare, and whatever this chapter was flagged for no longer stands.
+            ledger["flags"] = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
             checked[chapter] = key
-            compared.append(chapter)
-        ledger["checked"] = checked
-        _ledger_dir(root, book_id).mkdir(parents=True, exist_ok=True)
-        _write_json(_flags_path(root, book_id), ledger)
-        return {
-            "book": book_id, "chapters": closed, "extracted": extracted, "reused": reused, "compared": compared,
-            "new_flags": new_flags, "open_flags": len(_open_flags(root, book_id)), "unread": unread,
-        }
+            continue
+        try:
+            value = _ledger_call(
+                root, f"LEDGERCHECK-{book_id}-{chapter}", "continuity-checker",
+                {"chapter": chapter, "chapter_facts": facts[chapter], "earlier_facts": earlier}, runner,
+            )
+            rows = value.get("contradictions")
+            if not isinstance(rows, list):
+                raise MalformedAnswer("continuity checker answer has no `contradictions` list")
+        except Exception as failed:
+            print(f"[continuity-checker] {chapter} was not compared: {str(failed)[:160]}", file=sys.stderr)
+            unread.append({"chapter": chapter, "why": str(failed)[:200]})
+            continue
+        flags = [flag for flag in ledger["flags"] if not (flag["chapter"] == chapter and flag["state"] == "open")]  # type: ignore[union-attr]
+        known = {flag["signature"] for flag in flags}
+        number = max([int(str(flag["id"]).rsplit("-", 1)[1]) for flag in ledger["flags"]] + [0])  # type: ignore[union-attr]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            before = str(row.get("earlier_chapter") or "")
+            earlier_quote, later_quote = row.get("earlier_quote"), row.get("later_quote")
+            if before not in earlier or not _quote_in(earlier_quote, texts[before]) or not _quote_in(later_quote, texts[chapter]):
+                print(f"[continuity-checker] {chapter}: a contradiction whose quotes the chapters do not contain was set aside", file=sys.stderr)
+                continue
+            signature = _signature(before, chapter, str(earlier_quote), str(later_quote))
+            if signature in known:
+                continue
+            known.add(signature)
+            number += 1
+            flag_id = f"CF-{book_id}-{number:04d}"
+            flags.append({
+                "id": flag_id, "state": "open", "chapter": chapter, "earlier_chapter": before,
+                "category": str(row.get("category") or ""),
+                "quotes": [{"chapter": before, "quote": str(earlier_quote).strip()}, {"chapter": chapter, "quote": str(later_quote).strip()}],
+                "reason": str(row.get("reason") or "").strip(), "signature": signature, "opened_at": time.time(),
+            })
+            new_flags.append(flag_id)
+        ledger["flags"] = flags
+        checked[chapter] = key
+        compared.append(chapter)
+    ledger["checked"] = checked
+    _ledger_dir(root, book_id).mkdir(parents=True, exist_ok=True)
+    _write_json(_flags_path(root, book_id), ledger)
+    return {
+        "book": book_id, "chapters": closed, "extracted": extracted, "reused": reused, "compared": compared,
+        "new_flags": new_flags, "open_flags": len(_open_flags(root, book_id)), "unread": unread,
+    }
 
 
 def _open_flags(root: Path, book_id: str | None = None) -> list[dict[str, object]]:

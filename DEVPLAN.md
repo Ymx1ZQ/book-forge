@@ -6610,6 +6610,7 @@ Measured on Margherita, 2026-11-04 to 2026-11-09: (1) five continuity slips (an 
 - [x] `translate run --retry-dead`: tasks whose owner process is gone are resolved as retry at start, with a line naming them.
 - [ ] `translate sync` re-translates only the changed paragraphs (model call, neighbours as context).
 - [ ] The locale-reader's result gates the chapter's `current` state.
+- [x] `continuity ledger` runs by itself: when a chapter closes (`review_and_close_chapter`) and before `translate` picks a chapter, so a slip is flagged and a source fix is re-read without a person typing the command. Never raises (a failed read is printed), skipped for a substituted runner, off with `"continuity": {"auto": false}` in `book-forge.yaml`. Measured 2026-11-10: the ledger found 11 slips in 12 Margherita chapters; the later ones appeared after hand fixes changed the facts of the chapters they were compared with, which is why the re-read after an edit matters. A pass compares only what changed, so repeating it on unchanged text finds nothing new.
 - [ ] Docs in `references/` and `SKILL.md`; full suite passes; installed.
 - [ ] Check the same five dimensions on the Landfall and Ground Truth projects (continuity slips across closed chapters, source fixes not carried into translations, unregistered translations, reader coverage, orphaned tasks) and report what each shows. Requested by the author 2026-11-09, after the skill work.
 
@@ -6620,6 +6621,17 @@ Measured: canon-auditor on DeepSeek V4.1 Flash 1017 (design universe audit, vari
 - [x] Test: `canon-auditor` and `continuity-checker` get 64,000 + their output budget (`tests/test_reasoning_room.py`).
 - [x] Add both roles to `REASONING_ROOM`.
 - [x] Same for `continuity-extractor` (37,000 of 37,000 on Margherita CH-0004) and re-run the ledger on Margherita CH-0004 and Landfall CH-0005.
+
+### M95 — Universe design chunks see each other, and a blocked universe audit is repaired 🔄
+
+Measured on a book's universe (2026-11-10): `_run_design_chunk` received only the base capsule and its own chunk, so the events chunk never saw the eras just generated (run 2 invented ERA-0006; run 3 put all twenty events in ERA-0001 against LAW-0015), and the second half of the cast repeated the first (CHR-0009 and CHR-0101 both Lupe, CHR-0010 and CHR-0102 both Ramiro, CHR-0103 a second Toño). A blocked universe audit raised and stopped: `_repair_blocked_design` served books only, so the one remedy was `--refresh`, which asks every chunk again (about ten calls) and brings new errors.
+
+- [x] Test: events get the eras (id, name, when, summary), the L3+L4 cast gets the names already given, the tail gets the ids that exist; each chunk is handed the merge of those before it (`tests/test_universe_chunk_context.py`).
+- [x] `_chunk_prior`, passed to `_run_design_chunk` as `merged`; designer prompt explains `prior`.
+- [x] Test: a blocked universe audit rewrites only the rows its findings name (and drops a duplicate named under `remove`), re-writes the promoted files, audits again, and stops after `MAX_DESIGN_REPAIR_ROUNDS`.
+- [x] `_repair_blocked_universe` on both paths of `execute_universe_design`; canon-auditor prompt asks a universe finding to name canon row ids in `repair_scope`.
+- [ ] After a blocked universe audit that repair could not clear, `status` still reports the run `completed` and the tasks `succeeded` while `universe/design-audit.json` is `blocked`: make the run state follow the verdict.
+- [ ] Verify on a real universe (`design universe --refresh --no-chorus`).
 
 ### Dependencies and exclusions
 
