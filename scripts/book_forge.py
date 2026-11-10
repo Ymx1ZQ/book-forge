@@ -3889,9 +3889,9 @@ OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
 # envelope: at `medium` it reasoned 31,607 and 34,203 tokens and answered both
 # times under 64,000 + 3,000; under 32,000 + 3,000 it spent all 35,000 three times
 # in three, and at `low` once in two.
-# canon-auditor on the same model spent 35,000 of 35,000 on reasoning with 0 output twice (variant high and medium) on a new book's universe audit; continuity-checker spent 36,000 of 36,000 on one Margherita chapter (2026-11-10).
+# canon-auditor on the same model spent 35,000 of 35,000 on reasoning with 0 output twice (variant high and medium) on a new book's universe audit; continuity-checker spent 36,000 of 36,000 on one Margherita chapter and one Landfall chapter, continuity-extractor 37,000 of 37,000 on Margherita CH-0004 (2026-11-10).
 # On 2026-11-01 a writer on DeepSeek V4.1 Flash 1017 at `high` used all 38,000 tokens on reasoning and returned no answer, twice, on one chapter.
-REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 64000, "continuity-checker": 64000}
+REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 64000, "continuity-checker": 64000, "continuity-extractor": 64000}
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),

@@ -6619,6 +6619,7 @@ Measured: canon-auditor on DeepSeek V4.1 Flash 1017 (design universe audit, vari
 
 - [x] Test: `canon-auditor` and `continuity-checker` get 64,000 + their output budget (`tests/test_reasoning_room.py`).
 - [x] Add both roles to `REASONING_ROOM`.
+- [x] Same for `continuity-extractor` (37,000 of 37,000 on Margherita CH-0004) and re-run the ledger on Margherita CH-0004 and Landfall CH-0005.
 
 ### Dependencies and exclusions
 
