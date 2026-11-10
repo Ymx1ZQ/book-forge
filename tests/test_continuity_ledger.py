@@ -206,7 +206,7 @@ class LedgerTests(unittest.TestCase):
 
     def test_the_prompts_and_agents_exist_for_both_roles(self):
         prompts = Path(self.bf.__file__).resolve().parents[1] / "assets" / "prompts"
-        for role in ("continuity-extractor", "continuity-checker"):
+        for role in ("continuity-extractor", "continuity-checker", "continuity-reviser"):
             self.assertIn(role, self.bf.ROLE_SPECS)
             self.assertIn(role, self.bf.ROLE_BUDGETS)
             self.assertTrue((prompts / f"{role}.md").is_file())

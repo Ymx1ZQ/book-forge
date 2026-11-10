@@ -31,3 +31,9 @@ Closes a flag. The reason is required and stored: the slip was fixed in the manu
 
 The ledger starts without a command at two points: when a chapter closes, and before `translate` picks its next chapter. The second catches a source that was fixed by hand since its facts were read, so a fix that opened a new contradiction is flagged before it is translated. A pass reads only the chapters whose text changed and compares only what changed, so it costs two calls per new or edited chapter and nothing for the rest. A failure is printed and the work goes on; the gate on `translate` is what stops. To turn it off, set `"continuity": {"auto": false}` in `book-forge.yaml`; `continuity ledger <book>` still runs it by hand.
 
+## It repairs what it finds
+
+When a pass leaves a flag open, `continuity-reviser` is asked for the smallest edit that removes it, given the flag, its two quotes and the full text of both chapters. It answers in exact-text edits (`chapter`, `old`, `new`, `why`). The engine applies an edit only when the chapter is one the flag names, `old` occurs exactly once in it, `new` differs from `old` and stays short; one edit that fails discards the flag's whole answer and leaves the flag open. An applied edit is written to the manuscript, journalled in `.book-forge/continuity-repairs.jsonl` with the old and new text, and the source is adopted, which marks any translation of that chapter stale. The ledger then reads the book again; the loop stops when no flag is open or a round edits nothing, at most `CONTINUITY_REPAIR_ROUNDS` (2) rounds. What remains open stops `translate`, and `continuity flags` lists it for a person.
+
+Because the edit is made before a chapter is translated, no translation has to be patched by hand. `continuity repair <book>` runs the loop on demand; `"continuity": {"repair": false}` in `book-forge.yaml` turns off the automatic run and keeps the flags.
+

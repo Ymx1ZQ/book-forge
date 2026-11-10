@@ -100,6 +100,9 @@ ROLE_SPECS = {
     # ones. Both are advisory and neither writes prose.
     "continuity-extractor": ("all", "low", 4),
     "continuity-checker": ("all", "medium", 4),
+    # It rewrites a few words of one chapter to remove a contradiction the checker
+    # found, and answers in exact-text edits that the engine verifies before applying.
+    "continuity-reviser": ("all", "medium", 4),
     "judge": ("all", "max", 6),
     "book-forge-smoke": ("primary", "low", 3),
 }
@@ -3891,7 +3894,7 @@ OPENCODE_OUTPUT_TOKEN_MAX_ENV = "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"
 # in three, and at `low` once in two.
 # canon-auditor on the same model spent 35,000 of 35,000 on reasoning with 0 output twice (variant high and medium) on a new book's universe audit; continuity-checker spent 36,000 of 36,000 on one Margherita chapter and one Landfall chapter, continuity-extractor 37,000 of 37,000 on Margherita CH-0004 (2026-11-10).
 # On 2026-11-01 a writer on DeepSeek V4.1 Flash 1017 at `high` used all 38,000 tokens on reasoning and returned no answer, twice, on one chapter.
-REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 96000, "continuity-checker": 64000, "continuity-extractor": 64000}
+REASONING_ROOM = {"technical-editor": 64000, "writer": 64000, "translator": 64000, "locale-reader": 64000, "locale-reviser": 64000, "canon-auditor": 96000, "continuity-checker": 64000, "continuity-extractor": 64000, "continuity-reviser": 64000}
 
 ROLE_BUDGETS = {
     "designer": (20000, 20000),
@@ -3912,6 +3915,7 @@ ROLE_BUDGETS = {
     # checker reads every earlier chapter's list, which is short beside the prose.
     "continuity-extractor": (32000, 5000),
     "continuity-checker": (32000, 4000),
+    "continuity-reviser": (40000, 3000),
     # It returns the whole chapter and a record of every sentence it rewrote, so its
     # allowance is the translator's with room for the record.
     "locale-reviser": (16000, 7000),
@@ -16271,6 +16275,107 @@ def continuity_ledger(project: Path | str, book_id: str, *, provider=None) -> di
         return _ledger_pass(root, book_id, runner)
 
 
+CONTINUITY_REPAIR_ROUNDS = 2
+CONTINUITY_EDIT_GROWTH = 3  # an edit may be this many times longer than the text it replaces, plus slack
+
+
+def _validated_edits(flag: dict[str, object], texts: dict[str, str], value: dict[str, object]) -> list[dict[str, str]] | None:
+    """The edits a reviser may apply for one flag, or None if any of them is not safe.
+
+    The model is asked for exact-text edits so that the engine, not the model,
+    decides whether one applies: the chapter must be one the flag names, the old
+    text must occur once in it, and the replacement must stay small. One bad edit
+    discards the flag's whole answer, since the others may depend on it.
+    """
+    rows = value.get("edits")
+    if not isinstance(rows, list) or not rows or len(rows) > 4:
+        return None
+    allowed = {str(flag["chapter"]), str(flag["earlier_chapter"])}
+    working = dict(texts)
+    edits: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        chapter, old, new = str(row.get("chapter") or ""), row.get("old"), row.get("new")
+        if chapter not in allowed or not isinstance(old, str) or not isinstance(new, str) or not old.strip() or old == new:
+            return None
+        if working[chapter].count(old) != 1 or len(new) > CONTINUITY_EDIT_GROWTH * len(old) + 200:
+            return None
+        working[chapter] = working[chapter].replace(old, new, 1)
+        edits.append({"chapter": chapter, "old": old, "new": new, "why": str(row.get("why") or "").strip()[:300]})
+    return edits
+
+
+def _repair_continuity(root: Path, book_id: str, runner, *, rounds: int = CONTINUITY_REPAIR_ROUNDS) -> dict[str, object]:
+    """Ask for the smallest edit that removes each open flag, apply it, and read again.
+
+    The loop a person ran by hand: a flag, a fix in the English source, a fix in
+    each translation, the ledger once more. The source is edited before anything is
+    translated, so no translation has to be patched; a chapter that already has
+    translations is adopted without `--keep-translations`, which marks them stale.
+    Each edit is journalled with its old and new text. A flag whose answer is not
+    safe stays open, and the gate on `translate` is what stops the book.
+    """
+    manuscript = root / "books" / book_id / "manuscript" / "chapters"
+    journal = root / ".book-forge" / "continuity-repairs.jsonl"
+    done: list[str] = []
+    stale: set[str] = set()
+    for number in range(1, rounds + 1):
+        flags = [flag for flag in _open_flags(root, book_id)]
+        if not flags:
+            break
+        touched: set[str] = set()
+        edited = 0
+        for flag in flags:
+            pair = {str(flag["chapter"]), str(flag["earlier_chapter"])}
+            if pair & touched:
+                continue  # one of its chapters just changed: the next read decides whether it still stands
+            texts = {name: (manuscript / f"{name}.md").read_text(encoding="utf-8") for name in pair if (manuscript / f"{name}.md").is_file()}
+            if len(texts) != len(pair):
+                continue
+            try:
+                value = _ledger_call(
+                    root, f"LEDGERFIX-{book_id}-{flag['id']}-{number}", "continuity-reviser",
+                    {"flag": {key: flag[key] for key in ("id", "reason", "quotes")}, "chapters": texts}, runner,
+                )
+            except Exception as failed:
+                print(f"[continuity-reviser] {flag['id']} was not repaired: {str(failed)[:160]}", file=sys.stderr)
+                continue
+            edits = _validated_edits(flag, texts, value)
+            if edits is None:
+                print(f"[continuity-reviser] {flag['id']}: the answer named no edit that applies safely; the flag stays open", file=sys.stderr)
+                continue
+            for edit in edits:
+                path = manuscript / f"{edit['chapter']}.md"
+                path.write_text(path.read_text(encoding="utf-8").replace(edit["old"], edit["new"], 1), encoding="utf-8")
+                journal.parent.mkdir(parents=True, exist_ok=True)
+                with journal.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"flag": flag["id"], "book": book_id, **edit, "when": time.time()}, ensure_ascii=False, sort_keys=True) + "\n")
+                touched.add(edit["chapter"])
+                try:
+                    outcome = adopt_artifact(root, f"SOURCE-{book_id}-{edit['chapter']}", reason=f"continuity repair {flag['id']}")
+                    stale.update(str(item) for item in outcome.get("stale", []))
+                except BookForgeError as failed:
+                    print(f"[continuity-reviser] {edit['chapter']} edited, not adopted: {str(failed)[:160]}", file=sys.stderr)
+                print(f"[continuity-reviser] {flag['id']}: {edit['chapter']}: {edit['old'][:60]!r} -> {edit['new'][:60]!r}", file=sys.stderr)
+            done.append(str(flag["id"]))
+            edited += 1
+        if not edited:
+            break
+        _ledger_pass(root, book_id, runner)
+    if stale:
+        print(f"[continuity-reviser] translations now stale: {', '.join(sorted(stale))}", file=sys.stderr)
+    return {"repaired": done, "open_flags": len(_open_flags(root, book_id)), "stale": sorted(stale)}
+
+
+def repair_continuity(project: Path | str, book_id: str, *, provider=None) -> dict[str, object]:
+    root = _project_root(project)
+    if book_id not in {str(book["id"]) for book in list_books(root)}:
+        raise BookForgeError(f"Unknown book: {book_id}")
+    with _advance_lock(root, book_id):
+        return _repair_continuity(root, book_id, provider or run_opencode_role)
+
+
 def _auto_ledger(root: Path, book_id: str, provider, why: str) -> dict[str, object] | None:
     """Run the continuity ledger by itself, where a slip would otherwise travel on.
 
@@ -16292,8 +16397,14 @@ def _auto_ledger(root: Path, book_id: str, provider, why: str) -> dict[str, obje
     except Exception as failed:
         print(f"[continuity] ledger not run ({why}): {str(failed)[:160]}", file=sys.stderr)
         return None
-    if report["new_flags"]:
-        print(f"[continuity] {len(report['new_flags'])} new flag(s) after {why}: see `continuity flags {book_id}`", file=sys.stderr)
+    if report["open_flags"] and not (isinstance(settings, dict) and settings.get("repair") is False):
+        try:
+            outcome = _repair_continuity(root, book_id, provider or run_opencode_role)
+            report = {**report, "repaired": outcome["repaired"], "open_flags": outcome["open_flags"]}
+        except Exception as failed:
+            print(f"[continuity] repair not run ({why}): {str(failed)[:160]}", file=sys.stderr)
+    if report["open_flags"]:
+        print(f"[continuity] {report['open_flags']} open flag(s) after {why}: see `continuity flags {book_id}`", file=sys.stderr)
     return report
 
 
@@ -16493,6 +16604,8 @@ def build_parser() -> argparse.ArgumentParser:
     continuity_add.add_argument("--import", dest="imports", action="append", default=[])
     continuity_ledger_command = continuity_commands.add_parser("ledger", help="Extract each closed chapter's checkable facts and flag contradictions with earlier chapters")
     continuity_ledger_command.add_argument("book")
+    continuity_repair_command = continuity_commands.add_parser("repair", help="Ask for the smallest edit that removes each open flag, apply it and read the book again")
+    continuity_repair_command.add_argument("book")
     continuity_flags_command = continuity_commands.add_parser("flags", help="List the open continuity flags")
     continuity_flags_command.add_argument("book", nargs="?")
     continuity_flags_command.add_argument("--all", action="store_true", help="Include resolved flags")
@@ -16627,6 +16740,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "ledger":
             print(json.dumps(continuity_ledger(args.project, args.book), sort_keys=True))
+        elif args.command == "continuity" and args.continuity_command == "repair":
+            print(json.dumps(repair_continuity(args.project, args.book), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "flags":
             print(json.dumps({"flags": continuity_flags(args.project, args.book, include_resolved=args.all)}, sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "resolve":

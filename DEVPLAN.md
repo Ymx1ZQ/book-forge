@@ -6633,6 +6633,17 @@ Measured on a book's universe (2026-11-10): `_run_design_chunk` received only th
 - [ ] After a blocked universe audit that repair could not clear, `status` still reports the run `completed` and the tasks `succeeded` while `universe/design-audit.json` is `blocked`: make the run state follow the verdict.
 - [ ] Verify on a real universe (`design universe --refresh --no-chorus`).
 
+### M96 — The skill fixes the contradictions its ledger finds, before they are translated ✅
+
+Measured on Margherita (2026-11-10): the ledger opened 14 flags over four passes; each was fixed by hand in the English source and in three translations, then the ledger was run again. The loop (flag, minimal source edit, re-read) is mechanical and belongs in the skill, so a slip is repaired before the chapter reaches `translate` and nobody carries the fix into translations by hand.
+
+- [x] Test: for an open flag, `continuity-reviser` returns exact-text edits to the later or the earlier chapter; an edit is applied only if its `old` text occurs exactly once in a chapter the flag names, differs from `new`, and is small; anything else leaves the flag open.
+- [x] Role `continuity-reviser` (prompt, budget, reasoning room, agent file); `_repair_continuity` applies the edits, records each in `.book-forge/continuity-repairs.jsonl`, adopts the changed source, re-reads with the ledger and stops when no flag is open or a round edits nothing (`CONTINUITY_REPAIR_ROUNDS`).
+- [x] `continuity repair <book>` by hand; the automatic ledger runs it after a pass that leaves flags open (off with `"continuity": {"repair": false}`); a chapter with translations is reported as having stale translations.
+- [x] Docs in `references/continuity.md`.
+- [x] Full suite (1223 OK); installed.
+- [ ] Margherita re-run: verify the repairs on a real book (running 2026-11-10).
+
 ### Dependencies and exclusions
 
 M44 and M47 establish context/version safety. M45/M46/M50 can follow scoped

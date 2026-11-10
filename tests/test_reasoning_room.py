@@ -7,7 +7,7 @@ from unittest import mock
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "book_forge.py"
-MEASURED_ROLES = ("technical-editor", "writer", "translator", "locale-reader", "locale-reviser", "canon-auditor", "continuity-checker", "continuity-extractor")
+MEASURED_ROLES = ("technical-editor", "writer", "translator", "locale-reader", "locale-reviser", "canon-auditor", "continuity-checker", "continuity-extractor", "continuity-reviser")
 
 
 def load_module():
