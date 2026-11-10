@@ -6642,7 +6642,7 @@ Measured on Margherita (2026-11-10): the ledger opened 14 flags over four passes
 - [x] `continuity repair <book>` by hand; the automatic ledger runs it after a pass that leaves flags open (off with `"continuity": {"repair": false}`); a chapter with translations is reported as having stale translations.
 - [x] Docs in `references/continuity.md`.
 - [x] Full suite (1223 OK); installed.
-- [ ] Margherita re-run: verify the repairs on a real book (running 2026-11-10).
+- [x] Margherita re-run: the skill repaired 6 of 9 flags itself (8 verified edits); the other three were fixed by hand and the ledger came back clean (2026-11-10).
 
 ### Dependencies and exclusions
 
