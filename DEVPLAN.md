@@ -6630,7 +6630,7 @@ Measured on a book's universe (2026-11-10): `_run_design_chunk` received only th
 - [x] `_chunk_prior`, passed to `_run_design_chunk` as `merged`; designer prompt explains `prior`.
 - [x] Test: a blocked universe audit rewrites only the rows its findings name (and drops a duplicate named under `remove`), re-writes the promoted files, audits again, and stops after `MAX_DESIGN_REPAIR_ROUNDS`.
 - [x] `_repair_blocked_universe` on both paths of `execute_universe_design`; canon-auditor prompt asks a universe finding to name canon row ids in `repair_scope`.
-- [ ] After a blocked universe audit that repair could not clear, `status` still reports the run `completed` and the tasks `succeeded` while `universe/design-audit.json` is `blocked`: make the run state follow the verdict.
+- [x] After a blocked design audit that repair could not clear, the audit task goes back to `pending` (verdict stays on disk), so `status` no longer reports a finished run; the next `design` run repairs again. Test in `tests/test_design_repair.py`.
 - [ ] Verify on a real universe (`design universe --refresh --no-chorus`).
 
 ### M96 — The skill fixes the contradictions its ledger finds, before they are translated ✅

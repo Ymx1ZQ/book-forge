@@ -6777,6 +6777,10 @@ def _design_audit_record(
         "question": _auditor_question_hash(),
     }
     _complete_model_task(root, task_id, claim, {output_path: _json_bytes(record)}, result, envelope)
+    if record["state"] == "blocked":
+        # The verdict is on disk, but the job is not done: a task left `succeeded`
+        # made status report a finished run over a design the auditor had refused.
+        _reopen_task(root, task_id)
     if record["state"] == "blocked" and raise_on_blocked:
         raise BookForgeError(f"Independent design audit found blocking issues: {json.dumps(findings, sort_keys=True)}")
     return record

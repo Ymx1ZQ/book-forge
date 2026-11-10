@@ -220,11 +220,16 @@ class BlockedRecordTests(unittest.TestCase):
     def run_design(self, provider):
         return self.bf.execute_book_design(self.project, self.book, provider=provider, no_chorus=True, no_post_chorus=True)
 
+    def audit_task_state(self):
+        plan = self.bf._load_plan(self.bf._project_root(self.project))
+        return next(row["state"] for row in plan["tasks"] if row["id"] == f"AUDIT-{self.book}")
+
     def test_a_blocked_verdict_is_tried_again_and_repaired(self):
         with self.assertRaises(self.bf.BookForgeError):
             self.run_design(RepairProvider(self.bf, audits=[[FINDING]] * 6))
         record = json.loads((self.project / f"books/{self.book}/design-audit.json").read_text())
         self.assertEqual(record["state"], "blocked")
+        self.assertNotEqual(self.audit_task_state(), "succeeded")
 
         second = RepairProvider(self.bf)
         result = self.run_design(second)
