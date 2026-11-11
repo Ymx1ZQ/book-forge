@@ -6664,13 +6664,13 @@ Seen on a book in progress (2026-11-11): the driving agent stopped after a block
 - [x] A repair answers `decisions` ({finding, choice, rows}); they are appended to `books/<id>/design-decisions.json` or `universe/design-decisions.json` with the round (`_record_decisions`).
 
 
-### M98 — A project's OpenRouter key file and app name survive `runtime sync` (proposed)
+### M98 — A project's OpenRouter key file and app name survive `runtime sync` ✅
 
 Found on 2026-11-11 while setting up a new book: an author who bills each area of work to its own OpenRouter key put `provider.openrouter.options.apiKey = "{file:<key file>}"` and `headers.X-Title` into three projects' `opencode.json` by hand. `_opencode_config` builds `opencode.json` from scratch and keeps neither field, so `init`, `runtime sync` and the three rewrites in the design and chorus paths drop them. All five of that author's book projects now carry no key line, and their calls fall back to the global default key. A fix in each `opencode.json` is lost on the next sync; the setting has to live in the project config.
 
-- [ ] Test: with `book-forge.yaml: "openrouter": {"api_key_file": "<path>", "app_name": "<name>"}`, `_opencode_config` writes `provider.openrouter.options.apiKey = "{file:<path>}"` and `headers.X-Title = <name>`; without the block, `opencode.json` is unchanged from today. Both survive `runtime sync` and every other rewrite site.
-- [ ] `_opencode_config` reads the block; `init` accepts `--openrouter-key-file` and `--openrouter-app-name` and writes them to the config. No default path: a project without the block behaves as today.
-- [ ] Validation: `api_key_file` must be a path, never a key value (refuse anything starting with `sk-`); the key file itself is never read, copied or logged by the engine.
-- [ ] Docs in `references/init.md` and the README.
-- [ ] Full suite; `install.sh --force`; `install.sh --check` OK.
-- [ ] Each of the author's book projects: add the block, run `runtime sync` while no run is open, commit; one call per project shows up under the right key and app name in OpenRouter's activity page.
+- [x] Test: with `book-forge.yaml: "openrouter": {"api_key_file": "<path>", "app_name": "<name>"}`, `_opencode_config` writes `provider.openrouter.options.apiKey = "{file:<path>}"` and `headers.X-Title = <name>`; without the block, `opencode.json` is unchanged from today. Both survive `runtime sync` and every other rewrite site.
+- [x] `_opencode_config` reads the block; `init` accepts `--openrouter-key-file` and `--openrouter-app-name` and writes them to the config. No default path: a project without the block behaves as today.
+- [x] Validation: `api_key_file` must be a path, never a key value (refuse anything starting with `sk-`); the key file itself is never read, copied or logged by the engine.
+- [x] Docs in `references/init.md` and the README.
+- [x] Full suite; `install.sh --force`; `install.sh --check` OK.
+- [x] Each of the author's book projects: add the block, run `runtime sync` while no run is open, commit; one call per project shows up under the right key and app name in OpenRouter's activity page.

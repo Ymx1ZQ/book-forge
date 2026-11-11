@@ -646,6 +646,34 @@ def _block_record(block: str) -> dict[str, str]:
     return {"block": block, "hash": hashlib.sha256(block.encode()).hexdigest()}
 
 
+def _openrouter_settings(config: dict[str, object] | None) -> dict[str, object]:
+    """The `openrouter` block of the project config, validated.
+
+    `api_key_file` is a path that OpenCode resolves itself (`{file:<path>}`); the
+    engine never opens it. A value that looks like a key is refused so a secret cannot
+    land in a file that gets committed.
+    """
+    block = (config or {}).get("openrouter")
+    if block is None:
+        return {}
+    if not isinstance(block, dict):
+        raise BookForgeError("book-forge.yaml `openrouter` must be an object")
+    out: dict[str, object] = {}
+    key_file = block.get("api_key_file")
+    if key_file is not None:
+        text = str(key_file).strip()
+        if not text or text.startswith("sk-") or text.startswith("{file:"):
+            raise BookForgeError("openrouter.api_key_file must be the path of a file that holds the key, not the key itself")
+        out["api_key_file"] = text
+    app_name = block.get("app_name")
+    if app_name is not None:
+        text = str(app_name).strip()
+        if not text or text.startswith("sk-"):
+            raise BookForgeError("openrouter.app_name must be a plain name")
+        out["app_name"] = text
+    return out
+
+
 def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, object] | None = None) -> dict[str, object]:
     """Build opencode.json from the models the project's config names, and no others.
 
@@ -698,15 +726,20 @@ def _opencode_config(chorus_models: list[str] | None = None, config: dict[str, o
         if "limit" in cfg:
             entry["limit"] = cfg["limit"]  # type: ignore[index]
         models_dict[model_id] = entry
+    openrouter: dict[str, object] = {"models": models_dict}
+    settings = _openrouter_settings(config)
+    provider_options: dict[str, object] = {}
+    if "api_key_file" in settings:
+        provider_options["apiKey"] = "{file:" + str(settings["api_key_file"]) + "}"
+    if "app_name" in settings:
+        provider_options["headers"] = {"X-Title": settings["app_name"]}
+    if provider_options:
+        openrouter["options"] = provider_options
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": MODEL,
         "small_model": MODEL,
-        "provider": {
-            "openrouter": {
-                "models": models_dict,
-            }
-        },
+        "provider": {"openrouter": openrouter},
     }
 
 
@@ -1340,7 +1373,7 @@ def _validate_existing(project: Path, title: str, source_language: str) -> dict[
     return {"created": False, "project": str(project)}
 
 
-def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool, chorus_models: list[str] | None = None, style_preset: str | None = None) -> None:
+def _build_project(stage: Path, title: str, source_language: str, initialize_git: bool, chorus_models: list[str] | None = None, style_preset: str | None = None, openrouter: dict[str, object] | None = None) -> None:
     _cm = list(chorus_models) if chorus_models is not None else list(CHORUS_DEFAULT_MODELS)
     _style = style_preset or DEFAULT_STYLE_PRESET
     config = {
@@ -1355,6 +1388,8 @@ def _build_project(stage: Path, title: str, source_language: str, initialize_git
         "chorus": {"enabled": True, "post_enabled": True, "models": _cm, "synthesizer": CHORUS_SYNTHESIZER},
         "style": {"preset": _style, "directives": []},
     }
+    if openrouter:
+        config["openrouter"] = dict(openrouter)
     _write_json(stage / "book-forge.yaml", config)
     _write_json(stage / "opencode.json", _opencode_config(_cm, config))
     _write_agents(stage, _cm, config)
@@ -1419,6 +1454,8 @@ def init_project(
     fault_hook=None,
     chorus_models: list[str] | None = None,
     style_preset: str | None = None,
+    openrouter_key_file: str | None = None,
+    openrouter_app_name: str | None = None,
 ) -> dict[str, object]:
     if chorus_models is None:
         chorus_models = _prompt_chorus_models()
@@ -1427,6 +1464,12 @@ def init_project(
     known = available_style_presets()
     if known and style_preset not in known:
         raise BookForgeError(f"Unknown style preset: {style_preset} (available: {', '.join(known)})")
+    openrouter: dict[str, object] = {}
+    if openrouter_key_file:
+        openrouter["api_key_file"] = openrouter_key_file
+    if openrouter_app_name:
+        openrouter["app_name"] = openrouter_app_name
+    _openrouter_settings({"openrouter": openrouter})
     target = Path(project).expanduser().resolve()
     language = _canonical_language(source_language)
     if target.exists() and any(target.iterdir()):
@@ -1436,7 +1479,7 @@ def init_project(
     stage = Path(tempfile.mkdtemp(prefix=f".{target.name}-book-forge-", dir=target.parent))
     target_was_empty = target.exists()
     try:
-        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent), chorus_models=chorus_models, style_preset=style_preset)
+        _build_project(stage, title, language, initialize_git=not _inside_git_repo(target.parent), chorus_models=chorus_models, style_preset=style_preset, openrouter=openrouter)
         if fault_hook is not None:
             fault_hook("before_promote")
         if target_was_empty:
@@ -16637,6 +16680,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--source-language", default="en")
     init.add_argument("--chorus-models", help="Comma-separated openrouter/... models; when omitted and TTY, prompts interactively")
     init.add_argument("--style", help="Prose style preset; when omitted and TTY, prompts interactively")
+    init.add_argument("--openrouter-key-file", help="Path of the file that holds this project's OpenRouter key (written as {file:<path>}; never read by the engine)")
+    init.add_argument("--openrouter-app-name", help="App name sent to OpenRouter as X-Title")
     reset = commands.add_parser("reset")
     reset.add_argument("--book", required=True)
     reset.add_argument("--scope", choices=("prose", "design", "translation"), default="prose")
@@ -16792,7 +16837,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init":
             title = args.title or args.project.name.replace("-", " ").title()
             cm = _parse_chorus_csv(args.chorus_models) if getattr(args, "chorus_models", None) is not None else None
-            print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm, style_preset=getattr(args, "style", None)), sort_keys=True))
+            print(json.dumps(init_project(args.project, title, args.source_language, chorus_models=cm, style_preset=getattr(args, "style", None), openrouter_key_file=args.openrouter_key_file, openrouter_app_name=args.openrouter_app_name), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "add":
             print(json.dumps(add_continuity(args.project, args.name, kind=args.kind, fork_from=args.fork_from, imports=args.imports), sort_keys=True))
         elif args.command == "continuity" and args.continuity_command == "ledger":

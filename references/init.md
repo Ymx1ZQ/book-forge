@@ -17,3 +17,13 @@ pipeline during setup.
 ## 00-BRIEF gate (default ON)
 
 After `init`, answer the 00-BRIEF 7 questions (see `brief.md`) before `design`. Default ON; bypass with `--skip-brief` or answer "usa default". The helper enforces the gate (`brief.py`).
+
+## Billing key and app name
+
+To bill a project's calls to a particular OpenRouter key, pass `--openrouter-key-file <path>` and optionally `--openrouter-app-name <name>` to `init`, or add the block to `book-forge.yaml` by hand:
+
+```json
+"openrouter": {"api_key_file": "<path>", "app_name": "<name>"}
+```
+
+`opencode.json` then carries `provider.openrouter.options.apiKey = "{file:<path>}"` and `headers.X-Title = "<name>"`. Every command that regenerates `opencode.json` (`runtime sync`, the design and chorus paths) writes both again. The engine never opens the key file; OpenCode does. A value that starts with `sk-` is refused: the field takes a path, never the key. Without the block nothing is written and OpenCode uses its global key.

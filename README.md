@@ -27,7 +27,7 @@ Create a project directory and initialize it:
 python3 <skill>/scripts/book_forge.py --project <dir> init --title "<title>"
 ```
 
-`init` writes the universe, the project config, and the OpenCode runtime files, and asks for the chorus models when run interactively. It creates no translation, no book, and no provider key. After `init`, answer the brief questions before designing; `--skip-brief` bypasses that gate.
+`init` writes the universe, the project config, and the OpenCode runtime files, and asks for the chorus models when run interactively. It creates no translation, no book, and no provider key. To bill the project to a specific OpenRouter key, add `--openrouter-key-file <path>` (and `--openrouter-app-name <name>`); the path is stored in `book-forge.yaml` and survives `runtime sync`. After `init`, answer the brief questions before designing; `--skip-brief` bypasses that gate.
 
 If you change the model pins or role configuration, regenerate the runtime surface:
 
