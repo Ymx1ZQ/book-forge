@@ -7208,6 +7208,32 @@ def _sweep_orphaned_canon(root: Path, proposal: dict[str, object]) -> list[str]:
 UNIVERSE_REPAIR_CATEGORIES = ("kernel", "eras", "events", "places", "factions", "characters")
 
 
+def _record_decisions(root: Path, path: str, round_number: int, value: dict[str, object], findings: list[dict[str, object]]) -> None:
+    """Append the choices a repair made, so the author reads them after the fact."""
+    raw = value.get("decisions")
+    if not isinstance(raw, list):
+        return
+    rows = []
+    for item in raw:
+        if isinstance(item, dict) and (item.get("choice") or item.get("decision")):
+            rows.append({
+                "round": round_number,
+                "finding": item.get("finding"),
+                "choice": str(item.get("choice") or item.get("decision")),
+                "rows": [str(v) for v in item.get("rows", [])] if isinstance(item.get("rows"), list) else [],
+            })
+        elif isinstance(item, str) and item.strip():
+            rows.append({"round": round_number, "finding": None, "choice": item.strip(), "rows": []})
+    if not rows:
+        return
+    target = root / path
+    stored = _read_json(target) if target.is_file() else {}
+    stored = stored if isinstance(stored, dict) else {}
+    stored["schema"] = 1
+    stored["decisions"] = [*stored.get("decisions", []), *rows]
+    _write_json(target, stored)
+
+
 def _repair_blocked_universe(root, proposal, audit, runner):
     """Rewrite the canon rows a blocking finding names, then audit again.
 
@@ -7245,7 +7271,7 @@ def _repair_blocked_universe(root, proposal, audit, runner):
                 "answer": (
                     "one JSON object keyed by category (kernel, eras, events, places, factions, characters), each a list of "
                     "the corrected rows with the SAME ids; to drop a row that duplicates another, list its id under "
-                    "\"remove\"; never add an id that was not sent"
+                    "\"remove\"; also list under \"decisions\" each choice you made ({finding, choice, rows}); never add an id that was not sent"
                 ),
             },
             "world": {
@@ -7298,6 +7324,7 @@ def _repair_blocked_universe(root, proposal, audit, runner):
                 continue
             break
         proposal = candidate
+        _record_decisions(root, "universe/design-decisions.json", round_number, value, findings)
         for path, content in _universe_design_outputs(proposal).items():
             _write_bytes_atomic(root / path, content.encode() if isinstance(content, str) else content)
         _sweep_orphaned_canon(root, proposal)
@@ -7861,6 +7888,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         spine = {key: value for key, value in proposal.items() if key != "chapters"}
         rewritten: dict[str, object] = {}
         advisors: list[dict[str, object]] = []
+        round_decisions: list[object] = []
         pending = _repair_slices(targets)
         while pending:
             chunk = pending.pop(0)
@@ -7937,6 +7965,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
                 }}] + pending
                 continue
             rewritten.update(rows)
+            round_decisions.extend(value.get("decisions", []) if isinstance(value.get("decisions"), list) else [])
         # The repair runs outside the DAG, like a chorus round: its own attempt is
         # already promoted, so its cost is recorded beside it and folded into the
         # report rather than being lost.
@@ -7949,6 +7978,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
         if blocking_findings:
             raise BookForgeError(f"Repaired design has blocking findings: {json.dumps(blocking_findings, sort_keys=True)}")
         _write_book_design_outputs(root, book_id, proposal)
+        _record_decisions(root, f"books/{book_id}/design-decisions.json", round_number, {"decisions": round_decisions}, findings)
         # The proposal changed, so the audit that judged the old one is stale and the
         # task is genuinely due again — and what it was told is stale with it, or the
         # remembered verdict would answer a question the repair has just moved.

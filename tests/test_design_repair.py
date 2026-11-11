@@ -75,7 +75,10 @@ class RepairProvider:
         if chunk.get("category") == "repair":
             self.repair_capsules.append(task)
             ids = [int(str(value)[3:]) for value in task["repair"]["rewrite_only"]]
-            return self._ok(envelope, {"chapters": [self._chapter(i, "the drowned girl") for i in ids]}, role)
+            return self._ok(envelope, {
+                "chapters": [self._chapter(i, "the drowned girl") for i in ids],
+                "decisions": [{"finding": "F-001", "choice": "The grave is the drowned girl's.", "rows": [f"CH-{i:04d}" for i in ids]}],
+            }, role)
         first, last = int(chunk["first_order"]), int(chunk["last_order"])
         return self._ok(envelope, {"chapters": [self._chapter(i) for i in range(first, last + 1)]}, role)
 
@@ -235,6 +238,12 @@ class BlockedRecordTests(unittest.TestCase):
         result = self.run_design(second)
         self.assertEqual(result["state"], "design_clean")
         self.assertGreater(second.calls.count("canon-auditor"), 0)
+
+    def test_the_choices_a_repair_made_are_recorded_for_the_author(self):
+        self.run_design(RepairProvider(self.bf))
+        stored = json.loads((self.project / f"books/{self.book}/design-decisions.json").read_text())
+        self.assertEqual(stored["decisions"][0]["choice"], "The grave is the drowned girl's.")
+        self.assertEqual(stored["decisions"][0]["round"], 1)
 
     def test_a_clean_verdict_still_costs_nothing_to_re_run(self):
         self.run_design(RepairProvider(self.bf, audits=[[]]))

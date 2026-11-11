@@ -6661,7 +6661,7 @@ Seen on a book in progress (2026-11-11): the driving agent stopped after a block
 
 - [x] Repair capsules (book and universe) carry `repair.decide`; the designer prompt says to choose the option that best fits the brief and the canon, apply it in every row involved and never defer.
 - [x] `SKILL.md` "Decide, do not ask": re-run the repair commands; ask the author only for secrets, payments, publication or a change to the brief; report the decisions afterwards.
-- [ ] Record each decision made by a repair so the author can read it (`design-decisions.json`).
+- [x] A repair answers `decisions` ({finding, choice, rows}); they are appended to `books/<id>/design-decisions.json` or `universe/design-decisions.json` with the round (`_record_decisions`).
 
 
 ### M98 — A project's OpenRouter key file and app name survive `runtime sync` (proposed)

@@ -122,6 +122,14 @@ class UniverseRepairTests(unittest.TestCase):
         self.assertIn("ERA-0002", body)
         self.assertEqual(sorted(row["id"] for row in capsule["task_capsule"]["rows_to_rewrite"]), sorted(["EVT-0001", "CHR-0002"]))
 
+    def test_the_choices_a_repair_made_are_written_to_design_decisions(self):
+        text = json.dumps({"events": [{"id": "EVT-0001", "era": "ERA-0002", "order": 1, "summary": "ok"}],
+                           "decisions": [{"finding": "F-1", "choice": "The event belongs to the later era.", "rows": ["EVT-0001"]}]})
+        self.bf._repair_blocked_universe(self.root, self.proposal, self.blocked(), self.runner(text))
+        stored = json.loads((self.root / "universe" / "design-decisions.json").read_text())
+        self.assertEqual(stored["decisions"][0]["choice"], "The event belongs to the later era.")
+        self.assertEqual(stored["decisions"][0]["rows"], ["EVT-0001"])
+
     def test_a_clean_audit_makes_no_call(self):
         proposal, audit = self.bf._repair_blocked_universe(self.root, self.proposal, {"state": "design_clean", "findings": []}, self.runner("{}"))
         self.assertEqual(self.asked, [])
