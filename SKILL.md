@@ -106,3 +106,7 @@ book-forge humanize --book <id> [--chapter <ch>]
 - Preserve staged and orphaned output until promotion or explicit safe cleanup.
 - Keep source prose authoritative and mark derived translations or publications stale after relevant changes.
 - Require zero open blocking findings, current state, and a valid receipt before closing a chapter.
+
+## Decide, do not ask
+
+When an audit or the ledger blocks on a choice the brief leaves open, the skill decides: `design` repairs by itself and `continuity repair` edits by itself. Do not stop to ask the author for it. Re-run the command (`design book`, `design universe`, `continuity repair`); each run resumes from what is already paid for. Ask the author only for what no canon can settle: a secret, a payment, a publication, or a change to the brief itself. Report what was decided after the fact.

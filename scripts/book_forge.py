@@ -7241,6 +7241,7 @@ def _repair_blocked_universe(root, proposal, audit, runner):
                 "reason": "the independent canon audit found blocking contradictions",
                 "findings": [row for row in findings if set(str(v) for v in row.get("repair_scope", [])) & set(scope)],
                 "rewrite_only": scope,
+                "decide": REPAIR_DECIDES,
                 "answer": (
                     "one JSON object keyed by category (kernel, eras, events, places, factions, characters), each a list of "
                     "the corrected rows with the SAME ids; to drop a row that duplicates another, list its id under "
@@ -7758,6 +7759,13 @@ def _audit_proposal(proposal: dict[str, object]) -> dict[str, object]:
 
 MAX_DESIGN_REPAIR_ROUNDS = 2
 UNIVERSE_REPAIR_VALIDATION_ATTEMPTS = 2
+# A finding often turns on a choice the brief leaves open (which of two orders, who owns a
+# clause, what sets a consequence off). The designer makes it; the repair never waits for
+# the author, who reads the result rather than being asked for it.
+REPAIR_DECIDES = (
+    "when a finding turns on a choice the brief does not settle, choose the option that best serves the brief "
+    "and the rest of the canon, apply it in every row involved, and do not leave it open or ask"
+)
 # A universe is one document the whole book rests on: a real one cleared 6 findings in two
 # rounds and had one blocking left, so it gets a third.
 UNIVERSE_REPAIR_ROUNDS = 3
@@ -7863,6 +7871,7 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
                 "reason": "the independent canon audit found blocking contradictions",
                 "findings": slice_findings,
                 "rewrite_only": ids,
+                "decide": REPAIR_DECIDES,
             }
             if chunk.get("correction"):
                 repair_capsule["correction"] = chunk["correction"]

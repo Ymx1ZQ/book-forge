@@ -6654,3 +6654,12 @@ serialize them. M51 gates production; Phase 157 owns the
 artistic decision and author pilot verdict. None of these milestones authorizes
 deleting the legacy project, copying secrets/runtime journals, rewriting Landfall,
 porting the legacy tournament/graph system, or automatic publication/push.
+
+### M97 — The skill decides open choices itself instead of asking the author ✅
+
+Seen on a book in progress (2026-11-11): the driving agent stopped after a blocked audit and asked the author for four choices (order of two dates, owner of a clause, what triggers a retaliation), saying they were the author's to make. The audit's findings only need one consistent option.
+
+- [x] Repair capsules (book and universe) carry `repair.decide`; the designer prompt says to choose the option that best fits the brief and the canon, apply it in every row involved and never defer.
+- [x] `SKILL.md` "Decide, do not ask": re-run the repair commands; ask the author only for secrets, payments, publication or a change to the brief; report the decisions afterwards.
+- [ ] Record each decision made by a repair so the author can read it (`design-decisions.json`).
+
