@@ -6685,3 +6685,11 @@ A designed book has no command that merges, drops or inserts chapters. Changing 
 - [x] The design audit reopens, so `design book` audits and repairs the new structure.
 - [x] An audit repair on a book with written chapters reads `reader-state.md` as live state and leaves it untouched (it blocked with `book.arc-incomplete` and would have overwritten the file with empty entry and exit).
 - [x] Docs in `references/design.md` and `SKILL.md`; full suite; `install.sh --force`; `install.sh --check` OK.
+
+### M100 — The design audit says what it is doing and notices a hand edit to a contract 📋
+
+Measured on Finders Keepers, 2026-11-12: (1) an audit with an alive process wrote nothing for long stretches, so a stalled call and a slow one look the same; (2) after six contracts were edited by hand and `sync-outline` ran, `design book` answered `design_clean` from the stored verdict with 0 calls, so the edit was never audited; the audit only ran again after the task was reopened by hand.
+
+- [ ] Test: while the audit waits on a call, a line with the window name and the seconds waited is printed at a fixed interval; a call over a limit is reported as stalled, naming the window.
+- [ ] Test: `design book` compares the hash of each contract with the one the stored verdict was written under, and reopens `AUDIT-<book>` when one differs; `design sync-outline` does the same.
+- [ ] Docs in `references/design.md`; full suite; `install.sh --force`; `install.sh --check` OK.
