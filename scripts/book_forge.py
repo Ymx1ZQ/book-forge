@@ -9,6 +9,7 @@ import io
 import contextlib
 import difflib
 import inspect
+import copy
 import json
 import os
 import re
@@ -5928,6 +5929,179 @@ _OUTLINE_SYNCED_FIELDS = (
 _OUTLINE_REMOVABLE_FIELDS = frozenset({"want", "obstacle", "turn", "chapter_kind", "exempt_reason"})
 
 
+def _written_chapter_ids(root: Path, book_id: str) -> set[str]:
+    """Chapters a reshape must not move: closed ones and any with a draft or manuscript."""
+    book_root = root / "books" / book_id
+    written: set[str] = set()
+    state_path = book_root / "state.yaml"
+    if state_path.is_file():
+        written.update(str(value) for value in _read_json(state_path).get("closed_chapters", []))
+    for pattern in ("manuscript/**/CH-*", "work/CH-*/draft.md"):
+        for path in book_root.glob(pattern):
+            match = re.search(r"CH-\d{4}", str(path.relative_to(book_root)))
+            if match:
+                written.add(match.group(0))
+    return written
+
+
+def _write_reshaped_outputs(
+    root: Path,
+    book_id: str,
+    proposal: dict[str, object],
+    source_of: dict[str, str],
+    old_contracts: dict[str, dict[str, object]],
+    set_of: dict[str, dict[str, object]],
+) -> None:
+    """Write what a reshape changed and leave every other byte of the design alone.
+
+    A contract that did not change is not rewritten: its formatting, and any field the
+    outline never carried (a `tags` list), stay as they were. A contract that moved or
+    changed keeps the fields of the one it came from.
+    """
+    book_root = root / "books" / book_id
+    outputs = _book_design_outputs(root, book_id, proposal)
+    for path, value in outputs.items():
+        target = root / path
+        name = Path(path).name
+        if name == "reader-state.md" or (name == "design.md" and not _withheld_rows(proposal)):
+            continue
+        if name == "outline.yaml":
+            text_before = target.read_text(encoding="utf-8") if target.is_file() else ""
+            ensure_ascii, sort_keys, newline = _outline_json_style(text_before, json.loads(text_before)) if text_before else (False, True, "\n")
+            payload = json.dumps(json.loads(value), indent=2, ensure_ascii=ensure_ascii, sort_keys=sort_keys) + newline
+            _write_bytes_atomic(target, payload.encode())
+        elif re.fullmatch(r"CH-\d{4}\.json", name):
+            generated = json.loads(value)
+            chapter_id = str(generated["id"])
+            source = source_of.get(chapter_id)
+            if source is None:
+                contract = generated
+            elif source == chapter_id and not set_of.get(chapter_id):
+                # In place and untouched, except that a chapter before a reveal that moved
+                # carries the reveal's new id in its withheld list.
+                if old_contracts[source].get("withheld") == generated.get("withheld"):
+                    continue
+                contract = copy.deepcopy(old_contracts[source])
+                if "withheld" in generated:
+                    contract["withheld"] = generated["withheld"]
+                else:
+                    contract.pop("withheld", None)
+            else:
+                # The contract on disk is the base, not the outline row: the two have
+                # drifted (a `tags` list, a `pivotal` marker) and the contract is what the
+                # writer reads. Only the id, the order and the fields the plan set change.
+                contract = copy.deepcopy(old_contracts[source])
+                contract["id"] = chapter_id
+                contract["order"] = generated["order"]
+                for key in set_of.get(chapter_id, {}):
+                    contract[key] = generated[key]
+                if "withheld" in generated:
+                    contract["withheld"] = generated["withheld"]
+                else:
+                    contract.pop("withheld", None)
+            if target.is_file() and _read_json(target) == contract:
+                continue
+            _write_bytes_atomic(target, (json.dumps(contract, indent=2, ensure_ascii=False) + "\n").encode())
+        else:
+            if target.is_file() and name.endswith(".yaml") and _read_json(target) == json.loads(value):
+                continue
+            _write_bytes_atomic(target, value.encode() if isinstance(value, str) else value)
+
+
+def reshape_book_design(project: Path | str, book_id: str, plan: dict[str, object]) -> dict[str, object]:
+    """Merge, drop, insert and renumber the chapters of a designed book.
+
+    `plan["chapters"]` is the new book, in order. An entry is `{"from": "CH-0023"}`,
+    optionally with `set` (fields that replace the old ones) and `absorbs` (ids of
+    dropped chapters whose place in the withheld list this chapter takes over), or
+    `{"new": {...}}` for a chapter that did not exist. Chapters already written keep
+    their id and position and take no `set`.
+    """
+    root = _project_root(project)
+    proposal = _book_proposal_from_artifacts(root, book_id)
+    old = {str(row["id"]): row for row in proposal["chapters"]}
+    entries = plan.get("chapters")
+    if not isinstance(entries, list) or not entries:
+        raise BookForgeError("reshape plan needs a non-empty `chapters` list")
+    written = _written_chapter_ids(root, book_id)
+    new_rows: list[dict[str, object]] = []
+    remap: dict[str, str] = {}
+    source_of: dict[str, str] = {}
+    set_of: dict[str, dict[str, object]] = {}
+    used: set[str] = set()
+    old_contracts = {
+        path.stem: _read_json(path)
+        for path in (root / "books" / book_id / "chapters").glob("CH-*.json")
+    }
+    for index, entry in enumerate(entries, start=1):
+        new_id = f"CH-{index:04d}"
+        if not isinstance(entry, dict) or ("from" in entry) == ("new" in entry):
+            raise BookForgeError(f"reshape entry {index} must hold exactly one of `from` or `new`")
+        if "from" in entry:
+            source = str(entry["from"])
+            if source not in old:
+                raise BookForgeError(f"reshape entry {index} names {source}, which the design does not have")
+            if source in used:
+                raise BookForgeError(f"reshape names {source} twice")
+            used.add(source)
+            row = copy.deepcopy(old[source])
+            row.update(entry.get("set") or {})
+            remap[source] = new_id
+            source_of[new_id] = source
+            set_of[new_id] = dict(entry.get("set") or {})
+            for dropped in entry.get("absorbs") or []:
+                remap[str(dropped)] = new_id
+            if source in written and (source != new_id or entry.get("set")):
+                raise BookForgeError(f"{source} is already written and keeps its place and its contract")
+        else:
+            row = copy.deepcopy(entry["new"])
+            if not isinstance(row, dict):
+                raise BookForgeError(f"reshape entry {index}: `new` must be an object")
+        if new_id in written and "from" not in entry:
+            raise BookForgeError(f"{new_id} is already written and cannot be replaced")
+        row["id"] = new_id
+        row["order"] = index
+        new_rows.append(row)
+    for chapter_id in written:
+        if chapter_id in old and chapter_id not in used:
+            raise BookForgeError(f"{chapter_id} is already written and cannot be dropped")
+    withheld = proposal.get("withheld") or []
+    for item in withheld:
+        target = str(item.get("revealed_in") or "")
+        if not target:
+            continue
+        if target not in remap:
+            raise BookForgeError(f"withheld row reveals in {target}, which the reshape drops and no chapter absorbs")
+        item["revealed_in"] = remap[target]
+    proposal["chapters"] = new_rows
+    proposal["withheld"] = withheld
+    # Once chapters are written `reader-state.md` holds the reader's current state, not
+    # the designed entry and exit. A reshape does not own that file: it checks the design
+    # without them and puts the file back as it found it.
+    reader_path = root / "books" / book_id / "reader-state.md"
+    reader_before = reader_path.read_text(encoding="utf-8") if reader_path.is_file() else None
+    live_state = reader_before is not None and "Entry: {" not in reader_before
+    if live_state:
+        proposal["entry_state"] = proposal["entry_state"] or {"kept": "reader-state.md"}
+        proposal["exit_boundary"] = proposal["exit_boundary"] or {"kept": "reader-state.md"}
+    findings = validate_book_design(root, book_id, proposal)
+    blocking = [finding for finding in findings if finding["severity"] == "blocking"]
+    if blocking:
+        raise BookForgeError(f"Reshaped design has blocking findings: {json.dumps(blocking, sort_keys=True)}")
+    _write_reshaped_outputs(root, book_id, proposal, source_of, old_contracts, set_of)
+    kept = {f"{row['id']}.json" for row in new_rows}
+    removed = []
+    for path in sorted((root / "books" / book_id / "chapters").glob("CH-*.json")):
+        if path.name not in kept:
+            path.unlink()
+            removed.append(path.stem)
+    rebuild_indexes(root)
+    task_id = f"AUDIT-{book_id}"
+    if any(task["id"] == task_id for task in _load_plan(root)["tasks"]):
+        _reopen_task(root, task_id)
+    return {"book": book_id, "chapters": len(new_rows), "removed": removed, "remap": remap}
+
+
 def design_sync_outline(project: Path | str, book_id: str) -> dict[str, object]:
     """Refresh a book's outline rows from its chapter contracts, with no model.
 
@@ -6041,6 +6215,13 @@ def _design_artifact_path(root: Path, scope: dict[str, object]) -> Path:
     return root / "universe" / "design.json"
 
 
+def _reader_state_is_live(root: Path, book_id: str) -> bool:
+    """Once chapters are written `reader-state.md` holds the reader's current state,
+    not the designed entry and exit: a design pass reads around it and never rewrites it."""
+    path = root / "books" / book_id / "reader-state.md"
+    return path.is_file() and "Entry: {" not in path.read_text(encoding="utf-8") and path.read_text(encoding="utf-8").strip() != "# Reader State"
+
+
 def _book_proposal_from_artifacts(root: Path, book_id: str) -> dict[str, object]:
     book_root = root / "books" / book_id
     design_text = (book_root / "design.md").read_text(encoding="utf-8")
@@ -6051,14 +6232,15 @@ def _book_proposal_from_artifacts(root: Path, book_id: str) -> dict[str, object]
     reader = (book_root / "reader-state.md").read_text(encoding="utf-8")
     entry_match = re.search(r"^Entry: (\{.*\})$", reader, re.MULTILINE)
     exit_match = re.search(r"^Intended exit: (\{.*\})$", reader, re.MULTILINE)
+    live = _reader_state_is_live(root, book_id)
     premise_match = re.search(r"<!--\s*bf:block\s+premise\s*-->([\s\S]*?)(?=\n##\s|<!--)", design_text)
     withheld_match = re.search(r"^## Withheld\s*\n+(\[.*\])\s*$", design_text, re.MULTILINE)
     return {
         "premise": premise_match.group(1).strip() if premise_match else "",
         "withheld": json.loads(withheld_match.group(1)) if withheld_match else [],
-        "entry_state": json.loads(entry_match.group(1)) if entry_match else {},
+        "entry_state": json.loads(entry_match.group(1)) if entry_match else ({"kept": "reader-state.md"} if live else {}),
         "arc": json.loads(arc_match.group(1)),
-        "exit_boundary": json.loads(exit_match.group(1)) if exit_match else {},
+        "exit_boundary": json.loads(exit_match.group(1)) if exit_match else ({"kept": "reader-state.md"} if live else {}),
         "chapters": outline.get("chapters", []),
     }
 
@@ -8007,6 +8189,30 @@ def _repair_blocked_design(root, book_id, proposal, audit, base_capsule, imports
                     "instead": "exchange what the chapters contain, so the earlier chapter carries the earlier event and both keep their number",
                 }}] + pending
                 continue
+            long_beats = sorted(
+                f"{key} has a beat of {len(str(beat))} characters"
+                for key, row in rows.items() if isinstance(row.get("beats"), list)
+                for beat in row["beats"] if len(str(beat)) > _MAX_BEAT_CHARACTERS
+            )
+            if long_beats:
+                if chunk.get("correction"):
+                    raise BookForgeError(f"Design repair for {slug} returned over-long beats twice: {'; '.join(long_beats)}")
+                print(f"[designer] repair {slug} returned over-long beats; asking again", file=sys.stderr)
+                pending = [{**chunk, "correction": {
+                    "problem": long_beats,
+                    "rule": f"a beat stays under {_MAX_BEAT_CHARACTERS} characters",
+                    "instead": "split the long beat into two shorter beats, or cut it to the action the writer must stage",
+                }}] + pending
+                continue
+            # An import the universe has no block for is a designer slip, not a design
+            # decision: drop it here and say so, instead of failing the whole round.
+            known = set(rebuild_indexes(root)["blocks"])
+            for key, row in rows.items():
+                if isinstance(row.get("imports"), list):
+                    gone = [value for value in row["imports"] if isinstance(value, str) and value not in known]
+                    if gone:
+                        row["imports"] = [value for value in row["imports"] if value not in gone]
+                        print(f"[designer] repair dropped unknown imports from {key}: {', '.join(gone)}", file=sys.stderr)
             rewritten.update(rows)
             round_decisions.extend(value.get("decisions", []) if isinstance(value.get("decisions"), list) else [])
         # The repair runs outside the DAG, like a chorus round: its own attempt is
@@ -8064,7 +8270,10 @@ def _reopen_task(root: Path, task_id: str) -> None:
 
 def _write_book_design_outputs(root: Path, book_id: str, proposal: dict[str, object]) -> None:
     """Rewrite the promoted design artifacts after a repair round."""
+    live = _reader_state_is_live(root, book_id)
     for path, value in _book_design_outputs(root, book_id, proposal).items():
+        if live and path.endswith("/reader-state.md"):
+            continue
         _write_bytes_atomic(root / path, value.encode() if isinstance(value, str) else value)
     rebuild_indexes(root)
 
@@ -16762,7 +16971,8 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--locale")
     status.add_argument("--repair-view", action="store_true")
     design = commands.add_parser("design")
-    design.add_argument("scope", choices=("universe", "book", "sync-outline"))
+    design.add_argument("scope", choices=("universe", "book", "sync-outline", "reshape"))
+    design.add_argument("--plan", type=Path, help="reshape: JSON file with the new ordered chapter list")
     design.add_argument("--book")
     design.add_argument("--brief", help="JSON string creating books/<book>/book-brief.json")
     design.add_argument("--no-chorus", action="store_true", help="Skip the default chorus ensemble")
@@ -16895,6 +17105,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.repair_view:
                 repair_plan_view(args.project)
             print(json.dumps(status_project(args.project, book_id=args.book, run_id=args.run, locale=args.locale), sort_keys=True))
+        elif args.command == "design" and args.scope == "reshape":
+            if not args.book or not args.plan:
+                raise BookForgeError("design reshape requires --book and --plan")
+            print(json.dumps(reshape_book_design(args.project, args.book, _read_json(args.plan)), sort_keys=True))
         elif args.command == "design" and args.scope == "sync-outline":
             if not args.book:
                 raise BookForgeError("design sync-outline requires --book")

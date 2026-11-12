@@ -79,6 +79,7 @@ book-forge add-book <title> [--continuity <id>]
 book-forge relate <book...> --type <type> [--import <block>...] [--obligation <text>...]
 book-forge collection <add|remove|order> ...
 book-forge design <universe|book> [--book <id>] [--brief '<json>'] [--skip-brief] [--no-chorus] [--no-post-chorus] [--chorus-models <csv> [--with-chorus-context]]  # runs pre-chorus + post-chorus (default-on) with per-chapter verification
+book-forge design reshape --book <id> --plan <file>  # merge, drop or insert chapters of a designed book; written chapters stay untouched (see references/design.md)
 book-forge brief <universe|book> [--book <id>] [--skip-brief]
 book-forge run [--book <id>] [--task <id>] [--next]
 book-forge advance --book <id> [--locale <tag>]... [--until <design|chapters|translate|export>]  # drives the book to completion, recovering between steps

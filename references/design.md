@@ -9,6 +9,7 @@ Use this route only for `design`.
   causal arc, entry/exit state, chapter contracts, relation imports, and exact
   obligation targets.
 - `design sync-outline --book BOOK-ID` copies each contract's `beats`, `want`, `obstacle`, `turn`, `chapter_kind`, `exempt_reason`, `plants` and `obligations` into the matching `outline.yaml` row, keeps the file's JSON formatting, creates no task or receipt, and reports how many fields changed.
+- `design reshape --book BOOK-ID --plan <file>` changes the chapter count of a designed book without redesigning it. The plan is `{"chapters": [...]}`, in the new reading order. An entry is `{"from": "CH-0023"}` to keep a chapter (optionally with `set` fields to change in its contract and `absorbs: [ids]` to take over what dropped chapters carried), or `{"new": {...}}` for a chapter inserted. Ids and `order` are renumbered, `outline.yaml`, the contracts, `design.md` and `withheld[].revealed_in` follow, and contract files past the new end are removed. A chapter that is closed or already drafted keeps its id and position and takes no `set`: the plan is refused, naming it. A withheld reveal that points at a dropped chapter nobody absorbs is refused. `reader-state.md` is left as it is. The design audit reopens, so run `design book` afterwards. When a book alternates point of view, insert chapters in pairs.
 - Run the helper once. It constructs bounded context, invokes the pinned
   OpenCode agents, validates their JSON contracts, and promotes outputs.
 - If validation or the independent audit blocks, report the evidence and stop.

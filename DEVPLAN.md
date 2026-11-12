@@ -6674,3 +6674,14 @@ Found on 2026-11-11 while setting up a new book: an author who bills each area o
 - [x] Docs in `references/init.md` and the README.
 - [x] Full suite; `install.sh --force`; `install.sh --check` OK.
 - [x] Each of the author's book projects: add the block, run `runtime sync` while no run is open, commit; one call per project shows up under the right key and app name in OpenRouter's activity page.
+
+### M99 — `design reshape` changes the chapter count of a designed book without redesigning it ✅
+
+A designed book has no command that merges, drops or inserts chapters. Changing the length means a fresh `design book`, which rewrites every contract, including those of chapters already written. A book whose first chapters are on the page and whose later contracts overlap needs a structural edit that leaves the written chapters alone.
+
+- [x] Test: `design reshape --book B --plan <file>` takes an ordered list of entries (`{"from": "CH-0023"}`, optionally with `set` fields and `absorbs`, or `{"new": {...}}`), renumbers `id` and `order`, rewrites `outline.yaml`, the contracts, `continuity.yaml`, `design.md` and removes the contract files of ids past the new end.
+- [x] A chapter that is closed or has a draft must keep its id and position and takes no `set`; the plan is refused otherwise, naming the chapter.
+- [x] `withheld[].revealed_in` follows the renumbering, through `absorbs` when the chapter it named was dropped; a reference to a dropped chapter nobody absorbs is refused.
+- [x] The design audit reopens, so `design book` audits and repairs the new structure.
+- [x] An audit repair on a book with written chapters reads `reader-state.md` as live state and leaves it untouched (it blocked with `book.arc-incomplete` and would have overwritten the file with empty entry and exit).
+- [x] Docs in `references/design.md` and `SKILL.md`; full suite; `install.sh --force`; `install.sh --check` OK.
