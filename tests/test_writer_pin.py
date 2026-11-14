@@ -240,28 +240,30 @@ class TheSameChapterAskedOfSeveralModelsTests(WriterPinFixture):
         self.assertIn("Book Forge writer role", (agents / f"writer-{self.bf._chorus_slug(GLM)}.md").read_text())
 
 
-class TheReviserFollowsTheWriterTests(WriterPinFixture):
-    """The bake-off chose landfall's writer by reading three drafts of CH-0001. The
-    reviser writes prose too — it applies the cold reader's and the technical
-    editor's findings sentence by sentence — and it was never pinned, so the book
-    was written on `glm-5.3-flash` at `high` and repaired on the project default at
-    `low`: two hands on the same paragraph."""
+class EveryRoleKeepsItsOwnPinTests(WriterPinFixture):
+    """Each role is pinned on its own, model and effort. The reviser once took an
+    overridden writer's whole pin, so a writer at `low` dropped the reviser from
+    the `medium` its repairs were measured to need."""
 
-    def test_a_project_that_pins_only_the_writer_gets_that_hand_for_both(self):
+    def test_a_project_that_pins_only_the_writer_leaves_the_reviser_on_its_own_pin(self):
         config = {"roles": {"writer": {"model": GLM, "variant": "high"}}}
-        self.assertEqual(self.bf._role_pin(config, "reviser"), self.bf._role_pin(config, "writer"))
-        self.assertEqual(self.bf._role_pin(config, "reviser"), (GLM, "high"))
+        self.assertEqual(self.bf._role_pin(config, "writer"), (GLM, "high"))
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (MODEL, self.bf.ROLE_SPECS["reviser"][1]))
 
-    def test_a_project_that_pins_both_keeps_them_apart(self):
-        config = {"roles": {"writer": {"model": GLM, "variant": "high"}, "reviser": {"variant": "low"}}}
-        self.assertEqual(self.bf._role_pin(config, "reviser"), (MODEL, "low"), "saying so is how you get two hands")
+    def test_a_writer_at_low_does_not_lower_the_reviser(self):
+        config = {"roles": {"writer": {"model": GLM, "variant": "low"}}}
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (MODEL, "medium"))
+
+    def test_the_reviser_moves_only_when_it_is_named(self):
+        config = {"roles": {"writer": {"model": GLM, "variant": "high"}, "reviser": {"model": GLM, "variant": "medium"}}}
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (GLM, "medium"))
 
     def test_a_project_that_pins_neither_is_unchanged(self):
         self.assertEqual(self.bf._role_pin({}, "reviser"), (MODEL, self.bf.ROLE_SPECS["reviser"][1]))
 
     def test_pinning_the_writer_does_not_move_any_other_role(self):
         config = {"roles": {"writer": {"model": GLM, "variant": "high"}}}
-        for role in ("cold-reader", "technical-editor", "canon-auditor", "judge"):
+        for role in ("reviser", "cold-reader", "technical-editor", "canon-auditor", "judge"):
             self.assertEqual(self.bf._role_pin(config, role), (MODEL, self.bf.ROLE_SPECS[role][1]))
 
 

@@ -356,16 +356,9 @@ def _role_pin(config: dict[str, object] | None, role: str) -> tuple[str, str]:
         return _translation_critic_pin(config, _role_pin(config, "translator")[0])
     model, variant = (SEQUENCE_CHECKER_MODEL if role == "sequence-checker" else MODEL), ROLE_SPECS[role][1]
     override = _role_overrides(config).get(role)
-    if role == "reviser" and not override:
-        # The reviser writes prose: it applies the cold reader's and the technical
-        # editor's findings to a chapter, sentence by sentence. Choosing a writer by
-        # reading three drafts of a chapter and then leaving the repairs to the
-        # project default is two hands on the same paragraph — landfall wrote on
-        # `glm-5.3-flash` at `high` and repaired on `deepseek-v4-flash-0731` at
-        # `low`. A project that wants two hands still gets them, by saying so.
-        writer = _role_overrides(config).get("writer")
-        if writer:
-            return _role_pin(config, "writer")
+    # Each role is pinned on its own, model and effort; no role inherits either from
+    # another. The reviser once followed an overridden writer's whole pin, and with
+    # the writer at `low` it lost the `medium` its repairs were measured to need.
     if not override:
         return model, variant
     requested_model = str(override.get("model") or "").strip()

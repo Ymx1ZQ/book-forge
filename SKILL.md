@@ -54,6 +54,8 @@ never bypass a block by editing canonical files.
   synthesizer is `chorus.synthesizer` (default `openrouter/google/gemini-3.8-flash` on `high`); `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
   The sequence-checker, which reads every chapter after the reviser and before promotion, is pinned to
   `openrouter/google/gemini-4-hydrogen` on `high`; `roles.sequence-checker` in `book-forge.yaml` overrides it.
+  Each role is pinned on its own, model and effort: `roles.<role>` moves that role only, so a new writer
+  leaves the reviser on its own pin until `roles.reviser` names it too.
   `opencode.json` and `.opencode/agents/` hold only the models the project's config names (chorus, role pins,
   rewriter chain, style reviewers and their tag rules, synthesizer).
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.

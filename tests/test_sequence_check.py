@@ -257,10 +257,10 @@ class PinTests(unittest.TestCase):
             fallback = self.bf._role_fallback(project, "sequence-checker")
             self.assertEqual((fallback["model"], fallback["variant"], fallback["from"]), (FLASH, "high", HYDROGEN))
 
-    def test_the_reviser_runs_at_medium_and_still_follows_the_writer(self):
+    def test_the_reviser_runs_at_medium_whatever_the_writer(self):
         self.assertEqual(self.bf._role_pin({}, "reviser"), (MODEL, "medium"))
-        config = {"roles": {"writer": {"model": "openrouter/z-ai/glm-5.3-flash", "variant": "high"}}}
-        self.assertEqual(self.bf._role_pin(config, "reviser"), ("openrouter/z-ai/glm-5.3-flash", "high"))
+        config = {"roles": {"writer": {"model": "openrouter/z-ai/glm-5.3-flash", "variant": "low"}}}
+        self.assertEqual(self.bf._role_pin(config, "reviser"), (MODEL, "medium"))
 
     def test_the_reviser_at_medium_has_the_reasoning_room_of_the_other_roles_at_medium(self):
         self.assertEqual(self.bf.REASONING_ROOM["reviser"], self.bf.REASONING_ROOM["continuity-reviser"])
