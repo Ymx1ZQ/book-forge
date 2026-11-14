@@ -6759,6 +6759,21 @@ Measured on a book in progress, 2026-11-13: a human editor's notes on chapter on
   - it contradicts no other sentence;
   - it drops nothing a later sentence needs.
   On the bench, 7 of 56 reader-lens edits were bad: two invented a residence, two left the defect in place, one removed a label a later scene relies on, one changed a detail no finding asked for, one read awkwardly.
-- [ ] Writer: effort `low` → `medium` only if the bench shows the draft loses defects for it.
+- [ ] Writer: effort `low` → `medium` only if the bench shows the draft loses defects for it. Moved to M102, bench B.
 - [x] Docs in `references/run.md` and `SKILL.md`; full suite; `install.sh --force`; `install.sh --check` OK.
 - [ ] The book's project: style directive on time jumps (a jump opens after a scene break and states its date once); the editor's chapter is repaired through the new path and re-exported.
+  Repair measured 2026-11-14 with `revise --sequence` on the editor's chapter: 29 edits in three rounds, none left open, none graded bad; of the editor's 25, 13 fixed, 3 partly fixed, 9 still there. The 12 left wait for the author's decision, then the chapter is re-exported.
+
+### M102 — A chapter is drafted from a scene plan, and the check reads with a second model 🔄
+
+Measured 2026-11-14 on the editor's chapter of M101: 22 of the 25 defects were born in the draft. The writer receives a contract whose beats are one sentence per scene (four beats for 2,400 words) and decides every concrete fact in one call: dates, who is where, the objects in the room, what each character knows, where the narrator lives. After the sequence check 12 remain, of five kinds: a fact against the real world (how far drums carry, a cultural stereotype, an academic calendar, ten days of mail for ninety minutes of road); two statements far apart that disagree; repetition spread over paragraphs or across forms of one word; a finding fixed only in part; a time jump with no scene break. In the bench reads, a single Opus read found 7 of these 12, the Hydrogen reads few of them, and no read of any model found the four real-world ones.
+
+- [~] Bench A, check: two further Opus reads of the reader lens (at most 30 findings) on the editor's chapter as the editor read it, same protocol as the first Opus read (a Claude subagent given only the lens prompt and the capsule). A third read on a second model is worth building if the union with the production run stays at 20/25 or more over the three Opus reads. The cost through OpenRouter is estimated from the token counts; the model is not on the opencode whitelist, so adopting it is the author's decision.
+- [~] Bench B, writing: three chapters of the book in progress (the editor's chapter, a five-beat chapter with heavy staging, an eight-beat chapter) drafted twice under each of three configurations, through the engine's own writer envelope and opencode path, in a scratch copy that never touches the book:
+  - current: contract → prose, writer at `low`;
+  - plan: contract → scene plan → prose, writer at `low`;
+  - plan, medium: the same with the writer at `medium`.
+  The scene plan gives, per scene: place, date and hour; who is present and where; the objects in play and where they are; what each character knows and does not know; the facts the scene fixes (dates, ages, distances, durations), checked against the canon the contract imports; where a scene break falls; and one line per paragraph in order. Each draft gets the two reader-lens reads of the sequence check; the measure is valid findings per 1,000 words, by kind, with a sample graded by hand for false findings. The plan is worth building if both plan configurations cut valid findings by 30% or more against current at comparable length; `medium` is worth its cost if it cuts a further 20%.
+- [ ] Deterministic candidates for the check: a paragraph that moves to another date without a scene break; repetition counted by stem (postmark, postmarked) and over a window of three paragraphs; the checker answers every candidate with an edit or a reason to keep it.
+- [ ] After bench B: a read of the scene plan's fact list for facts that are wrong or unlikely in the real world of the setting, measured on the four real-world defects of the editor's chapter.
+- [ ] Build what the benches support; scope decided on their numbers.
