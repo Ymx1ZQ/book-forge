@@ -127,10 +127,10 @@ class ReviewTests(unittest.TestCase):
             "reviser": [self.reviser()],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 6)
+        self.assertEqual(result["calls"], 5)
         self.assertEqual(set(provider.calls[:2]), {"cold-reader", "technical-editor"})
-        # The sequence check's first round reads through three lenses.
-        self.assertEqual(provider.calls[-4:], ["reviser"] + ["sequence-checker"] * 3)
+        # The sequence check's first round is two reads of the reader lens.
+        self.assertEqual(provider.calls[-3:], ["reviser"] + ["sequence-checker"] * 2)
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertEqual(state["closed_chapters"], ["CH-0001"])
@@ -152,7 +152,7 @@ class ReviewTests(unittest.TestCase):
             "reviser": [self.reviser([consequence], [disposition])],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 7)
+        self.assertEqual(result["calls"], 6)
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertEqual(state["consequences"][0]["fact"], "Mara knows the signal.")
 
@@ -189,7 +189,7 @@ class ReviewTests(unittest.TestCase):
             ])],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 6)
+        self.assertEqual(result["calls"], 5)
         dispositions = json.loads((self.project / f"books/{self.book}/reviews/CH-0001/dispositions.json").read_text())
         self.assertEqual([row["finding"] for row in dispositions["dispositions"]], ["F-0001", "F-0001"])
         self.assertEqual(

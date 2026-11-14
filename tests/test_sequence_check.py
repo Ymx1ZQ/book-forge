@@ -16,7 +16,9 @@ from test_review import MODEL, RoleProvider, cold_answer, load_module
 
 HYDROGEN = "openrouter/google/gemini-4-hydrogen"
 FLASH = "openrouter/google/gemini-3.8-flash"
-LENSES = ("sequence-lens-staging", "sequence-lens-world", "sequence-lens-repetition")
+READER = "sequence-lens-reader"
+# The first round's three lens prompts, replaced by two reads of the reader lens.
+REMOVED_LENSES = ("sequence-lens-staging", "sequence-lens-world", "sequence-lens-repetition")
 PROMPTS = Path(__file__).parents[1] / "assets" / "prompts"
 
 
@@ -42,18 +44,18 @@ DOOR = "She stood at the door."
 POSTMARK = "The postmark said April."
 STUCK = finding("Q-01", "a sentence the chapter never had", "anything", kind="timeline")
 # What a check that never repairs its finding answers, round by round.
-STUCK_READS = {"1-staging": [answer(STUCK)], "2": [answer(STUCK)], "3": [answer(STUCK)]}
+STUCK_READS = {"1-reader-a": [answer(STUCK)], "2": [answer(STUCK)], "3": [answer(STUCK)]}
 
 
 def read_key(task_id):
-    """`SEQ-BOOK-0001-CH-0001-1-staging` -> `1-staging`; `...-CH-0001-2` -> `2`."""
+    """`SEQ-BOOK-0001-CH-0001-1-reader-a` -> `1-reader-a`; `...-CH-0001-2` -> `2`."""
     return task_id.split("-CH-", 1)[1].split("-", 1)[1]
 
 
 class SeqProvider(RoleProvider):
-    """Answers each sequence read by its round and lens, and keeps what every call was handed.
+    """Answers each sequence read by its round and read, and keeps what every call was handed.
 
-    `reads` maps `1-staging`, `1-world`, `1-repetition`, `2` and `3` to answers taken
+    `reads` maps `1-reader-a`, `1-reader-b`, `2` and `3` to answers taken
     in turn; an exception in the list is raised in place of answering, and a read
     with nothing scripted gets a clean answer."""
 
@@ -294,38 +296,60 @@ class PromptTests(unittest.TestCase):
     def setUp(self):
         self.bf = load_module()
 
-    def test_round_one_reads_through_three_lenses_and_later_rounds_through_the_single_prompt(self):
-        self.assertEqual(self.bf.SEQUENCE_FIRST_LENSES, LENSES)
-        self.assertEqual(self.bf.SEQUENCE_LATER_LENSES, ("sequence-checker",))
-        self.assertEqual(self.bf._sequence_call_budget(), 5)
+    def test_round_one_reads_twice_through_the_reader_lens_and_later_rounds_through_the_single_prompt(self):
+        self.assertEqual(self.bf._sequence_reads(1), (("reader-a", READER, 30), ("reader-b", READER, 30)))
+        for number in range(2, self.bf.SEQUENCE_ROUNDS + 1):
+            self.assertEqual([(prompt, bound) for _, prompt, bound in self.bf._sequence_reads(number)], [("sequence-checker", 15)])
+        self.assertEqual(self.bf._sequence_call_budget(), 2 + (self.bf.SEQUENCE_ROUNDS - 1))
 
-    def test_the_skill_ships_a_prompt_for_every_lens_and_each_envelope_carries_its_own(self):
+    def test_the_skill_ships_a_prompt_for_every_read_and_each_envelope_carries_its_own(self):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp) / "world"
             self.bf.init_project(project, "World")
             self.bf.sync_runtime(project)
-            for lens in LENSES + ("sequence-checker",):
-                with self.subTest(lens=lens):
-                    text = (PROMPTS / f"{lens}.md").read_text().strip()
+            for prompt in (READER, "sequence-checker"):
+                with self.subTest(prompt=prompt):
+                    text = (PROMPTS / f"{prompt}.md").read_text().strip()
                     envelope = self.bf.build_envelope(
-                        project, role="sequence-checker", prompt_role=lens, task_capsule={"prose": "x"},
+                        project, role="sequence-checker", prompt_role=prompt, task_capsule={"prose": "x"},
                         imports=[], state={}, tools=[], max_output_tokens=6000,
                     )
                     self.assertEqual(envelope["payload"]["role_prompt"], text)
                     self.assertEqual(envelope["payload"]["model"], HYDROGEN)
             self.assertFalse(any(PROMPTS.glob("sequence-lens-timeline*")))
+            for removed in REMOVED_LENSES:
+                self.assertFalse((PROMPTS / f"{removed}.md").exists(), removed)
 
     def test_every_read_is_told_a_settled_finding_is_not_reported_again(self):
-        for lens in LENSES + ("sequence-checker",):
-            with self.subTest(lens=lens):
-                text = (PROMPTS / f"{lens}.md").read_text()
+        for prompt in (READER, "sequence-checker"):
+            with self.subTest(prompt=prompt):
+                text = (PROMPTS / f"{prompt}.md").read_text()
                 self.assertIn("The capsule may carry `settled`", text)
                 self.assertIn("do not report one again unless the text it quotes has changed", text)
 
     def test_the_readers_of_repetition_are_told_candidates_may_be_phrases(self):
-        for lens in ("sequence-checker", "sequence-lens-repetition"):
-            with self.subTest(lens=lens):
-                self.assertIn("two- or three-word phrases (`phrase` in place of `word`)", (PROMPTS / f"{lens}.md").read_text())
+        for prompt in ("sequence-checker", READER):
+            with self.subTest(prompt=prompt):
+                self.assertIn("two- or three-word phrases (`phrase` in place of `word`)", (PROMPTS / f"{prompt}.md").read_text())
+
+    def test_the_reader_lens_may_report_a_stop_as_clarity(self):
+        text = (PROMPTS / f"{READER}.md").read_text()
+        self.assertIn('"kind":"sequence|staging|timeline|plausibility|knowledge|attribution|contradiction|restatement|clarity"', text)
+        self.assertIn("Use `clarity` when no other kind fits.", text)
+
+    def test_the_later_rounds_are_told_to_check_the_edits_of_the_round_before_first(self):
+        text = (PROMPTS / "sequence-checker.md").read_text()
+        self.assertIn("The capsule may carry `edited`", text)
+        self.assertIn("Check each one first.", text)
+        self.assertIn("Restoring `before`, or improving on it, is a valid edit.", text)
+        self.assertIn("`also` lists other findings on the same passage that were not applied", text)
+        self.assertIn("a better edit from `also` may be used", text)
+
+    def test_the_later_rounds_are_told_what_unresolved_means(self):
+        text = (PROMPTS / "sequence-checker.md").read_text()
+        self.assertIn("The capsule may carry `unresolved`", text)
+        self.assertIn("did not occur exactly once", text)
+        self.assertIn("report it again quoting the current prose", text)
 
 
 class EditTests(unittest.TestCase):
@@ -375,45 +399,49 @@ class EditTests(unittest.TestCase):
         self.assertEqual(self.bf._sequence_findings(CLEAN), ([], []))
 
     def test_findings_past_the_answer_bound_are_set_aside(self):
-        rows = [finding(f"Q-{n:02d}", f"w{n}", f"v{n}") for n in range(1, self.bf.SEQUENCE_MAX_FINDINGS + 3)]
+        rows = [finding(f"Q-{n:02d}", f"w{n}", f"v{n}") for n in range(1, self.bf.SEQUENCE_READER_MAX_FINDINGS + 3)]
         usable, set_aside = self.bf._sequence_findings({"findings": rows})
         self.assertEqual(len(usable), self.bf.SEQUENCE_MAX_FINDINGS)
-        self.assertEqual(len(set_aside), 2)
-        usable, set_aside = self.bf._sequence_findings({"findings": rows}, self.bf.SEQUENCE_LENS_MAX_FINDINGS)
-        self.assertEqual((len(usable), len(set_aside)), (10, len(rows) - 10))
+        self.assertEqual(len(set_aside), len(rows) - 15)
+        usable, set_aside = self.bf._sequence_findings({"findings": rows}, self.bf.SEQUENCE_READER_MAX_FINDINGS)
+        self.assertEqual((len(usable), len(set_aside)), (30, 2))
+
+    def test_a_clarity_finding_is_accepted(self):
+        usable, set_aside = self.bf._sequence_findings({"findings": [finding("Q-01", "a", "b", kind="clarity")]})
+        self.assertEqual(([row["kind"] for row in usable], set_aside), (["clarity"], []))
 
 
 class CheckLoopTests(SequenceFixture):
-    def test_a_clean_first_round_costs_three_calls_and_promotes_the_revision_byte_identical(self):
+    def test_a_clean_first_round_costs_two_calls_and_promotes_the_revision_byte_identical(self):
         revised = chapter(CASE, DOOR)
         provider = self.provider({}, [self.revision(revised)])
         result = self.close(provider)
-        self.assertEqual(provider.calls.count("sequence-checker"), 3)
-        self.assertEqual(result["calls"], 6)
-        self.assertEqual(self.manuscript().read_text(), revised.rstrip() + "\n")
+        self.assertEqual(provider.calls.count("sequence-checker"), 2)
+        self.assertEqual(result["calls"], 5)
+        self.assertEqual(self.manuscript().read_bytes(), (revised.rstrip() + "\n").encode())
         reads = self.sequence_capsules(provider)
-        self.assertEqual(sorted(row["task"] for row in reads), sorted(self.seq(f"1-{lens}") for lens in ("staging", "world", "repetition")))
+        self.assertEqual(sorted(row["task"] for row in reads), [self.seq("1-reader-a"), self.seq("1-reader-b")])
         for row in reads:
             capsule = row["capsule"]
             self.assertEqual(capsule["prose"], revised)
             self.assertEqual(capsule["contract"], {"title": "Chapter", "pov": "CHR-0001", "beats": ["Find signal"]})
-            self.assertEqual(capsule["answer_bound"], "Report at most 10 findings.")
+            self.assertEqual(capsule["answer_bound"], "Report at most 30 findings.")
             self.assertIn("repetition_candidates", capsule)
             self.assertNotIn("unresolved", capsule)
             self.assertNotIn("settled", capsule)
-            lens = "sequence-lens-" + read_key(row["task"]).split("-", 1)[1]
-            self.assertEqual(row["prompt"], (PROMPTS / f"{lens}.md").read_text().strip())
+            self.assertEqual(capsule["edited"], [])
+            self.assertEqual(row["prompt"], (PROMPTS / f"{READER}.md").read_text().strip())
         record = self.record()
         self.assertEqual(record["open"], [])
         self.assertEqual(len(record["rounds"]), 1)
         self.assertEqual(self.held(), [])
 
-    def test_edits_from_two_lenses_are_both_applied_and_round_two_reads_through_the_single_prompt(self):
+    def test_edits_from_two_reads_are_both_applied_and_round_two_reads_through_the_single_prompt(self):
         revised = chapter(CASE, DOOR, tail=POSTMARK)
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", CASE, "Mara had already brought the bass case in."))],
-            "1-repetition": [answer(finding("Q-01", " " + DOOR, "", kind="restatement"))],
-            "1-world": [answer(finding("Q-01", POSTMARK, "The postmark said March.", kind="plausibility"))],
+            "1-reader-a": [answer(finding("Q-01", CASE, "Mara had already brought the bass case in."),
+                                  finding("Q-02", " " + DOOR, "", kind="restatement"))],
+            "1-reader-b": [answer(finding("Q-01", POSTMARK, "The postmark said March.", kind="plausibility"))],
         }, [self.revision(revised)])
         self.close(provider)
         text = self.manuscript().read_text()
@@ -426,44 +454,74 @@ class CheckLoopTests(SequenceFixture):
         self.assertEqual(later[0]["capsule"]["answer_bound"], "Report at most 15 findings.")
         self.assertIn("Mara had already brought the bass case in.", later[0]["capsule"]["prose"])
         self.assertEqual(later[0]["capsule"]["unresolved"], [])
+        edited = [
+            {"id": "reader-a-Q-01", "finding": "Q-01 cannot happen as written", "before": CASE, "after": "Mara had already brought the bass case in."},
+            {"id": "reader-a-Q-02", "finding": "Q-02 cannot happen as written", "before": " " + DOOR, "after": ""},
+            {"id": "reader-b-Q-01", "finding": "Q-01 cannot happen as written", "before": POSTMARK, "after": "The postmark said March."},
+        ]
+        self.assertEqual(later[0]["capsule"]["edited"], edited)
         record = self.record()
-        self.assertEqual(record["rounds"][0]["applied"], ["staging-Q-01", "world-Q-01", "repetition-Q-01"])
+        self.assertEqual(record["rounds"][0]["edited"], edited)
+        self.assertEqual(record["rounds"][1]["edited"], [])
+        self.assertEqual(record["rounds"][0]["applied"], ["reader-a-Q-01", "reader-a-Q-02", "reader-b-Q-01"])
+        self.assertEqual(record["rounds"][0]["superseded"], [])
         self.assertEqual(record["rounds"][0]["model"], self.bf.SEQUENCE_CHECKER_MODEL)
-        self.assertEqual(record["rounds"][0]["cost"], 0.003)
+        self.assertEqual(record["rounds"][0]["cost"], 0.002)
+        self.assertEqual([call["task"] for call in record["rounds"][1]["calls"]], [self.seq("2")])
         self.assertEqual(record["after"], f"REVISE-{self.book}-CH-0001")
         self.assertEqual(len(record["rounds"]), 2)
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertTrue(state["previous_chapter_tail"].rstrip().endswith("The postmark said March."))
 
+    def test_a_later_round_may_restore_what_an_edit_of_the_round_before_replaced(self):
+        invented = "Mara took the bass case from her own flat."
+        provider = self.provider({
+            "1-reader-a": [answer(finding("Q-01", CASE, invented, kind="clarity"))],
+            "2": [answer(finding("Q-01", invented, CASE, kind="contradiction"))],
+        }, [self.revision(chapter(CASE, DOOR))])
+        self.close(provider)
+        self.assertIn(CASE, self.manuscript().read_text())
+        self.assertNotIn("own flat", self.manuscript().read_text())
+        record = self.record()
+        self.assertEqual(record["rounds"][1]["applied"], ["Q-01"])
+        restored = [{"id": "Q-01", "finding": "Q-01 cannot happen as written", "before": invented, "after": CASE}]
+        self.assertEqual(record["rounds"][1]["edited"], restored)
+        third = [row for row in self.sequence_capsules(provider) if row["task"] == self.seq("3")]
+        self.assertEqual(third[0]["capsule"]["edited"], restored)
+        self.assertEqual(record["open"], [])
+
     def test_an_edit_whose_text_occurs_twice_is_offered_back_as_unresolved(self):
         revised = chapter(DOOR, DOOR, CASE)
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
+            "1-reader-a": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
             "2": [answer(finding("Q-01", f"{DOOR} {DOOR}", DOOR, kind="restatement"))],
         }, [self.revision(revised)])
         self.close(provider)
         later = [row for row in self.sequence_capsules(provider) if row["task"] == self.seq("2")]
         unresolved = later[0]["capsule"]["unresolved"]
-        self.assertEqual([row["id"] for row in unresolved], ["staging-Q-01"])
+        self.assertEqual([row["id"] for row in unresolved], ["reader-a-Q-01"])
         self.assertIn("occurs 2 times", unresolved[0]["why"])
+        self.assertEqual(self.record()["rounds"][0]["superseded"], [])
         self.assertEqual(self.manuscript().read_text().count(DOOR), 1)
-        self.assertEqual(provider.calls.count("sequence-checker"), 5)
+        self.assertEqual(provider.calls.count("sequence-checker"), 4)
 
     def test_an_edit_on_text_an_earlier_edit_of_the_round_put_in_is_not_applied(self):
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
-            "1-world": [answer(finding("Q-01", "She stood at the gate.", "She stood at the porch."))],
+            "1-reader-a": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
+            "1-reader-b": [answer(finding("Q-01", "She stood at the gate.", "She stood at the porch."))],
         }, [self.revision(chapter(CASE, DOOR))])
         self.close(provider)
         text = self.manuscript().read_text()
         self.assertIn("She stood at the gate.", text)
         self.assertNotIn("porch", text)
-        self.assertEqual(self.record()["rounds"][0]["unresolved"], ["world-Q-01"])
+        # Its text was never in the chapter the round read: unresolved, not superseded.
+        self.assertEqual(self.record()["rounds"][0]["unresolved"], ["reader-b-Q-01"])
+        self.assertEqual(self.record()["rounds"][0]["superseded"], [])
 
     def test_every_read_is_billed_to_the_chapter_within_a_budget_of_its_own(self):
         revised = chapter(DOOR, DOOR, CASE)
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
+            "1-reader-a": [answer(finding("Q-01", DOOR, "She stood at the gate."))],
             "2": [answer(finding("Q-01", f"{DOOR} {DOOR}", DOOR, kind="restatement"))],
         }, [self.revision(revised)])
         self.close(provider)
@@ -471,14 +529,14 @@ class CheckLoopTests(SequenceFixture):
         codes = {row["code"] for row in report["violations"]}
         self.assertNotIn("accepted_call_unattributed", codes)
         self.assertNotIn("chapter_call_budget", codes)
-        self.assertEqual(report["by_role"]["sequence-checker"]["calls"], 5)
+        self.assertEqual(report["by_role"]["sequence-checker"]["calls"], 4)
 
     def test_an_edit_past_the_growth_limit_is_not_applied(self):
-        provider = self.provider({"1-staging": [answer(finding("Q-01", "bass", "x" * 400))]}, [self.revision(chapter(CASE))])
+        provider = self.provider({"1-reader-a": [answer(finding("Q-01", "bass", "x" * 400))]}, [self.revision(chapter(CASE))])
         self.close(provider)
         self.assertNotIn("x" * 400, self.manuscript().read_text())
         record = self.record()
-        self.assertEqual(record["rounds"][0]["unresolved"], ["staging-Q-01"])
+        self.assertEqual(record["rounds"][0]["unresolved"], ["reader-a-Q-01"])
         self.assertEqual(record["open"], [])
 
     def test_sequence_json_is_a_declared_output_of_revise(self):
@@ -513,10 +571,10 @@ class CheckLoopTests(SequenceFixture):
         self.assertEqual(self.task_state(f"REVISE-{self.book}-CH-0001"), "pending")
 
     def test_a_malformed_answer_is_asked_again_once(self):
-        provider = self.provider({"1-staging": [{"verdict": "fine"}, CLEAN]}, [self.revision(chapter(CASE, DOOR))])
+        provider = self.provider({"1-reader-a": [{"verdict": "fine"}, CLEAN]}, [self.revision(chapter(CASE, DOOR))])
         self.close(provider)
-        self.assertEqual(provider.calls.count("sequence-checker"), 4)
-        states = [row["state"] for row in self.plan()["attempts"] if row["task"] == self.seq("1-staging")]
+        self.assertEqual(provider.calls.count("sequence-checker"), 3)
+        states = [row["state"] for row in self.plan()["attempts"] if row["task"] == self.seq("1-reader-a")]
         self.assertEqual(states, ["validation_failed", "succeeded"])
 
 
@@ -529,7 +587,7 @@ class ProseGateTests(SequenceFixture):
         first = record["rounds"][0]
         self.assertEqual(first["applied"], [])
         self.assertEqual(first["unresolved"], [])
-        reverted = [row for row in first["set_aside"] if row["id"] == "staging-Q-01"]
+        reverted = [row for row in first["set_aside"] if row["id"] == "reader-a-Q-01"]
         self.assertEqual(len(reverted), 1)
         self.assertIn(reason, reverted[0]["why"])
         self.assertEqual(record["open"], [])
@@ -537,12 +595,12 @@ class ProseGateTests(SequenceFixture):
         self.assertEqual(len(record["rounds"]), 1)
 
     def test_an_edit_that_writes_a_placeholder_is_reverted(self):
-        provider = self.provider({"1-staging": [answer(finding("Q-01", CASE, "Mara took the TODO case from the car."))]},
+        provider = self.provider({"1-reader-a": [answer(finding("Q-01", CASE, "Mara took the TODO case from the car."))]},
                                  [self.revision(chapter(CASE, DOOR))])
         self.close(provider)
         self.assertIn(CASE, self.manuscript().read_text())
         self.assertNotIn("TODO", self.manuscript().read_text())
-        self.assertEqual(provider.calls.count("sequence-checker"), 3)
+        self.assertEqual(provider.calls.count("sequence-checker"), 2)
         self.assert_reverted("placeholder")
 
     def test_an_edit_that_tells_a_withheld_fact_is_reverted_and_the_checker_is_told_what_is_withheld(self):
@@ -550,7 +608,7 @@ class ProseGateTests(SequenceFixture):
                      "told_by": "CHR-0001", "never_write": ["Earth"]}]
         path = self.project / f"books/{self.book}/chapters/CH-0001.json"
         path.write_text(json.dumps({**self.contract, "withheld": withheld}))
-        provider = self.provider({"1-staging": [answer(finding("Q-01", CASE, "Mara took the bass case from the car, as on Earth."))]},
+        provider = self.provider({"1-reader-a": [answer(finding("Q-01", CASE, "Mara took the bass case from the car, as on Earth."))]},
                                  [self.revision(chapter(CASE, DOOR))])
         self.close(provider)
         self.assertNotIn("Earth", self.manuscript().read_text())
@@ -561,7 +619,7 @@ class ProseGateTests(SequenceFixture):
     def test_an_edit_that_takes_the_chapter_under_its_word_count_is_reverted(self):
         tail = " ".join(f"note{number}" for number in range(250))
         revised = chapter(CASE, DOOR, tail=tail, filler=300)
-        provider = self.provider({"1-staging": [answer(finding("Q-01", " " + tail, "", kind="restatement"))]},
+        provider = self.provider({"1-reader-a": [answer(finding("Q-01", " " + tail, "", kind="restatement"))]},
                                  [self.revision(revised)])
         self.close(provider)
         self.assertIn(tail, self.manuscript().read_text())
@@ -571,7 +629,7 @@ class ProseGateTests(SequenceFixture):
         self.close(self.provider({}, [self.revision(chapter(CASE, DOOR))]))
         before = self.manuscript().read_bytes()
         result = self.bf.sequence_check_chapter(self.project, self.book, "CH-0001", provider=self.provider(
-            {"1-staging": [answer(finding("Q-01", CASE, "Mara took the [PLACEHOLDER] case."))]}, []))
+            {"1-reader-a": [answer(finding("Q-01", CASE, "Mara took the [PLACEHOLDER] case."))]}, []))
         self.assertEqual(self.manuscript().read_bytes(), before)
         self.assertEqual((result["applied"], result["open"], result["rounds"]), ([], [], 1))
 
@@ -581,7 +639,7 @@ class OpenFindingTests(SequenceFixture):
         first = self.provider(STUCK_READS, [self.revision(chapter(CASE, DOOR))])
         with self.assertRaisesRegex(self.bf.BookForgeError, "Sequence check left 1 findings open; chapter remains unpromoted"):
             self.close(first)
-        self.assertEqual(first.calls.count("sequence-checker"), 5)
+        self.assertEqual(first.calls.count("sequence-checker"), 4)
         self.assertFalse(self.manuscript().exists())
         self.assertEqual(self.held(), [])
         reviser_id = f"REVISE-{self.book}-CH-0001"
@@ -639,8 +697,8 @@ class OpenFindingTests(SequenceFixture):
             self.assertEqual(row["capsule"]["settled"], settled)
         first_round = self.record()["rounds"][0]
         self.assertEqual(first_round["findings"], [])
-        self.assertIn("settled", next(row["why"] for row in first_round["set_aside"] if row["id"] == "staging-Q-01"))
-        self.assertEqual(second.calls.count("sequence-checker"), 3)
+        self.assertIn("settled", next(row["why"] for row in first_round["set_aside"] if row["id"] == "reader-a-Q-01"))
+        self.assertEqual(second.calls.count("sequence-checker"), 2)
 
     def test_a_settled_finding_stays_settled_while_the_chapter_keeps_failing(self):
         with self.assertRaises(self.bf.BookForgeError):
@@ -649,13 +707,13 @@ class OpenFindingTests(SequenceFixture):
         other = finding("Q-02", "another sentence the chapter never had", "x")
         with self.assertRaisesRegex(self.bf.BookForgeError, "left 1 findings open"):
             self.close(SeqProvider({"reviser": [self.revision(chapter(CASE, DOOR), [dismissed])]},
-                                   {"1-staging": [answer(STUCK, other)], "2": [answer(other)], "3": [answer(STUCK, other)]}))
+                                   {"1-reader-a": [answer(STUCK, other)], "2": [answer(other)], "3": [answer(STUCK, other)]}))
         left = json.loads(self.rejected().read_text())
         self.assertEqual([row["evidence"] for row in left["findings"]], [other["evidence"]])
         self.assertEqual([row["evidence"] for row in left["settled"]], [STUCK["evidence"]])
         # The next reviser owes the new finding only, and the old one is still settled.
         repaired = {"finding": "Q-0001", "action": "repaired", "evidence": "changed", "loss": "none", "supersedes": []}
-        third = SeqProvider({"reviser": [self.revision(chapter(CASE, DOOR), [repaired])]}, {"1-staging": [answer(STUCK)]})
+        third = SeqProvider({"reviser": [self.revision(chapter(CASE, DOOR), [repaired])]}, {"1-reader-a": [answer(STUCK)]})
         self.close(third)
         self.assertTrue(self.manuscript().is_file())
 
@@ -677,6 +735,41 @@ class OpenFindingTests(SequenceFixture):
         self.assertFalse(self.rejected().exists())
         self.assertEqual(self.held(), [])
 
+    def test_a_dismissed_finding_stays_settled_past_a_passing_check_until_the_chapter_is_promoted(self):
+        blocker = {"id": "F-STATE-1", "dimension": "state", "severity": "blocking", "objective": True,
+                   "evidence": "final paragraph", "issue": "Signal knowledge omitted", "fix_required": True}
+        consequence = {"scope": "book", "fact": "Mara knows the signal.", "entities": ["CHR-0001"]}
+        technical = {"finding": "T-0001", "action": "repaired", "evidence": "final paragraph", "loss": "none", "supersedes": []}
+        with self.assertRaisesRegex(self.bf.BookForgeError, "Sequence check left"):
+            self.close(self.provider(STUCK_READS, [self.revision(chapter(CASE, DOOR), [technical], [consequence])],
+                                     **{"technical-editor": [{"findings": [blocker], "consequences": [consequence]}]}))
+        reason = "The chapter has no such sentence; the finding quotes text that is not there."
+        dismissed = {"finding": "Q-0001", "action": "dismissed", "evidence": reason, "loss": "none", "supersedes": []}
+        settled = [{"evidence": STUCK["evidence"], "issue": STUCK["issue"], "action": "dismissed", "reason": reason}]
+        # The check passes on the dismissal, then the verifier refuses the revision.
+        with self.assertRaisesRegex(self.bf.BookForgeError, "Independent semantic verification failed"):
+            self.close(SeqProvider({
+                "reviser": [self.revision(chapter(CASE, DOOR), [technical, dismissed], [consequence])],
+                "technical-editor": [{"verified": False, "findings": []}],
+            }, STUCK_READS))
+        left = json.loads(self.rejected().read_text())
+        self.assertEqual(left["findings"], [])
+        self.assertEqual(left["settled"], settled)
+        # The next revision owes nothing for it, and its check still knows it settled.
+        third = SeqProvider({
+            "reviser": [self.revision(chapter(CASE, DOOR), [technical], [consequence])],
+            "technical-editor": [{"verified": True, "findings": []}],
+        }, STUCK_READS)
+        self.assertEqual(self.close(third)["state"], "closed")
+        reviser_capsule = next(row["capsule"] for row in third.envelopes if row["role"] == "reviser")
+        self.assertNotIn("Q-0001", [row["id"] for row in reviser_capsule["findings"]])
+        for row in self.sequence_capsules(third):
+            self.assertEqual(row["capsule"]["settled"], settled)
+        self.assertEqual(self.record()["open"], [])
+        self.assertTrue(self.manuscript().is_file())
+        self.assertFalse(self.rejected().exists())
+        self.assertEqual(self.held(), [])
+
 
 class StyleRevisionTests(SequenceFixture):
     def recheck(self, provider):
@@ -695,7 +788,7 @@ class StyleRevisionTests(SequenceFixture):
 
         disposition = {"finding": "Q-0001", "action": "repaired", "evidence": "the year", "loss": "none", "supersedes": []}
         provider = SeqProvider({"reviser": [self.revision(chapter(CASE, DOOR), [disposition])]},
-                               {"1-staging": [answer(finding("Q-01", DOOR, "She stood at the gate."))]})
+                               {"1-reader-a": [answer(finding("Q-01", DOOR, "She stood at the gate."))]})
         result = self.recheck(provider)
         self.assertEqual(result["state"], "style_revised")
         reviser = next(row["capsule"] for row in provider.envelopes if row["role"] == "reviser")
@@ -704,7 +797,7 @@ class StyleRevisionTests(SequenceFixture):
         self.assertIn("She stood at the gate.", self.manuscript().read_text())
         record = self.record()
         self.assertEqual(record["after"], style_id)
-        self.assertEqual(record["rounds"][0]["applied"], ["staging-Q-01"])
+        self.assertEqual(record["rounds"][0]["applied"], ["reader-a-Q-01"])
         self.assertEqual(self.task_state(style_id), "succeeded")
         self.assertFalse(self.rejected().exists())
         self.assertEqual(self.held(), [])
@@ -718,7 +811,7 @@ class BudgetTests(SequenceFixture):
         self.close(SeqProvider({"reviser": [self.revision(chapter(CASE, DOOR), [disposition])]}))
         self.bf.sequence_check_chapter(self.project, self.book, "CH-0001", provider=SeqProvider({}))
         report = self.bf.telemetry_report(self.project)
-        self.assertEqual(report["by_role"]["sequence-checker"]["calls"], 11)
+        self.assertEqual(report["by_role"]["sequence-checker"]["calls"], 4 + 2 + 2)
         self.assertEqual([row for row in report["violations"] if row["code"] == "chapter_call_budget"], [])
 
 
@@ -821,45 +914,88 @@ class KilledDuringThePivotalCheckTests(unittest.TestCase):
         self.assertEqual(result["state"], "closed")
 
 
-class LensTests(SequenceFixture):
-    def setUp(self):
-        super().setUp()
-        real = self.bf.build_envelope
+class ReadTests(SequenceFixture):
+    """Round 1 is two independent reads of one prompt, so both often quote the same passage."""
 
-        def build_envelope(*args, prompt_role=None, **kwargs):
-            # The extra lenses have no prompt file in the skill; they read the checker's.
-            if prompt_role and prompt_role.startswith("lens-"):
-                prompt_role = "sequence-checker"
-            return real(*args, prompt_role=prompt_role, **kwargs)
-
-        self.bf.build_envelope = build_envelope
-
-    def test_the_findings_of_several_lenses_are_merged_in_lens_order(self):
-        self.bf.SEQUENCE_FIRST_LENSES = ("sequence-checker", "lens-b")
+    def test_two_reads_of_one_passage_apply_the_first_edit_and_supersede_the_second(self):
         provider = self.provider({
-            "1-sequence-checker": [answer(finding("Q-01", CASE, "Mara carried the bass case."))],
-            "1-lens-b": [answer(finding("Q-01", CASE, "Mara left the bass case."), finding("Q-02", DOOR, "She stood at the gate."))],
+            "1-reader-a": [answer(finding("Q-01", CASE, "Mara carried the bass case."))],
+            "1-reader-b": [answer(finding("Q-01", CASE, "Mara left the bass case."), finding("Q-02", DOOR, "She stood at the gate."))],
         }, [self.revision(chapter(CASE, DOOR))])
-        self.close(provider)
+        result = self.close(provider)
+        self.assertEqual(result["state"], "closed")
         reads = self.sequence_capsules(provider)
         first_round = [row for row in reads if row["task"].startswith(f"SEQ-{self.book}-CH-0001-1-")]
-        self.assertEqual(sorted(row["task"] for row in first_round),
-                         [f"SEQ-{self.book}-CH-0001-1-lens-b", f"SEQ-{self.book}-CH-0001-1-sequence-checker"])
         self.assertEqual(first_round[0]["capsule"]["prose"], first_round[1]["capsule"]["prose"])
         merged = self.record()["rounds"][0]
-        self.assertEqual([row["id"] for row in merged["findings"]],
-                         ["sequence-checker-Q-01", "lens-b-Q-01", "lens-b-Q-02"])
+        self.assertEqual([row["id"] for row in merged["findings"]], ["reader-a-Q-01", "reader-b-Q-01", "reader-b-Q-02"])
+        self.assertEqual([row["read"] for row in merged["findings"]], ["reader-a", "reader-b", "reader-b"])
         # Applied after both answered, each against the text as it then stood: the
-        # second lens's edit of the same sentence no longer finds it.
-        self.assertEqual(merged["applied"], ["sequence-checker-Q-01", "lens-b-Q-02"])
-        self.assertEqual(merged["unresolved"], ["lens-b-Q-01"])
+        # second read's edit of the same sentence finds it already changed.
+        self.assertEqual(merged["applied"], ["reader-a-Q-01", "reader-b-Q-02"])
+        self.assertEqual(merged["superseded"], [{"id": "reader-b-Q-01", "by": "reader-a-Q-01"}])
+        self.assertEqual(merged["unresolved"], [])
         self.assertEqual(merged["cost"], 0.002)
+        # A superseded finding is not handed back, and it does not keep the chapter open.
+        later = [row for row in reads if row["task"] == self.seq("2")]
+        self.assertEqual(later[0]["capsule"]["unresolved"], [])
+        self.assertEqual(self.record()["open"], [])
+        self.assertFalse(self.rejected().exists())
         text = self.manuscript().read_text()
         self.assertIn("Mara carried the bass case.", text)
+        self.assertNotIn("Mara left", text)
         self.assertIn("She stood at the gate.", text)
         self.assertEqual(self.held(), [])
 
-    def test_no_more_than_two_lenses_are_asked_at_once(self):
+    def test_a_superseded_finding_reaches_the_next_round_under_the_edit_that_consumed_it(self):
+        # Two reads quote the same sentence for different problems: the second is
+        # not applied, and the next round checks that the current text answers it too.
+        van = "Mara took the bass case from the van."
+        microphone = "Mara took the bass case and the microphone from the car."
+        provider = self.provider({
+            "1-reader-a": [answer(finding("Q-01", CASE, van))],
+            "1-reader-b": [answer(finding("Q-07", CASE, microphone, kind="plausibility"))],
+        }, [self.revision(chapter(CASE, DOOR))])
+        self.close(provider)
+        first = self.record()["rounds"][0]
+        self.assertEqual(first["applied"], ["reader-a-Q-01"])
+        self.assertEqual(first["superseded"], [{"id": "reader-b-Q-07", "by": "reader-a-Q-01"}])
+        later = [row for row in self.sequence_capsules(provider) if row["task"] == self.seq("2")]
+        self.assertEqual(later[0]["capsule"]["edited"], [{
+            "id": "reader-a-Q-01", "finding": "Q-01 cannot happen as written", "before": CASE, "after": van,
+            "also": [{"id": "reader-b-Q-07", "finding": "Q-07 cannot happen as written", "edit": {"find": CASE, "replace": microphone}}],
+        }])
+        self.assertEqual(first["edited"], later[0]["capsule"]["edited"])
+        self.assertEqual(self.record()["open"], [])
+
+    def test_the_same_insertion_from_both_reads_is_applied_once(self):
+        # The replacement still holds the text it was found by, so the second read's
+        # copy would find it once again, on the words the first edit wrote.
+        insertion = finding("Q-01", "She stood at the door", "That evening she stood at the door", kind="clarity")
+        provider = self.provider({"1-reader-a": [answer(insertion)], "1-reader-b": [answer(insertion)]},
+                                 [self.revision(chapter(CASE, DOOR))])
+        self.close(provider)
+        self.assertEqual(self.manuscript().read_text().count("That evening"), 1)
+        first = self.record()["rounds"][0]
+        self.assertEqual(first["applied"], ["reader-a-Q-01"])
+        self.assertEqual(first["superseded"], [{"id": "reader-b-Q-01", "by": "reader-a-Q-01"}])
+        self.assertEqual([row["kind"] for row in first["findings"]], ["clarity", "clarity"])
+        self.assertEqual(self.record()["open"], [])
+
+    def test_an_edit_whose_text_an_earlier_edit_left_twice_stays_unresolved(self):
+        provider = self.provider({
+            "1-reader-a": [answer(finding("Q-01", DOOR, f"{CASE} {DOOR}"))],
+            "1-reader-b": [answer(finding("Q-01", CASE, "Mara left the bass case."))],
+        }, [self.revision(chapter(CASE, DOOR))])
+        self.close(provider)
+        first = self.record()["rounds"][0]
+        self.assertEqual(first["applied"], ["reader-a-Q-01"])
+        self.assertEqual(first["unresolved"], ["reader-b-Q-01"])
+        self.assertEqual(first["superseded"], [])
+
+    def test_no_more_than_two_reads_are_asked_at_once(self):
+        # Three reads in a round, to show the third waits for a slot.
+        self.bf.SEQUENCE_FIRST_READS = tuple((f"reader-{name}", READER, 30) for name in "abc")
         state = {"now": 0, "most": 0, "calls": 0}
         guard = threading.Lock()
         # The first batch's two calls must be in flight together: a round that asked
@@ -897,18 +1033,18 @@ class ClosedChapterTests(SequenceFixture):
         before = self.manuscript().read_text()
         stuck = finding("Q-02", "a sentence the chapter never had", "x", kind="timeline")
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", CASE, "Mara had the bass case already."), stuck)],
+            "1-reader-a": [answer(finding("Q-01", CASE, "Mara had the bass case already."), stuck)],
             "2": [answer(stuck)], "3": [answer(stuck)],
         }, [])
         result = self.bf.sequence_check_chapter(self.project, self.book, "CH-0001", provider=provider)
         after = self.manuscript().read_text()
         self.assertNotEqual(before, after)
         self.assertIn("Mara had the bass case already.", after)
-        self.assertEqual(result["applied"], ["1:staging-Q-01"])
+        self.assertEqual(result["applied"], ["1:reader-a-Q-01"])
         self.assertEqual([row["id"] for row in result["open"]], ["Q-02"])
         journal = [json.loads(line) for line in (self.project / ".book-forge/sequence-repairs.jsonl").read_text().splitlines()]
         self.assertEqual([(row["finding"], row["old"], row["new"]) for row in journal],
-                         [("staging-Q-01", CASE, "Mara had the bass case already.")])
+                         [("reader-a-Q-01", CASE, "Mara had the bass case already.")])
         adopted = [json.loads(line) for line in (self.project / ".book-forge/adopted.jsonl").read_text().splitlines()]
         self.assertEqual(adopted[-1]["artifact"], f"SOURCE-{self.book}-CH-0001")
         self.assertEqual(adopted[-1]["reason"], "sequence check")
@@ -918,18 +1054,30 @@ class ClosedChapterTests(SequenceFixture):
     def test_a_failure_in_a_later_round_keeps_what_the_earlier_round_applied(self):
         self.close(self.provider({}, [self.revision(chapter(CASE, DOOR))]))
         provider = self.provider({
-            "1-staging": [answer(finding("Q-01", CASE, "Mara had the bass case already."))],
+            "1-reader-a": [answer(finding("Q-01", CASE, "Mara had the bass case already."))],
             "2": [RuntimeError("the provider went away")] * 3,
         }, [])
         with self.assertRaisesRegex(RuntimeError, "the provider went away"):
             self.bf.sequence_check_chapter(self.project, self.book, "CH-0001", provider=provider)
         self.assertIn("Mara had the bass case already.", self.manuscript().read_text())
         journal = [json.loads(line) for line in (self.project / ".book-forge/sequence-repairs.jsonl").read_text().splitlines()]
-        self.assertEqual([row["finding"] for row in journal], ["staging-Q-01"])
+        self.assertEqual([row["finding"] for row in journal], ["reader-a-Q-01"])
         adopted = [json.loads(line) for line in (self.project / ".book-forge/adopted.jsonl").read_text().splitlines()]
         self.assertEqual(adopted[-1]["reason"], "sequence check")
         self.assertEqual(self.bf.reconcile_artifacts(self.project), [])
         self.assertEqual(self.held(), [])
+
+    def test_a_passing_check_of_a_closed_chapter_answers_what_was_left_open_and_keeps_what_was_settled(self):
+        self.close(self.provider({}, [self.revision(chapter(CASE, DOOR))]))
+        settled = [{"evidence": STUCK["evidence"], "issue": STUCK["issue"], "action": "dismissed", "reason": "not there"}]
+        self.rejected().parent.mkdir(parents=True, exist_ok=True)
+        self.rejected().write_text(json.dumps({"schema": 1, "chapter": "CH-0001", "findings": [STUCK], "settled": settled}))
+        provider = self.provider({"1-reader-a": [answer(STUCK)]}, [])
+        result = self.bf.sequence_check_chapter(self.project, self.book, "CH-0001", provider=provider)
+        self.assertEqual(result["open"], [])
+        left = json.loads(self.rejected().read_text())
+        self.assertEqual((left["findings"], left["settled"]), ([], settled))
+        self.assertEqual(self.bf._sequence_rejected_findings(self.project, self.book, "CH-0001"), [])
 
     def test_a_clean_closed_chapter_is_left_untouched(self):
         self.close(self.provider({}, [self.revision(chapter(CASE, DOOR))]))

@@ -2809,9 +2809,10 @@ def telemetry_report(project: Path | str, *, strict: bool = False) -> dict[str, 
         elif task_id.startswith("AUDIT-"):
             calls_by_audit[task_id] = calls_by_audit.get(task_id, 0) + 1
         elif task_id.startswith("SEQ-") and coordinates["book"] and coordinates["chapter"]:
-            # The sequence check (M101) reads a chapter one to SEQUENCE_ROUNDS times
-            # per lens after the reviser, so it is budgeted apart from the five calls
-            # that draft, review and revise it. The budget is per check: a revision
+            # The sequence check (M101) reads a chapter after the reviser, twice in
+            # its first round and once in each later one (`_sequence_call_budget`),
+            # so it is budgeted apart from the five calls that draft, review and
+            # revise it. The budget is per check: a revision
             # retried after a check left findings open, a style revision and a
             # `revise --sequence` each run one, and each receipt names its check.
             key = (str(coordinates["book"]), str(coordinates["chapter"]), str(receipt.get("sequence_check") or ""))
@@ -11513,41 +11514,41 @@ SEQUENCE_ROUNDS = 3
 SEQUENCE_MAX_FINDINGS = 15
 # The single read's prompt, `assets/prompts/sequence-checker.md`.
 SEQUENCE_PROMPT = "sequence-checker"
-# The prompts a round reads the chapter with, each a call on the sequence-checker's
-# agent and pin under `assets/prompts/<lens>.md`. Round 1 reads through three lenses,
-# one per defect family; benched on one chapter they found 8.5 of 25 known defects
-# against 6 for the single read. Later rounds verify the edited text through the
-# single read.
-SEQUENCE_FIRST_LENSES: tuple[str, ...] = ("sequence-lens-staging", "sequence-lens-world", "sequence-lens-repetition")
-SEQUENCE_LATER_LENSES: tuple[str, ...] = (SEQUENCE_PROMPT,)
-SEQUENCE_LENS_PREFIX = "sequence-lens-"
-# A lens reads one family of defects, so it is asked for fewer than the single read.
-SEQUENCE_LENS_MAX_FINDINGS = 10
+# The reader lens, `assets/prompts/sequence-lens-reader.md`: where a first-time
+# reader would stop and the text does not answer, which also catches what admits a
+# consistent reading and so passes a check for what cannot be true. Benched on one
+# chapter with 25 defects an editor found and a hold-out chapter with 12 seeded
+# ones, one read at most 30 findings found 9.5/25 and 7.5/12, two reads merged
+# 13/25 and 8/12, and the three earlier per-family lenses together 8.5/25 and
+# 5.5/12. A bound of 10 cut the subtler stops.
+SEQUENCE_READER_PROMPT = "sequence-lens-reader"
+SEQUENCE_READER_MAX_FINDINGS = 30
+# The reads of a round, each (label, prompt, answer bound) and a call on the
+# sequence-checker's agent and pin. Round 1 reads the chapter twice through the
+# reader lens and merges the two; later rounds verify the edited text through the
+# single read. The label names the read's task when a round has several.
+SEQUENCE_FIRST_READS: tuple[tuple[str, str, int], ...] = (
+    ("reader-a", SEQUENCE_READER_PROMPT, SEQUENCE_READER_MAX_FINDINGS),
+    ("reader-b", SEQUENCE_READER_PROMPT, SEQUENCE_READER_MAX_FINDINGS),
+)
+SEQUENCE_LATER_READS: tuple[tuple[str, str, int], ...] = (("checker", SEQUENCE_PROMPT, SEQUENCE_MAX_FINDINGS),)
 # The engine's invariant: never more than two subagents at once.
-SEQUENCE_LENS_WORKERS = 2
+SEQUENCE_READ_WORKERS = 2
 SEQUENCE_FINDING_FIELDS = ("id", "kind", "evidence", "issue", "edit")
 
 
-def _sequence_lenses(number: int) -> tuple[str, ...]:
-    return SEQUENCE_FIRST_LENSES if number == 1 else SEQUENCE_LATER_LENSES
+def _sequence_reads(number: int) -> tuple[tuple[str, str, int], ...]:
+    return SEQUENCE_FIRST_READS if number == 1 else SEQUENCE_LATER_READS
 
 
 def _sequence_call_budget() -> int:
-    """The most calls one check makes: every lens of round 1, then the later rounds."""
-    return len(SEQUENCE_FIRST_LENSES) + (SEQUENCE_ROUNDS - 1) * len(SEQUENCE_LATER_LENSES)
+    """The most calls one check makes: every read of round 1, then the later rounds."""
+    return len(SEQUENCE_FIRST_READS) + (SEQUENCE_ROUNDS - 1) * len(SEQUENCE_LATER_READS)
 
 
-def _sequence_lens_label(lens: str) -> str:
-    return lens.removeprefix(SEQUENCE_LENS_PREFIX)
-
-
-def _sequence_answer_bound(lens: str) -> int:
-    return SEQUENCE_MAX_FINDINGS if lens == SEQUENCE_PROMPT else SEQUENCE_LENS_MAX_FINDINGS
-
-
-def _sequence_task_id(book_id: str, chapter_id: str, number: int, lens: str) -> str:
+def _sequence_task_id(book_id: str, chapter_id: str, number: int, label: str) -> str:
     base = f"SEQ-{book_id}-{chapter_id}-{number}"
-    return f"{base}-{_sequence_lens_label(lens)}" if len(_sequence_lenses(number)) > 1 else base
+    return f"{base}-{label}" if len(_sequence_reads(number)) > 1 else base
 
 
 def _sequence_rejected_path(root: Path, book_id: str, chapter_id: str) -> Path:
@@ -11649,49 +11650,52 @@ def _prose_gate_problem(contract: dict[str, object], prose: str) -> str | None:
 
 def _sequence_round(
     root: Path, book_id: str, chapter_id: str, number: int, capsule: dict[str, object], runner, *, check: str,
-) -> list[tuple[str, str, dict[str, object], list[dict[str, object]], list[dict[str, object]]]]:
-    """One round: every lens reads the same prose, two at a time, each through the plan.
+) -> list[tuple[str, str, str, dict[str, object], list[dict[str, object]], list[dict[str, object]]]]:
+    """One round: every read of the same prose, two at a time, each through the plan.
 
     No claim outlives its call: an answer is promoted with an execution receipt
     and no outputs (the record is the reviser's output), so the call is billed to
     the chapter like the reviews, under `check` for its budget; a failure fails its
     attempt without blocking. An answer that is not contract JSON is asked again
-    once on a fresh claim. Returns, in lens order, (lens, task id, result,
+    once on a fresh claim. Returns, in read order, (label, prompt, task id, result,
     findings, set aside).
     """
     role = "sequence-checker"
-    lenses = _sequence_lenses(number)
+    reads = _sequence_reads(number)
+    labels = [label for label, _, _ in reads]
+    prompts = {label: prompt for label, prompt, _ in reads}
+    bounds = {label: bound for label, _, bound in reads}
+    task_ids = {label: _sequence_task_id(book_id, chapter_id, number, label) for label in labels}
     ladder = _role_ladder(root, role)
     fallback = _role_fallback(root, role)
     envelopes: dict[str, dict[str, object]] = {}
-    for lens in lenses:
-        task_id = _sequence_task_id(book_id, chapter_id, number, lens)
+    for label in labels:
+        task_id = task_ids[label]
         plan = _load_plan(root)
         if not any(task["id"] == task_id for task in plan["tasks"]):
             add_task(root, task_id, role, priority=85, outputs=[])
         else:
             _reopen_task(root, task_id)
-        envelopes[lens] = build_envelope(
-            root, role=role, prompt_role=lens,
-            task_capsule={**capsule, "answer_bound": f"Report at most {_sequence_answer_bound(lens)} findings."},
+        envelopes[label] = build_envelope(
+            root, role=role, prompt_role=prompts[label],
+            task_capsule={**capsule, "answer_bound": f"Report at most {bounds[label]} findings."},
             imports=[], state={}, tools=[], max_output_tokens=ROLE_BUDGETS[role][1],
         )
     answered: dict[str, tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]] = {}
-    asks = {lens: 0 for lens in lenses}
-    queue = list(lenses)
+    asks = {label: 0 for label in labels}
+    queue = list(labels)
     failures: list[BaseException] = []
     while queue and not failures:
-        batch, queue = queue[:SEQUENCE_LENS_WORKERS], queue[SEQUENCE_LENS_WORKERS:]
+        batch, queue = queue[:SEQUENCE_READ_WORKERS], queue[SEQUENCE_READ_WORKERS:]
         claims: dict[str, dict[str, object]] = {}
         try:
-            for lens in batch:
-                task_id = _sequence_task_id(book_id, chapter_id, number, lens)
-                claims[lens] = claim_task(root, task_id, request_hash=str(envelopes[lens]["hash"]))
-                _write_bytes_atomic(Path(claims[lens]["capsule"]).parent / "envelope.json", envelopes[lens]["bytes"])
-                asks[lens] += 1
+            for label in batch:
+                claims[label] = claim_task(root, task_ids[label], request_hash=str(envelopes[label]["hash"]))
+                _write_bytes_atomic(Path(claims[label]["capsule"]).parent / "envelope.json", envelopes[label]["bytes"])
+                asks[label] += 1
 
-            def ask(lens: str) -> dict[str, object]:
-                return _ask_past_empty(runner, role, envelopes[lens], Path(claims[lens]["capsule"]).parent, *ladder, fallback=fallback)
+            def ask(label: str) -> dict[str, object]:
+                return _ask_past_empty(runner, role, envelopes[label], Path(claims[label]["capsule"]).parent, *ladder, fallback=fallback)
 
             outcomes: dict[str, object] = {}
             if len(batch) == 1:
@@ -11700,48 +11704,48 @@ def _sequence_round(
                 except Exception as failed:  # noqa: BLE001 - settled below with its claim
                     outcomes[batch[0]] = failed
             else:
-                with ThreadPoolExecutor(max_workers=SEQUENCE_LENS_WORKERS) as executor:
-                    futures = {executor.submit(ask, lens): lens for lens in batch}
+                with ThreadPoolExecutor(max_workers=SEQUENCE_READ_WORKERS) as executor:
+                    futures = {executor.submit(ask, label): label for label in batch}
                     for future in as_completed(futures):
                         try:
                             outcomes[futures[future]] = future.result()
                         except Exception as failed:  # noqa: BLE001 - settled below with its claim
                             outcomes[futures[future]] = failed
-            for lens in batch:
-                claim = claims[lens]
-                outcome = outcomes[lens]
+            for label in batch:
+                claim = claims[label]
+                outcome = outcomes[label]
                 try:
                     if isinstance(outcome, BaseException):
                         raise outcome
                     mark_provider_accepted(root, claim["attempt"], str(outcome.get("session_id") or ""))
-                    findings, set_aside = _sequence_findings(_parse_contract_json(str(outcome["text"])), _sequence_answer_bound(lens))
+                    findings, set_aside = _sequence_findings(_parse_contract_json(str(outcome["text"])), bounds[label])
                     manifest = stage_outputs(root, claim["attempt"], {})
                     record_execution(
                         root, claim["attempt"], claim["fence"],
                         output_hash=_sha256_bytes(_json_bytes(manifest)),
-                        telemetry={**_provider_telemetry(outcome, envelopes[lens]), "sequence_check": check},
+                        telemetry={**_provider_telemetry(outcome, envelopes[label]), "sequence_check": check},
                     )
                     promote_task(root, claim["attempt"], claim["fence"])
                 except MalformedAnswer as exc:
                     _set_attempt_failure(root, claim["attempt"], block=False, reason=str(exc)[:200])
-                    claims.pop(lens)
-                    if asks[lens] < MALFORMED_ANSWER_ASKS:
+                    claims.pop(label)
+                    if asks[label] < MALFORMED_ANSWER_ASKS:
                         print(
-                            f"[sequence-checker] {chapter_id} round {number} ({lens}): the answer was not contract JSON "
-                            f"({exc}); asking again {asks[lens] + 1}/{MALFORMED_ANSWER_ASKS}",
+                            f"[sequence-checker] {chapter_id} round {number} ({task_ids[label]}): the answer was not contract JSON "
+                            f"({exc}); asking again {asks[label] + 1}/{MALFORMED_ANSWER_ASKS}",
                             file=sys.stderr,
                         )
-                        queue.insert(0, lens)
+                        queue.insert(0, label)
                     else:
                         failures.append(exc)
                     continue
                 except BaseException as failed:
                     _set_attempt_failure(root, claim["attempt"], block=False, reason=str(failed)[:200])
-                    claims.pop(lens)
+                    claims.pop(label)
                     failures.append(failed)
                     continue
-                claims.pop(lens)
-                answered[lens] = (outcome, findings, set_aside)  # type: ignore[assignment]
+                claims.pop(label)
+                answered[label] = (outcome, findings, set_aside)  # type: ignore[assignment]
         except BaseException as failed:
             # Whatever is still held is settled before the failure leaves.
             for claim in claims.values():
@@ -11752,10 +11756,36 @@ def _sequence_round(
             raise
     if failures:
         raise failures[0]
-    return [
-        (lens, _sequence_task_id(book_id, chapter_id, number, lens), *answered[lens])
-        for lens in lenses
-    ]
+    return [(label, prompts[label], task_ids[label], *answered[label]) for label in labels]
+
+
+def _sequence_consumer(
+    find: str, working: str, history: list[tuple[str, str]], written: list[tuple[str, int, int]],
+) -> str | None:
+    """The applied edit of this round that already changed the passage `find` quotes, or None.
+
+    `find` occurred once in the text the round read. It is consumed when it no
+    longer occurs, which only an applied edit can have done (`history`: each
+    applied edit's id and the text after it), or when its one occurrence overlaps
+    words an edit of the round wrote (`written`: each applied edit's id and the
+    span of its replacement in `working`), where applying it would edit that edit.
+    A copy an earlier edit made, so that it occurs twice, is not consumed: that
+    finding stays unresolved.
+    """
+    count = working.count(find)
+    if count == 0:
+        consumer, present = None, True
+        for owner, after in history:
+            now = find in after
+            if present and not now:
+                consumer = owner
+            present = now
+        return consumer
+    if count > 1:
+        return None
+    at = working.find(find)
+    end = at + len(find)
+    return next((owner for owner, lo, hi in written if at < hi and lo < end), None)
 
 
 def _sequence_check(
@@ -11772,11 +11802,16 @@ def _sequence_check(
     applied, in order, only when its text occurs exactly once in the text the round
     read and in the working text, changes something and stays small; one that does
     not apply leaves its finding unresolved, and the next round is handed it to
-    re-issue. An edit whose result fails the reviser's prose gate (`gate_contract`,
+    re-issue. An edit whose passage an earlier edit of the same round already
+    changed is superseded by that edit: two reads of one prompt often report the
+    same passage, and it is neither applied nor left open. An edit whose result fails the reviser's prose gate (`gate_contract`,
     measured as the reviser's prose was) is reverted and set aside, and blocks
     nothing. A finding that quotes what a `settled` row quotes was put to the
-    reviser, who did not accept it: it is set aside. What is left unresolved after
-    the last round is `open`. `on_round(round_record, text)` is called after each
+    reviser, who did not accept it: it is set aside. Each round after the first is
+    handed `edited`, the edits the round before applied with the text each replaced,
+    and checks them first: an edit can invent a fact, leave its defect in place or
+    remove what a later sentence needs, and a finding on it takes the same path as
+    any other. A superseded finding goes with its consumer's entry, under `also`. What is left unresolved after the last round is `open`. `on_round(round_record, text)` is called after each
     round. Returns the edited prose and the record written to
     `reviews/<ch>/sequence.json`.
     """
@@ -11797,13 +11832,16 @@ def _sequence_check(
     problem = _prose_gate_problem(gate, working)
     rounds: list[dict[str, object]] = []
     unresolved: list[dict[str, object]] = []
+    # The edits the round before applied, which the next round checks first.
+    edited: list[dict[str, object]] = []
     for number in range(1, SEQUENCE_ROUNDS + 1):
-        several = len(_sequence_lenses(number)) > 1
+        several = len(_sequence_reads(number)) > 1
         capsule: dict[str, object] = {
             "chapter": chapter_id,
             "contract": told,
             "prose": working,
             "repetition_candidates": _repetition_candidates(working),
+            "edited": edited,
         }
         if settled_rows:
             capsule["settled"] = settled_rows
@@ -11813,37 +11851,62 @@ def _sequence_check(
         findings: list[dict[str, object]] = []
         set_aside: list[dict[str, object]] = []
         calls: list[dict[str, object]] = []
-        for lens, task_id, result, lens_findings, lens_set_aside in reads:
-            label = _sequence_lens_label(lens)
-            for finding in lens_findings:
-                row = {**finding, "id": f"{label}-{finding['id']}", "lens": label} if several else finding
+        for label, prompt, task_id, result, read_findings, read_set_aside in reads:
+            for finding in read_findings:
+                row = {**finding, "id": f"{label}-{finding['id']}", "read": label} if several else finding
                 if _quoted(row["evidence"]) in settled_quotes:
                     set_aside.append({"id": row["id"], "why": "settled: the reviser did not accept it, and the text it quotes is unchanged", "finding": row})
                     continue
                 findings.append(row)
-            set_aside.extend({**row, "lens": label} if several else row for row in lens_set_aside)
-            calls.append({"lens": lens, "task": task_id, "model": result.get("model"), "variant": result.get("variant"), "cost": result.get("cost")})
+            set_aside.extend({**row, "read": label} if several else row for row in read_set_aside)
+            calls.append({"read": label, "prompt": prompt, "task": task_id, "model": result.get("model"), "variant": result.get("variant"), "cost": result.get("cost")})
         start = working
         applied: list[str] = []
+        changed: list[dict[str, object]] = []
+        superseded: list[dict[str, str]] = []
         still: list[dict[str, object]] = []
+        # What each applied edit left, and the span each wrote, to tell which edit
+        # already changed a passage a later finding of the round quotes.
+        history: list[tuple[str, str]] = []
+        written: list[tuple[str, int, int]] = []
         for finding in findings:
             edit = finding["edit"]  # type: ignore[assignment]
+            find, replace = str(edit["find"]), str(edit["replace"])  # type: ignore[index]
+            if find.strip() and start.count(find) == 1:
+                consumer = _sequence_consumer(find, working, history, written)
+                if consumer is not None:
+                    superseded.append({"id": str(finding["id"]), "by": consumer})
+                    # Handed to the next round with the edit that consumed it: the
+                    # two may name different defects, or its edit may be the better one.
+                    entry = next(row for row in changed if row["id"] == consumer)
+                    entry.setdefault("also", []).append(  # type: ignore[union-attr]
+                        {"id": str(finding["id"]), "finding": str(finding["issue"]), "edit": {"find": find, "replace": replace}}
+                    )
+                    continue
             why = _sequence_edit_refusal(working, edit, start=start)  # type: ignore[arg-type]
             if why is not None:
                 still.append({**finding, "why": why})
                 continue
-            edited = working.replace(edit["find"], edit["replace"], 1)  # type: ignore[index]
-            refused = _prose_gate_problem(gate, edited)
+            at = working.find(find)
+            candidate = working[:at] + replace + working[at + len(find):]
+            refused = _prose_gate_problem(gate, candidate)
             if refused is not None and refused != problem:
                 set_aside.append({"id": finding["id"], "why": f"the edit was reverted: {refused}", "finding": finding})
                 continue
-            working, problem = edited, refused
+            shift = len(replace) - len(find)
+            written = [(owner, lo + shift, hi + shift) if lo >= at + len(find) else (owner, lo, hi) for owner, lo, hi in written]
+            written.append((str(finding["id"]), at, at + len(replace)))
+            working, problem = candidate, refused
+            history.append((str(finding["id"]), working))
             applied.append(str(finding["id"]))
+            changed.append({"id": str(finding["id"]), "finding": str(finding["issue"]), "before": find, "after": replace})
         costs = [float(call["cost"]) for call in calls if isinstance(call.get("cost"), (int, float))]
         rounds.append({
             "round": number,
             "findings": findings,
             "applied": applied,
+            "edited": changed,
+            "superseded": superseded,
             "unresolved": [str(row["id"]) for row in still],
             "set_aside": set_aside,
             "model": calls[0]["model"] if calls else None,
@@ -11852,9 +11915,11 @@ def _sequence_check(
             "calls": calls,
         })
         unresolved = still
+        edited = changed
         print(
             f"[sequence-checker] {chapter_id} round {number}: {len(findings)} finding(s), "
             f"{len(applied)} applied, {len(still)} unresolved"
+            + (f", {len(superseded)} superseded" if superseded else "")
             + (f", {len(set_aside)} set aside" if set_aside else ""),
             file=sys.stderr,
         )
@@ -11901,6 +11966,20 @@ def _sequence_settled_before(root: Path, book_id: str, chapter_id: str) -> list[
     return [row for row in (_read_json(path).get("settled") or []) if isinstance(row, dict)]
 
 
+def _sequence_passed(root: Path, book_id: str, chapter_id: str, settled: list[dict[str, object]]) -> None:
+    """A passing check answers what an earlier one left open, and keeps what was settled.
+
+    The settled rows go only when the chapter is promoted: a revision whose check
+    passes can still be refused after it (by the verifier), and the check of the
+    revision that follows must still know what the reviser dismissed.
+    """
+    path = _sequence_rejected_path(root, book_id, chapter_id)
+    if not settled:
+        path.unlink(missing_ok=True)
+        return
+    _write_json(path, {"schema": 1, "chapter": chapter_id, "findings": [], "settled": settled})
+
+
 def _merge_settled(*groups: list[dict[str, object]]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -11926,7 +12005,8 @@ def _sequence_gate(
     `work/<ch>/sequence-rejected.json`, with what the revisions so far settled; the
     revision fails without blocking so the next run claims it again with those
     findings owed a disposition, and the chapter is not promoted. A check that
-    passes removes the file. Any other failure of the check fails the revision the
+    passes leaves nothing owed and keeps only the settled rows, which go when the
+    chapter is promoted. Any other failure of the check fails the revision the
     same way: a claim left `running` here is the outage `_verify_revision` describes.
     """
     path = _sequence_rejected_path(root, book_id, chapter_id)
@@ -11948,7 +12028,7 @@ def _sequence_gate(
                 "rounds": record["rounds"],
             })
             raise BookForgeError(f"Sequence check left {len(record['open'])} findings open; chapter remains unpromoted")
-        path.unlink(missing_ok=True)
+        _sequence_passed(root, book_id, chapter_id, settled_rows)
         return checked, record
     except BaseException as failure:
         try:
@@ -17438,7 +17518,7 @@ def sequence_check_chapter(project: Path | str, book_id: str, chapter_id: str, *
                     print(f"[sequence-checker] {chapter_id} edited, not adopted: {str(failed)[:160]}", file=sys.stderr)
         if not record["open"]:
             # What a failed revision left open is answered by this check.
-            _sequence_rejected_path(root, book_id, chapter_id).unlink(missing_ok=True)
+            _sequence_passed(root, book_id, chapter_id, list(record.get("settled") or []))  # type: ignore[arg-type]
     open_findings = [
         {key: row.get(key) for key in ("id", "kind", "evidence", "issue", "why")}
         for row in record["open"]  # type: ignore[union-attr]

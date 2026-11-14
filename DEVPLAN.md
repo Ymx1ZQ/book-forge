@@ -6728,7 +6728,7 @@ Measured on a book in progress, 2026-11-13: a human editor's notes on chapter on
   Per lens over eight runs: world and dialogue 5 defects, sequence and staging 3, repetition and structure 2, timeline and facts 0, although four of the never-found defects are of its family (where a character lives and since when; footage dated against the present). The three flash models together find 2–4 per run, and qwen's edits were wrong 2.5 times per run. Across every run, 12 of the 25 found at least once. Fed the 67 sentences that hold a date, time, duration, age, `since`/`until` or a residence, extracted by pattern, the timeline lens found 0 and 1 (a defect another lens also finds): the four it should catch each admit a consistent reading, and the lens reports only what cannot be true. Chosen: round 1 reads through three lenses (sequence and staging; world and dialogue; repetition and structure; at most 10 findings each), rounds 2–3 through the single prompt, which verifies the edited text. Not measured as a whole; about $1.2 per chapter when all three rounds run. Flash models are not used: 2 of their findings in 14 reads were defects Hydrogen missed, and qwen's edits were wrong 2.5 times per run.
 - [x] Repetition candidates also carry a two- or three-word phrase (both ends content words, not names) that occurs twice in the chapter. Measured on the chapter: 15 candidates, including two restatements the editor found and no run reported.
 - [x] Round 1 reads through the three lenses, rounds 2–3 through the single prompt; a reviser's `rejected` disposition is carried to the next check as `settled`; a process killed during the check recovers without a person; checked prose passes the reviser's prose gates; a round that changes nothing ends the check.
-- [~] Bench: a read for what a reader trips on. Ten of the editor's 25 are found by no lens and no read in any run. Each admits a consistent reading, so a check that reports only what cannot be true passes them:
+- [x] Bench: a read for what a reader trips on. Ten of the editor's 25 are found by no lens and no read in any run. Each admits a consistent reading, so a check that reports only what cannot be true passes them:
   - two shots each called the first;
   - a case wanted open after another character opened it;
   - a sound first heard later than it could have been;
@@ -6737,7 +6737,28 @@ Measured on a book in progress, 2026-11-13: a human editor's notes on chapter on
   - a sentence that refers back to one far before it;
   - a detail against what readers of the setting assume.
   A lens reports where a first-time reader would stop and the text does not answer. It is written from line-editing practice by a writer who has not seen the test chapter. It is measured on that chapter and on a hold-out chapter of another book with twelve seeded defects of the same families.
-- [ ] When two lenses of a round quote the same passage, the edit applied second is superseded, not left open to block the chapter; the prompts explain `unresolved`; a dismissed finding's `settled` row survives a passing check until the chapter is promoted.
+
+  | Round 1 | Editor's 25 | Seeded 12 (hold-out) | Cost |
+  |---|---|---|---|
+  | the three lenses | 8.5 | 5.5 | $0.62 |
+  | reader lens, at most 10 findings | 5.5 | 6.5 | $0.23 |
+  | reader lens, at most 30 | 9.5 | 7.5 | $0.25 |
+  | reader lens at most 30, two reads merged | 13 | 8 | $0.50 |
+  | reader lens at most 30, Claude Opus as a subagent, one read | 15 | 9 | — |
+
+  The bound of 10 had been cutting the subtler stops. On the hold-out the three lenses add nothing to the reader lens. Across every run, 19 of the editor's 25 were found at least once. The other six:
+  - a sound that could have been heard earlier;
+  - two spans of residence;
+  - a detail against a common assumption about the setting;
+  - two restatements, now among the phrase candidates;
+  - an unmarked time jump, now covered by the style directive.
+- [x] Round 1 is two reads of the reader lens (at most 30 findings each), merged; rounds 2–3 stay the single prompt; the three earlier lens prompts are removed.
+- [x] When two lenses of a round quote the same passage, the edit applied second is superseded, not left open to block the chapter; the prompts explain `unresolved`; a dismissed finding's `settled` row survives a passing check until the chapter is promoted.
+- [x] Rounds 2–3 receive each passage the previous round edited, beside its original, and check those first. The checks are:
+  - the edit fixes what its finding named;
+  - it contradicts no other sentence;
+  - it drops nothing a later sentence needs.
+  On the bench, 7 of 56 reader-lens edits were bad: two invented a residence, two left the defect in place, one removed a label a later scene relies on, one changed a detail no finding asked for, one read awkwardly.
 - [ ] Writer: effort `low` → `medium` only if the bench shows the draft loses defects for it.
 - [x] Docs in `references/run.md` and `SKILL.md`; full suite; `install.sh --force`; `install.sh --check` OK.
 - [ ] The book's project: style directive on time jumps (a jump opens after a scene break and states its date once); the editor's chapter is repaired through the new path and re-exported.

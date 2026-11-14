@@ -20,26 +20,37 @@ dialogue attribution, contradictions, and restatements. Content words that a
 counter found three times within 80 words, and two- or three-word phrases found
 twice or more in the chapter, are handed to it as candidates; it reports one
 only when the repetition reads as careless. The first round reads the chapter
-three times, once per lens (staging, the setting and dialogue, repetition), each
-reporting at most ten findings, and applies the edits of all three; rounds two
-and three read it once through the whole check.
+twice, side by side, through the reader lens, which reports where a first-time
+reader would stop and the text does not answer, at most 30 findings each; the
+edits of both reads are applied once both have answered. Rounds two and three
+read it once through the whole check, at most 15 findings, and are handed the
+edits the round before applied, with the text each replaced, to check first: an
+edit that does not fix its finding, contradicts another sentence, removes what a
+later sentence needs or reads worse is reported and repaired like any finding.
 
 Each finding carries an exact-text edit. The engine applies an edit only when
 its text occurs once in the chapter, changes something, and stays small (at
 most three times the text it replaces, plus 200 characters); an empty
 replacement deletes. Then the chapter is read again. Up to three rounds, stopping
-at the first one that applies nothing and leaves nothing open; an edit that did not apply is handed back
-to the next round to be re-issued. Each round is recorded in
+at the first one that applies nothing and leaves nothing open; an edit whose text
+did not occur exactly once is handed back to the next round to be re-issued. An
+edit whose passage an earlier edit of the same round already changed, as when
+both reads report the same sentence, is recorded as superseded by that edit and
+does not keep the chapter open; the next round is handed it beside that edit and
+reports it again if the current text does not resolve it. Each round is recorded in
 `books/<book>/reviews/<ch>/sequence.json`, and the promoted manuscript, and the
 tail the next chapter is drafted from, carry the edited text. A clean chapter
-costs three calls. The same check runs when a style re-revision of a closed chapter
+costs two calls, and a check at most four. The same check runs when a style re-revision of a closed chapter
 is promoted.
 
 A finding still open after the third round is not promoted. The findings go to
 `books/<book>/work/<ch>/sequence-rejected.json`, the revision fails without
 blocking, and the next `run` or `advance` step revises the chapter again with
 each open finding as a warning (`Q-0001`, ...) the reviser owes a disposition.
-The file is removed when the chapter is promoted.
+A finding the reviser does not accept is settled: later checks of the chapter
+drop it while the text it quotes is unchanged, also after a check that passes
+when the revision is then refused by the verifier. The file is removed when the
+chapter is promoted.
 
 - With an explicit `--task`, execute only that task.
 - With `--next`, execute one workflow unit and return its state.

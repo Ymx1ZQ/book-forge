@@ -100,10 +100,10 @@ class PivotalTests(unittest.TestCase):
             "target_words": 700, "imports": ["UNI-0001#kernel"], "pivotal": "finale",
         }))
 
-    def test_blind_selects_and_closes_in_nine_calls(self):
+    def test_blind_selects_and_closes_in_eight_calls(self):
         provider = PivotalProvider()
         result = self.bf.produce_pivotal_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 9)
+        self.assertEqual(result["calls"], 8)
         self.assertEqual(provider.calls.count("writer"), 2)
         self.assertEqual(provider.calls.count("judge"), 1)
         variants = self.project / f"books/{self.book}/work/CH-0001/variants"
@@ -151,7 +151,7 @@ class PivotalTests(unittest.TestCase):
         result = self.bf.run_next(self.project, book_id=self.book, provider=provider)
         self.assertNotIn("writer", provider.calls)
         self.assertEqual(provider.calls.count("judge"), 1)
-        self.assertEqual(result["calls"], 7)
+        self.assertEqual(result["calls"], 6)
         self.assertEqual(result["state"], "closed")
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
 

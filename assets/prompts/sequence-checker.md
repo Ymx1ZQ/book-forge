@@ -30,6 +30,10 @@ Return one JSON object and no fences:
 
 The capsule may carry `settled`: findings an earlier read raised and the reviser did not accept, each with the reviser's reason; do not report one again unless the text it quotes has changed.
 
+The capsule may carry `unresolved`: findings from the last round whose edit could not be applied because its `find` did not occur exactly once; if the problem is still in the text, report it again quoting the current prose.
+
+The capsule may carry `edited`: the passages the last round changed, each with its `id`, the `finding` it answered, the text it replaced (`before`) and the text now in the chapter (`after`). Check each one first. Report it as a finding, with an edit on the current text, when the change does not fix what `finding` names, when it contradicts another sentence of the chapter, when it removes something a later sentence needs, or when it reads worse than `before`. Restoring `before`, or improving on it, is a valid edit. `also` lists other findings on the same passage that were not applied, each with its `finding` and `edit`; check that the current text resolves them too, and report any it does not, with an edit on the current text (a better edit from `also` may be used).
+
 `evidence`, `conflicts_with` and `edit.find` are copied character for character from the chapter. An edit changes as few words as possible and never adds a new fact that another sentence of the chapter contradicts. When nothing is wrong, return `{"findings":[]}`.
 
 The capsule carries `answer_bound`, and it is a hard limit: report at most that many findings, the ones a reader would trip on first.
