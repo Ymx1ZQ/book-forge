@@ -61,7 +61,7 @@ class RoleTopologyTests(unittest.TestCase):
             "writer": ("all", "low"),
             "cold-reader": ("all", "low"),
             "technical-editor": ("all", "high"),
-            "reviser": ("all", "low"),
+            "reviser": ("all", "medium"),
             "canon-auditor": ("all", "high"),
             "translator": ("all", "low"),
             "judge": ("all", "max"),
@@ -86,7 +86,7 @@ class RoleTopologyTests(unittest.TestCase):
         # a translation reread by the model that wrote it is approved, not audited.
         self.assertEqual(
             set(files),
-            set(expected) | expected_chorus | expected_writers | expected_translators | expected_revisers | {"translation-critic", "locale-reader", "locale-reviser", "continuity-extractor", "continuity-checker", "continuity-reviser"},
+            set(expected) | expected_chorus | expected_writers | expected_translators | expected_revisers | {"translation-critic", "locale-reader", "locale-reviser", "continuity-extractor", "continuity-checker", "continuity-reviser", "sequence-checker"},
         )
         critic = files["translation-critic"]
         self.assertIn(f"model: {self.bf.CHORUS_SYNTHESIZER}", critic)
@@ -109,8 +109,12 @@ class RoleTopologyTests(unittest.TestCase):
             self.assertIn("mode: all", body)
             self.assertIn('"*": deny', body)
             self.assertNotIn("bash:", body)
-        # Opencode config must expose the full chorus catalog (default 7 models).
-        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in _project_catalogue(self.bf)})
+        # Opencode config must expose the full chorus catalog (default 7 models), plus
+        # the sequence-checker's pin (M101), which no chorus names: `init` writes no
+        # advisor or candidate agent for it, but its role agent must resolve.
+        catalogue = _project_catalogue(self.bf) + [self.bf.SEQUENCE_CHECKER_MODEL]
+        self.assertEqual(set(config["provider"]["openrouter"]["models"]), {m.split("/", 1)[1] for m in catalogue})
+        self.assertIn(f"model: {self.bf.SEQUENCE_CHECKER_MODEL}\n", files["sequence-checker"])
 
     def test_local_runtime_has_required_model_and_json_sessions(self):
         report = self.bf.verify_runtime(self.project)

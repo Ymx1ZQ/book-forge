@@ -46,6 +46,9 @@ class RoleProvider:
     so it goes on measuring what it was written to measure."""
 
     QUIET_CONTRACT_HALF = {"findings": [], "consequences": [], "verified": True}
+    # The sequence check reads every chapter before it is promoted (M101). A test
+    # that does not script it is measuring something else, and gets a clean read.
+    CLEAN_SEQUENCE = {"findings": []}
 
     def __init__(self, responses):
         self.responses = {role: list(values) for role, values in responses.items()}
@@ -64,14 +67,20 @@ class RoleProvider:
             scripted = self.responses.get(key)
             if key == "technical-contract" and not scripted:
                 text = dict(self.QUIET_CONTRACT_HALF)
+            elif key == "sequence-checker" and not scripted:
+                text = dict(self.CLEAN_SEQUENCE)
             else:
                 text = scripted.pop(0)
             number = len(self.calls) + 1
             self.calls.append(role)
-        variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "low"}
+        variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "medium", "sequence-checker": "high"}
+        # The sequence-checker runs on its own pin, and its call is promoted with a
+        # receipt that is checked against it: answer as the envelope's model.
+        pinned = role == "sequence-checker"
         return {
-            "text": json.dumps(text), "provider": "openrouter", "model": MODEL,
-            "variant": variants[role], "session_id": f"ses-{number}",
+            "text": json.dumps(text), "provider": "openrouter",
+            "model": envelope["payload"]["model"] if pinned else MODEL,
+            "variant": envelope["payload"]["variant"] if pinned else variants[role], "session_id": f"ses-{number}",
             "tokens": {"input": envelope["estimated_input_tokens"], "output": 200},
             "cost": 0.001, "latency_ms": 10, "finish": "stop",
         }
@@ -118,9 +127,10 @@ class ReviewTests(unittest.TestCase):
             "reviser": [self.reviser()],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 3)
+        self.assertEqual(result["calls"], 6)
         self.assertEqual(set(provider.calls[:2]), {"cold-reader", "technical-editor"})
-        self.assertEqual(provider.calls[-1], "reviser")
+        # The sequence check's first round reads through three lenses.
+        self.assertEqual(provider.calls[-4:], ["reviser"] + ["sequence-checker"] * 3)
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertEqual(state["closed_chapters"], ["CH-0001"])
@@ -142,7 +152,7 @@ class ReviewTests(unittest.TestCase):
             "reviser": [self.reviser([consequence], [disposition])],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 4)
+        self.assertEqual(result["calls"], 7)
         state = json.loads((self.project / f"books/{self.book}/state.yaml").read_text())
         self.assertEqual(state["consequences"][0]["fact"], "Mara knows the signal.")
 
@@ -179,7 +189,7 @@ class ReviewTests(unittest.TestCase):
             ])],
         })
         result = self.bf.review_and_close_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 3)
+        self.assertEqual(result["calls"], 6)
         dispositions = json.loads((self.project / f"books/{self.book}/reviews/CH-0001/dispositions.json").read_text())
         self.assertEqual([row["finding"] for row in dispositions["dispositions"]], ["F-0001", "F-0001"])
         self.assertEqual(
@@ -982,7 +992,7 @@ class ScriptedProvider(RoleProvider):
                 scripted.pop(0)
                 self.calls.append(role)
                 number = len(self.calls)
-                variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "low"}
+                variants = {"cold-reader": "low", "technical-editor": "high", "reviser": "medium", "sequence-checker": "high"}
                 return {
                     "text": head.text, "provider": "openrouter", "model": MODEL,
                     "variant": variants[role], "session_id": f"ses-{number}",

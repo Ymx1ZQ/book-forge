@@ -11,11 +11,12 @@ def _project_catalogue(bf):
     """What a generated project carries: the models its own config names, no more.
 
     A default project names the default chorus, the default style reviewers, the
-    default synthesizer and the default role pins, and every one of them is in the
-    default fleet. grok is not: it used to be appended to every project (M52).
+    default synthesizer and the default role pins. Every one of them is in the
+    default fleet except the sequence-checker's pin (M101), which no chorus names.
+    grok is not: it used to be appended to every project (M52).
     """
     models = list(bf.CHORUS_DEFAULT_MODELS)
-    for extra in list(bf.STYLE_REVIEW_MODELS) + [bf.CHORUS_SYNTHESIZER]:
+    for extra in list(bf.STYLE_REVIEW_MODELS) + [bf.CHORUS_SYNTHESIZER, bf.SEQUENCE_CHECKER_MODEL]:
         if extra not in models:
             models.append(extra)
     return models

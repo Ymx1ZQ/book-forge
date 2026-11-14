@@ -104,6 +104,8 @@ class ScriptedProvider:
             }, role)
         if role == "technical-editor":
             return self._envelope({"findings": [], "consequences": []}, role)
+        if role == "sequence-checker":
+            return self._envelope({"findings": []}, role)
         if role == "reviser":
             return self._envelope({"prose_markdown": PROSE, "beat_map": [{"beat": "Mara wants the log and the warden will not open it", "evidence": "Open it, she said."}], "consequences": [], "dispositions": [], "reader_state": "Mara asked."}, role)
         if role == "translator":

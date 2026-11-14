@@ -117,17 +117,20 @@ class FixtureProvider:
                 value = {"findings": [], "consequences": []}
             elif role == "reviser":
                 value = {"prose_markdown": prose("memory"), "beat_map": [{"beat": "Mara chooses to open the archive", "evidence": "She opens it."}], "consequences": [], "dispositions": [], "reader_state": "Mara opened the archive."}
+            elif role == "sequence-checker":
+                value = {"findings": []}
             elif role == "translator":
                 value = {"translated_markdown": prose("memoria").replace("The Archive", "L'Archivio"), "glossary_updates": [], "boundary": "Mara ha aperto l'archivio."}
             else:
                 raise AssertionError(role)
             self.calls.append(role)
             number = len(self.calls)
-        variants = {"designer": "medium", "canon-auditor": "high", "writer": "low", "cold-reader": "low", "technical-editor": "high", "reviser": "low", "translator": "low"}
+        variants = {"designer": "medium", "canon-auditor": "high", "writer": "low", "cold-reader": "low", "technical-editor": "high", "reviser": "medium", "sequence-checker": "high", "translator": "low"}
         return {
             "text": json.dumps(value),
             "provider": "openrouter",
-            "model": MODEL,
+            # The sequence-checker answers on its own pin, which its receipt is checked against.
+            "model": envelope["payload"]["model"] if role == "sequence-checker" else MODEL,
             "variant": variants[role],
             "session_id": f"ses-{number}",
             "tokens": {"input": envelope["estimated_input_tokens"], "output": 300},

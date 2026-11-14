@@ -123,6 +123,10 @@ class ARoleCarriesItsOwnPinTests(WriterPinFixture):
         for role, (_mode, variant, _steps) in self.bf.ROLE_SPECS.items():
             if role == "translation-critic":
                 continue  # its default is deliberately not the translator's model
+            if role == "sequence-checker":
+                # Pinned to the model its bench chose (M101), not the project's.
+                self.assertEqual(self.bf._role_pin({}, role), (self.bf.SEQUENCE_CHECKER_MODEL, variant))
+                continue
             self.assertEqual(self.bf._role_pin({}, role), (MODEL, variant))
 
     def test_the_critic_never_defaults_to_the_translator(self):

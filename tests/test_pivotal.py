@@ -48,10 +48,13 @@ class PivotalProvider:
                 payload = {"findings": [], "consequences": []}
             elif role == "reviser":
                 payload = {"prose_markdown": prose("tide"), "beat_map": [{"beat": "Choose", "evidence": "chosen"}], "consequences": [], "dispositions": [], "reader_state": "The choice is made."}
+            elif role == "sequence-checker":
+                payload = {"findings": []}
             else:
                 raise AssertionError(role)
-        variants = {"writer": "low", "judge": "max", "cold-reader": "low", "technical-editor": "high", "reviser": "low"}
-        return {"text": json.dumps(payload), "provider": "openrouter", "model": MODEL, "variant": variants[role], "session_id": f"ses-{number}", "tokens": {"input": envelope["estimated_input_tokens"], "output": 300}, "cost": .001, "latency_ms": 10, "finish": "stop"}
+        variants = {"writer": "low", "judge": "max", "cold-reader": "low", "technical-editor": "high", "reviser": "medium", "sequence-checker": "high"}
+        model = envelope["payload"]["model"] if role == "sequence-checker" else MODEL  # its own pin
+        return {"text": json.dumps(payload), "provider": "openrouter", "model": model, "variant": variants[role], "session_id": f"ses-{number}", "tokens": {"input": envelope["estimated_input_tokens"], "output": 300}, "cost": .001, "latency_ms": 10, "finish": "stop"}
 
 
 class ReviewOnlyProvider(PivotalProvider):
@@ -97,10 +100,10 @@ class PivotalTests(unittest.TestCase):
             "target_words": 700, "imports": ["UNI-0001#kernel"], "pivotal": "finale",
         }))
 
-    def test_blind_selects_and_closes_in_six_calls(self):
+    def test_blind_selects_and_closes_in_nine_calls(self):
         provider = PivotalProvider()
         result = self.bf.produce_pivotal_chapter(self.project, self.book, "CH-0001", provider=provider)
-        self.assertEqual(result["calls"], 6)
+        self.assertEqual(result["calls"], 9)
         self.assertEqual(provider.calls.count("writer"), 2)
         self.assertEqual(provider.calls.count("judge"), 1)
         variants = self.project / f"books/{self.book}/work/CH-0001/variants"
@@ -148,7 +151,7 @@ class PivotalTests(unittest.TestCase):
         result = self.bf.run_next(self.project, book_id=self.book, provider=provider)
         self.assertNotIn("writer", provider.calls)
         self.assertEqual(provider.calls.count("judge"), 1)
-        self.assertEqual(result["calls"], 4)
+        self.assertEqual(result["calls"], 7)
         self.assertEqual(result["state"], "closed")
         self.assertTrue((self.project / f"books/{self.book}/manuscript/chapters/CH-0001.md").is_file())
 

@@ -1,12 +1,14 @@
 # Revise passages of a promoted chapter
 
 Two commands change a chapter that is already promoted without redrafting it.
-Both change whole paragraphs, and every paragraph they do not name stays
-byte-identical, in the source and in every translation.
+`revise --note` and `humanize` change whole paragraphs, and every paragraph they
+do not name stays byte-identical, in the source and in every translation.
+`revise --sequence` changes only the exact spans its edits name.
 
 ```text
 book-forge revise --book <id> --chapter <ch> --note "<what to change>" [--anchor "<words of the passage>"]
 book-forge revise --book <id> --chapter <ch> --notes <notes.json>   # [{"note": "...", "anchor": "..."}, ...]
+book-forge revise --book <id> --chapter <ch> --sequence
 book-forge humanize --book <id> [--chapter <ch>]
 ```
 
@@ -21,6 +23,20 @@ beat, point of view or tense moved. A paragraph it does not pass reverts.
 An anchor the chapter does not contain is refused before any call. The heading
 cannot change. A note that would change a beat of the chapter's contract is
 declined: contracts are not versioned yet.
+
+## revise --sequence
+
+Runs the sequence check a chapter gets before promotion on a chapter already
+promoted: up to three rounds, each edit applied only when its text occurs once
+in the chapter, changes something and stays small. The manuscript is edited in place, each
+edit is recorded with its old and new text in `.book-forge/sequence-repairs.jsonl`,
+and the chapter is adopted as its current version, which marks its translations
+stale. No reviser follows on this path: a finding still open after the last
+round is reported by id with its reason, and the chapter keeps the edits made
+so far. It takes the book's advance lock, so it does not run beside `advance`.
+
+Report which edits were applied, which findings stayed open, and which
+translations are now stale.
 
 ## humanize
 

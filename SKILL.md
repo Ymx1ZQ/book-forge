@@ -52,6 +52,8 @@ never bypass a block by editing canonical files.
   effort that model declares: `low`, `medium`, `high`, or `max`; chorus advisors use the configured
   ensemble (`deepseek-v4.1-flash-1017`, `glm-5.3-flash`, `qwen3.8-flash`, `gemini-3.8-flash`, `grok-4.6`) and the
   synthesizer is `chorus.synthesizer` (default `openrouter/google/gemini-3.8-flash` on `high`); `init` asks which models to use and persists the choice in `book-forge.yaml:chorus.models`.
+  The sequence-checker, which reads every chapter after the reviser and before promotion, is pinned to
+  `openrouter/google/gemini-4-hydrogen` on `high`; `roles.sequence-checker` in `book-forge.yaml` overrides it.
   `opencode.json` and `.opencode/agents/` hold only the models the project's config names (chorus, role pins,
   rewriter chain, style reviewers and their tag rules, synthesizer).
 - Minimize tokens through deterministic context packets, explicit imports, and bounded concurrency.
@@ -91,7 +93,7 @@ book-forge reset --book <id> [--scope <prose|design>] --yes
 book-forge audit [--book <id>|--relation <id>|--continuity <id>] [--max-jobs <n>]
 book-forge translate <add|next|run|status> <book> <locale> [--accept-flags]  # run|next refuse a chapter with open continuity flags on it or an earlier one
 book-forge export <book> --lang <tag> --format <epub|pdf|all>
-book-forge revise --book <id> --chapter <ch> --note <text> [--anchor <words>]
+book-forge revise --book <id> --chapter <ch> (--note <text> [--anchor <words>] | --sequence)  # --sequence: order, staging, timeline and local repetition, read and edited on a promoted chapter
 book-forge humanize --book <id> [--chapter <ch>]
 ```
 

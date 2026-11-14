@@ -5,9 +5,41 @@ Use this route only for `run`.
 The helper selects the next unfinished chapter from stable chapter contracts.
 Before it starts, it reads the book's contracts; a contract without `want`, `obstacle` and `turn` (or a valid `chapter_kind` with an `exempt_reason`) stops the run and names the chapter and the missing fields until the contract is repaired.
 For an ordinary chapter, the first unit drafts once and the next unit runs two
-independent reviews concurrently plus one reviser. A pivotal chapter runs two
-blind drafts, one judge, the two reviews, and one reviser in a single bounded
+independent reviews concurrently with the style reviewers, one reviser, and the
+sequence check, then promotes. A pivotal chapter runs two blind drafts, one
+judge, and then the same review, reviser and sequence check in a single bounded
 workflow.
+
+## Sequence check
+
+The reviser's chapter is read once more before it is promoted, by the
+sequence-checker (`openrouter/google/gemini-4-hydrogen` at `high` unless
+`roles.sequence-checker` names another pin). It reports what cannot happen as
+written: order of events, staging, timeline, plausibility, who knows what,
+dialogue attribution, contradictions, and restatements. Content words that a
+counter found three times within 80 words, and two- or three-word phrases found
+twice or more in the chapter, are handed to it as candidates; it reports one
+only when the repetition reads as careless. The first round reads the chapter
+three times, once per lens (staging, the setting and dialogue, repetition), each
+reporting at most ten findings, and applies the edits of all three; rounds two
+and three read it once through the whole check.
+
+Each finding carries an exact-text edit. The engine applies an edit only when
+its text occurs once in the chapter, changes something, and stays small (at
+most three times the text it replaces, plus 200 characters); an empty
+replacement deletes. Then the chapter is read again. Up to three rounds, stopping
+at the first one that applies nothing and leaves nothing open; an edit that did not apply is handed back
+to the next round to be re-issued. Each round is recorded in
+`books/<book>/reviews/<ch>/sequence.json`, and the promoted manuscript, and the
+tail the next chapter is drafted from, carry the edited text. A clean chapter
+costs three calls. The same check runs when a style re-revision of a closed chapter
+is promoted.
+
+A finding still open after the third round is not promoted. The findings go to
+`books/<book>/work/<ch>/sequence-rejected.json`, the revision fails without
+blocking, and the next `run` or `advance` step revises the chapter again with
+each open finding as a warning (`Q-0001`, ...) the reviser owes a disposition.
+The file is removed when the chapter is promoted.
 
 - With an explicit `--task`, execute only that task.
 - With `--next`, execute one workflow unit and return its state.

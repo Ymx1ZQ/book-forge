@@ -44,7 +44,7 @@ Run every command as `python3 <skill>/scripts/book_forge.py --project <dir> <com
 | Command | What it does |
 |---|---|
 | `design` | `design universe` or `design book --book BOOK-NNNN` creates the world rules, or a book's premise, arc, and chapter contracts, through designer and independent canon-auditor calls. Every chapter contract carries `want`, `obstacle` and `turn`, and `design sync-outline --book BOOK-NNNN` copies edited contracts into `outline.yaml`. |
-| `run` | `run --book BOOK-NNNN` drafts, reviews, and closes chapters; `--next` executes one workflow unit and returns its state. |
+| `run` | `run --book BOOK-NNNN` drafts, reviews, revises, checks the order of events, and closes chapters; `--next` executes one workflow unit and returns its state. |
 | `advance` | Drives a book from where it stands through design, chapters, translations, and export, stopping earlier with `--until design\|chapters\|translate\|export`. |
 | `status` | Reports task and run state, recovery, accepted calls, tokens, and cost from immutable receipts, making no model calls. |
 | `pause` | Drains accepted work safely; `--emergency` stops immediately and leaves accepted unfinished calls as `outcome_unknown`. |
@@ -54,7 +54,7 @@ Run every command as `python3 <skill>/scripts/book_forge.py --project <dir> <com
 | `translate` | `translate add\|next\|run\|status BOOK LOCALE` creates an isolated locale workspace and advances its translation. |
 | `export` | `export BOOK --lang TAG --format epub\|pdf\|all` writes a validated edition to `dist/` with no model calls. |
 | `chorus` | Runs or inspects the advisory ensemble; synthesis and applying its output remain manual and never rewrite canon automatically. |
-| `revise` | `revise --book BOOK-NNNN --chapter CH-XXXX --note TEXT` rewrites only the paragraphs a note names in an already promoted chapter. |
+| `revise` | `revise --book BOOK-NNNN --chapter CH-XXXX --note TEXT` rewrites only the paragraphs a note names in an already promoted chapter; `--sequence` in place of the note reads the chapter for order, staging, timeline and local repetition and applies the checker's edits. |
 
 ## What a project keeps
 
