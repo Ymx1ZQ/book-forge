@@ -6761,8 +6761,9 @@ Measured on a book in progress, 2026-11-13: a human editor's notes on chapter on
   On the bench, 7 of 56 reader-lens edits were bad: two invented a residence, two left the defect in place, one removed a label a later scene relies on, one changed a detail no finding asked for, one read awkwardly.
 - [x] Writer: effort `low` → `medium` only if the bench shows the draft loses defects for it. Measured in M102 bench B: it does not; the writer stays at `low`.
 - [x] Docs in `references/run.md` and `SKILL.md`; full suite; `install.sh --force`; `install.sh --check` OK.
-- [ ] The book's project: style directive on time jumps (a jump opens after a scene break and states its date once); the editor's chapter is repaired through the new path and re-exported.
-  Repair measured 2026-11-14 with `revise --sequence` on the editor's chapter: 29 edits in three rounds, none left open, none graded bad; of the editor's 25, 13 fixed, 3 partly fixed, 9 still there. The 12 left wait for the author's decision, then the chapter is re-exported.
+- [x] The book's project: style directive on time jumps (a jump opens after a scene break and states its date once); the editor's chapter is repaired through the new path and re-exported.
+  Repair measured 2026-11-14 with `revise --sequence` on the editor's chapter: 29 edits in three rounds, none left open, none graded bad; of the editor's 25, 13 fixed, 3 partly fixed, 9 still there. The 12 left went through `revise --notes` the same day, with one more note for an address that contradicted the canon: 16 paragraphs changed in three passes, none reverted, one fix (the folded letter she had not opened) caught on reading and noted again. The time jump now states its date once; its `***` break waits on the item below. The chapter is re-exported as a draft PDF.
+- [ ] `revise --note` can open a scene break. A passage answer may not hold a blank line and the export draws a break only from a block holding `***` alone, so no author path can put a break before a paragraph; only a sequence-check edit can, when a read proposes one. Found on the editor's chapter (E24).
 
 ### M102 — A chapter is drafted from a scene plan, and the check reads with a second model ✅
 
